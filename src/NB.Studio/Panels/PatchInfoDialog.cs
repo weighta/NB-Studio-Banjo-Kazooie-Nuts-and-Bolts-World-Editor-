@@ -13,7 +13,7 @@ public sealed class PatchInfoDialog : Form
     readonly TextBox _version = new() { Width = 90, Text = "1.0" };
     readonly TextBox _author = new() { Width = 220 };
     readonly ComboBox _category = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 260 };
-    readonly Label _categoryHelp = new() { AutoSize = true, MaximumSize = new Size(560, 0), ForeColor = SystemColors.GrayText };
+    readonly Label _categoryHelp = new() { UseMnemonic = false, AutoSize = true, MaximumSize = new Size(560, 0), ForeColor = SystemColors.GrayText };
     readonly TextBox _tags = new() { Width = 360 };
     readonly ComboBox _multiplayer = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 360 };
     readonly TextBox _desc = new() { Width = 560, Height = 70, Multiline = true, ScrollBars = ScrollBars.Vertical };
@@ -26,7 +26,8 @@ public sealed class PatchInfoDialog : Form
     public List<string> Tags => _tags.Text.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
     public string Multiplayer => _multiplayer.SelectedIndex switch { 0 => "world", 1 => "cosmetic", _ => "coop" };
 
-    public PatchInfoDialog(string defaultName, string author, ModCategory guess, int changedFiles, int exeMods)
+    public PatchInfoDialog(string defaultName, string author, ModCategory guess, int changedFiles, int exeMods,
+        string? intro = null, string? description = null, IEnumerable<string>? tags = null, string? multiplayer = null)
     {
         Text = "Create Distributable Patch"; StartPosition = FormStartPosition.CenterParent; MinimizeBox = false; MaximizeBox = false;
         AutoSize = true; AutoSizeMode = AutoSizeMode.GrowAndShrink; FormBorderStyle = FormBorderStyle.FixedDialog; Padding = new Padding(12);
@@ -42,14 +43,17 @@ public sealed class PatchInfoDialog : Form
             "Adds what Showdown Town co-op needs",
         });
         _multiplayer.SelectedIndex = guess == ModCategories.Coop ? 2 : guess == ModCategories.Visual || guess == ModCategories.Audio ? 1 : 0;
+        if (multiplayer != null) _multiplayer.SelectedIndex = multiplayer switch { "cosmetic" => 1, "coop" => 2, _ => 0 };
+        if (description != null) _desc.Text = description;
+        if (tags != null) _tags.Text = string.Join(", ", tags);
 
         var grid = new TableLayoutPanel { AutoSize = true, ColumnCount = 2, Dock = DockStyle.Fill };
         void Row(string label, Control c) { grid.Controls.Add(new Label { Text = label, AutoSize = true, Padding = new Padding(0, 6, 8, 0) }); grid.Controls.Add(c); }
         grid.Controls.Add(new Label
         {
-            Text = $"The patch holds this workspace's changes: {changedFiles} changed game file(s){(exeMods > 0 ? $" and {exeMods} executable mod(s)" : "")}. " +
-                   "It contains no original game data. NB Multiplayer shows these details in its mod library.",
-            AutoSize = true, MaximumSize = new Size(680, 0), Padding = new Padding(0, 0, 0, 8),
+            Text = intro ?? ($"The patch holds this workspace's changes: {changedFiles} changed game file(s){(exeMods > 0 ? $" and {exeMods} executable mod(s)" : "")}. " +
+                   "It contains no original game data. NB Multiplayer shows these details in its mod library."),
+            AutoSize = true, MaximumSize = new Size(680, 0), Padding = new Padding(0, 0, 0, 8), UseMnemonic = false,
         });
         grid.SetColumnSpan(grid.Controls[^1], 2);
         Row("Name", _name);

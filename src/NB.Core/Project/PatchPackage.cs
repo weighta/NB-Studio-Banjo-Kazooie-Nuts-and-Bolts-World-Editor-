@@ -57,7 +57,15 @@ public static class PatchPackage
         public string Category { get; set; } = "";
         /// <summary>Free-form labels shown on the mod ("Showdown Town", "AI vehicles", ...).</summary>
         public List<string> Tags { get; set; } = new();
+        /// <summary>
+        /// World edits replayed onto the game after the file differences of every mod of an edition (<see cref="WorldOps"/>),
+        /// so the mod combines with mods that change the same files. Format 3.
+        /// </summary>
+        public List<List<string>> Ops { get; set; } = new();
     }
+
+    /// <summary>Newest manifest format this code understands (3 = <see cref="PatchManifest.Ops"/>).</summary>
+    public const int CurrentFormat = 3;
 
     /// <summary>The mod id: <see cref="PatchManifest.Id"/>, or for older patches a slug of the name ("Showdown Town Co-op" -> "showdown-town-co-op").</summary>
     public static string IdOf(PatchManifest m) => m.Id.Length > 0 ? m.Id : Slug(m.Name);
@@ -111,33 +119,7 @@ public static class PatchPackage
         if (File.Exists(outPath)) File.Delete(outPath);
         using (var zip = ZipFile.Open(outPath, ZipArchiveMode.Create))
         {
-            int k = 0;
-            foreach (var rel in files)
-            {
-                progress?.Report((rel, (double)k / Math.Max(1, files.Count)));
-                var tgtBytes = File.ReadAllBytes(System.IO.Path.Combine(ws.Game.Root, rel));
-                var orig = System.IO.Path.Combine(ws.Original.Root, rel);
-                var pf = new PatchFile { Path = rel.Replace('\\', '/'), TargetSha256 = Sha(tgtBytes), TargetSize = tgtBytes.Length, Entry = $"d/{k:D4}.bin" };
-                byte[] payload;
-                if (File.Exists(orig))
-                {
-                    var srcRaw = File.ReadAllBytes(orig);
-                    pf.SourceSha256 = Sha(srcRaw); pf.SourceSize = srcRaw.Length;
-                    var src = Expand(srcRaw);
-                    payload = Delta.Encode(src, tgtBytes, out long copied, out long lit);
-                    pf.CopiedBytes = copied; pf.LiteralBytes = lit;
-                    // self-check: the delta must reproduce the target exactly
-                    if (!Delta.Apply(src, payload).AsSpan().SequenceEqual(tgtBytes)) throw new InvalidDataException("delta self-check failed for " + rel);
-                }
-                else
-                {
-                    pf.Kind = "new"; payload = tgtBytes; pf.LiteralBytes = tgtBytes.Length;
-                }
-                var e = zip.CreateEntry(pf.Entry, CompressionLevel.SmallestSize);
-                using (var s = e.Open()) s.Write(payload);
-                man.Files.Add(pf);
-                k++;
-            }
+            AddFiles(zip, man, files, ws.Game.Root, ws.Original.Root, progress);
             if (includeExeMods)
             {
                 foreach (var id in ws.Manifest.ExeMods)
@@ -146,29 +128,109 @@ public static class PatchPackage
                     if (m == null) continue;
                     man.ExeMods.Add(new PatchExeMod { Id = m.Id, Name = m.Name, Words = m.Words.Select(w => new[] { w.Address, w.Original, w.Patched }).ToList() });
                 }
-                if (man.ExeMods.Count > 0)
-                {
-                    var xb = File.ReadAllBytes(ws.Original.Xex);
-                    var xex = XexFile.Read(xb);
-                    var img = xex.GetImage();
-                    foreach (var m in man.ExeMods)
-                    {
-                        var probs = Mods.ExePatches.Check(img, xex.ImageBase, ToMod(m));
-                        if (probs.Count > 0) throw new InvalidDataException($"mod {m.Id} does not fit this executable: {string.Join("; ", probs)}");
-                    }
-                    var h = Mods.ExePatches.ResolveXeniaHash(Mods.ExePatches.XeniaModuleHash(xb, img), null);
-                    man.XeniaModuleHash = h?.ToString("X16") ?? "";
-                    // the executable mods are written into the user's own default.xex when the patch is applied (console
-                    // builds and Xenia alike); the patch stores only the words and the checksums of the before/after files
-                    var baked = Bake(xb, man);
-                    if (!Bake(xb, man).AsSpan().SequenceEqual(baked)) throw new InvalidDataException("executable baking is not deterministic");
-                    string xrel = System.IO.Path.GetRelativePath(ws.Original.Root, ws.Original.Xex).Replace('\\', '/');
-                    man.Files.RemoveAll(f => f.Path.Equals(xrel, StringComparison.OrdinalIgnoreCase));
-                    man.Files.Add(new PatchFile { Path = xrel, Kind = "xexmods", SourceSha256 = Sha(xb), SourceSize = xb.Length, TargetSha256 = Sha(baked), TargetSize = baked.Length,
-                                                  LiteralBytes = 4 * man.ExeMods.Sum(m => m.Words.Count) });
-                }
+                AddExecutable(man, ws.Original.Xex, ws.Original.Root);
             }
             configure?.Invoke(man);
+            foreach (var op in man.Ops) if (WorldOps.Problem(op) is { } bad) throw new ArgumentException("op " + string.Join(' ', op) + ": " + bad);
+            if (man.Ops.Count > 0) man.Format = Math.Max(man.Format, 3);
+            var me = zip.CreateEntry(ManifestName, CompressionLevel.Optimal);
+            using (var s = me.Open()) JsonSerializer.Serialize(s, man, Json);
+            var readme = zip.CreateEntry("README.txt");
+            using (var w = new StreamWriter(readme.Open())) w.Write(Readme(man));
+        }
+        return man;
+    }
+
+    /// <summary>Adds a delta (or new file) per file: <paramref name="gameRoot"/>'s version against <paramref name="origRoot"/>'s.</summary>
+    static void AddFiles(ZipArchive zip, PatchManifest man, IReadOnlyList<string> files, string gameRoot, string origRoot, IProgress<(string File, double Fraction)>? progress)
+    {
+        int k = 0;
+        foreach (var rel in files)
+        {
+            progress?.Report((rel, (double)k / Math.Max(1, files.Count)));
+            var tgtBytes = File.ReadAllBytes(System.IO.Path.Combine(gameRoot, rel));
+            // a resident bundle someone recompressed: stored uncompressed (the game reads both), so the delta stays small
+            if (XCompressFile.IsCompressed(tgtBytes) && rel.Replace('\\', '/').StartsWith("Bundle/4f/", StringComparison.OrdinalIgnoreCase)) tgtBytes = XCompressFile.Decompress(tgtBytes);
+            var orig = System.IO.Path.Combine(origRoot, rel);
+            var pf = new PatchFile { Path = rel.Replace('\\', '/'), TargetSha256 = Sha(tgtBytes), TargetSize = tgtBytes.Length, Entry = $"d/{k:D4}.bin" };
+            byte[] payload;
+            if (File.Exists(orig))
+            {
+                var srcRaw = File.ReadAllBytes(orig);
+                pf.SourceSha256 = Sha(srcRaw); pf.SourceSize = srcRaw.Length;
+                var src = Expand(srcRaw);
+                payload = Delta.Encode(src, tgtBytes, out long copied, out long lit);
+                pf.CopiedBytes = copied; pf.LiteralBytes = lit;
+                // self-check: the delta must reproduce the target exactly
+                if (!Delta.Apply(src, payload).AsSpan().SequenceEqual(tgtBytes)) throw new InvalidDataException("delta self-check failed for " + rel);
+            }
+            else
+            {
+                pf.Kind = "new"; payload = tgtBytes; pf.LiteralBytes = tgtBytes.Length;
+            }
+            var e = zip.CreateEntry(pf.Entry, CompressionLevel.SmallestSize);
+            using (var s = e.Open()) s.Write(payload);
+            man.Files.Add(pf);
+            k++;
+        }
+    }
+
+    /// <summary>Checks the manifest's executable mods against the original default.xex and adds its "xexmods" entry.</summary>
+    static void AddExecutable(PatchManifest man, string originalXex, string originalRoot)
+    {
+        if (man.ExeMods.Count == 0) return;
+        var xb = File.ReadAllBytes(originalXex);
+        var xex = XexFile.Read(xb);
+        var img = xex.GetImage();
+        foreach (var m in man.ExeMods)
+        {
+            var probs = Mods.ExePatches.Check(img, xex.ImageBase, ToMod(m));
+            if (probs.Count > 0) throw new InvalidDataException($"mod {m.Id} does not fit this executable: {string.Join("; ", probs)}");
+        }
+        var h = Mods.ExePatches.ResolveXeniaHash(Mods.ExePatches.XeniaModuleHash(xb, img), null);
+        man.XeniaModuleHash = h?.ToString("X16") ?? "";
+        // the executable mods are written into the user's own default.xex when the patch is applied (console
+        // builds and Xenia alike); the patch stores only the words and the checksums of the before/after files
+        var baked = Bake(xb, man);
+        if (!Bake(xb, man).AsSpan().SequenceEqual(baked)) throw new InvalidDataException("executable baking is not deterministic");
+        string xrel = System.IO.Path.GetRelativePath(originalRoot, originalXex).Replace('\\', '/');
+        man.Files.RemoveAll(f => f.Path.Equals(xrel, StringComparison.OrdinalIgnoreCase));
+        man.Files.Add(new PatchFile { Path = xrel, Kind = "xexmods", SourceSha256 = Sha(xb), SourceSize = xb.Length, TargetSha256 = Sha(baked), TargetSize = baked.Length,
+                                      LiteralBytes = 4 * man.ExeMods.Sum(m => m.Words.Count) });
+    }
+
+    /// <summary>
+    /// Builds a mod from a game folder someone modified by hand (<see cref="GameDiff.Analyze"/>): every changed or new file
+    /// becomes a delta against the clean reference copy; executable changes become executable mods (known mods by id, the
+    /// other words as one mod of this patch). Category, online behaviour and tags come from the analysis unless
+    /// <paramref name="configure"/> changes them.
+    /// </summary>
+    public static PatchManifest BuildFromFolders(GameDiff.Report rep, string outPath, string name, string author, string description,
+        IProgress<(string File, double Fraction)>? progress = null, Action<PatchManifest>? configure = null)
+    {
+        if (rep.ReferenceDir == null) throw new InvalidOperationException("a clean copy of the game is needed to build the mod");
+        var files = rep.Carried.Select(f => f.Path).ToList();
+        var notClean = GameDiff.NotRetail(rep.ReferenceDir, files.Append("default.xex"));
+        if (notClean.Count > 0) throw new InvalidOperationException("the reference copy is not an unmodified game: " + string.Join(", ", notClean.Take(5)));
+        var man = new PatchManifest
+        {
+            Format = 2, Id = Slug(name), Name = name, Author = author, Description = description, Created = DateTime.Now,
+            Category = rep.Category, Multiplayer = rep.Multiplayer, Tags = rep.Tags.ToList(),
+        };
+        if (File.Exists(outPath)) File.Delete(outPath);
+        using (var zip = ZipFile.Open(outPath, ZipArchiveMode.Create))
+        {
+            AddFiles(zip, man, files, rep.ModDir, rep.ReferenceDir, progress);
+            if (rep.Exe != null && rep.Exe.Problem == null)
+            {
+                foreach (var m in rep.Exe.Known)
+                    man.ExeMods.Add(new PatchExeMod { Id = m.Id, Name = m.Name, Words = m.Words.Select(w => new[] { w.Address, w.Original, w.Patched }).ToList() });
+                if (rep.Exe.Other.Count > 0)
+                    man.ExeMods.Add(new PatchExeMod { Id = "custom-" + man.Id, Name = $"{name}: executable changes", Words = rep.Exe.Other.Select(w => new[] { w.Address, w.Original, w.Patched }).ToList() });
+                AddExecutable(man, System.IO.Path.Combine(rep.ReferenceDir, "default.xex"), rep.ReferenceDir);
+            }
+            configure?.Invoke(man);
+            if (man.Ops.Count > 0) man.Format = Math.Max(man.Format, 3);
             var me = zip.CreateEntry(ManifestName, CompressionLevel.Optimal);
             using (var s = me.Open()) JsonSerializer.Serialize(s, man, Json);
             var readme = zip.CreateEntry("README.txt");
@@ -242,6 +304,12 @@ public static class PatchPackage
         sb.AppendLine();
         sb.AppendLine($"Files changed: {m.Files.Count}");
         foreach (var f in m.Files) sb.AppendLine($"  {f.Path}  ({f.Kind}, {f.LiteralBytes:N0} new bytes)");
+        if (m.Ops.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine($"World edits replayed onto the game after the files ({m.Ops.Count}):");
+            foreach (var op in m.Ops) sb.AppendLine("  " + string.Join(' ', op.Select(x => x.Length > 60 ? x[..57] + "..." : x)));
+        }
         if (m.ExeMods.Count > 0)
         {
             sb.AppendLine();
@@ -293,8 +361,11 @@ public static class PatchPackage
     /// </summary>
     /// <param name="withoutExecutable">Leave default.xex alone (the executable mods of several stacked mods are written
     /// together afterwards with <see cref="ApplyExeMods"/>).</param>
+    /// <param name="withoutOps">Leave the mod's world edits (<see cref="PatchManifest.Ops"/>) for later: an edition replays
+    /// every mod's ops after all file differences (<see cref="ApplyOps"/>).</param>
+    /// <param name="skipFiles">Files written by the caller instead (merged changes of several mods).</param>
     public static int Apply(string patchPath, string gameDir, string? xeniaDir = null, Action<string>? log = null, IProgress<(string File, double Fraction)>? progress = null,
-        bool withoutExecutable = false)
+        bool withoutExecutable = false, bool withoutOps = false, ISet<string>? skipFiles = null)
     {
         PatchManifest? man = null;
         var lines = new List<string>();
@@ -302,9 +373,15 @@ public static class PatchPackage
         try
         {
             man = ReadManifest(patchPath);
+            if (man.Format > CurrentFormat) throw new InvalidDataException($"'{man.Name}' was made with a newer NB Studio (format {man.Format}); update to apply it");
             if (withoutExecutable) { man.Files.RemoveAll(f => f.Kind == "xexmods"); man.ExeMods.Clear(); }
+            if (skipFiles != null) man.Files.RemoveAll(f => skipFiles.Contains(f.Path));
+            var ops = man.Ops;
+            if (withoutOps) man.Ops = new();
             log?.Invoke($"[{Now}] Applying patch '{man.Name}' {man.Version} ({System.IO.Path.GetFileName(patchPath)}) to {gameDir}");
             int n = ApplyCore(man, patchPath, gameDir, xeniaDir, L, progress);
+            if (man.Ops.Count > 0) n += ApplyOps(man, gameDir, L);
+            man.Ops = ops;
             AppendLog(gameDir, "APPLY", man, patchPath, "OK", $"{n} file(s) written" + (lines.Count > 0 ? ": " + string.Join("; ", lines) : ""));
             log?.Invoke($"[{Now}] Patch '{man.Name}' applied: {n} file(s) written (logged to {LogFileName})");
             return n;
@@ -421,7 +498,7 @@ public static class PatchPackage
                     state.Files.Add(added);
                     SaveState(backup, state);
                 }
-                if (File.Exists(p)) File.SetAttributes(p, FileAttributes.Normal);   // game copies are often read-only
+                IO.FileLinks.PrepareReplace(p);   // game copies are often read-only; edition files may be hard links
                 File.Move(p + ".nbtmp", p, true);
                 done.Add((p, added));
                 log?.Invoke(f.Kind == "xexmods" ? $"  {f.Path}: executable mods written ({string.Join(", ", man.ExeMods.Select(m => m.Id))})" : $"  {f.Path}: patched ({f.LiteralBytes:N0} new bytes)");
@@ -454,10 +531,82 @@ public static class PatchPackage
         return n;
     }
 
+    /// <summary>
+    /// Replays a mod's world edits (<see cref="PatchManifest.Ops"/>) on a game folder. Every file they change is backed up
+    /// first (rollback restores it); a mod's ops run once per folder (recorded in the backup state). Returns the number of
+    /// files changed.
+    /// </summary>
+    public static int ApplyOps(PatchManifest man, string gameDir, Action<string>? log = null)
+    {
+        if (man.Ops.Count == 0) return 0;
+        var backup = System.IO.Path.Combine(gameDir, BackupDirName);
+        Directory.CreateDirectory(backup);
+        var state = LoadState(backup);
+        string key = $"{IdOf(man)} {man.Version}";
+        if (state.OpsDone.Contains(key)) { log?.Invoke($"  world edits of '{man.Name}' already applied"); return 0; }
+        var changed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        void BeforeWrite(string p)
+        {
+            var rel = System.IO.Path.GetRelativePath(gameDir, p).Replace(System.IO.Path.DirectorySeparatorChar, '/');
+            if (!changed.Add(rel) || state.Files.Any(b => b.Path.Equals(rel, StringComparison.OrdinalIgnoreCase))) return;
+            var e = new BackupEntry { Path = rel, Existed = File.Exists(p), Patch = man.Name };
+            if (e.Existed)
+            {
+                e.Backup = $"{state.Files.Count:D4}.bin";
+                File.Copy(p, System.IO.Path.Combine(backup, e.Backup), true);
+                File.SetAttributes(System.IO.Path.Combine(backup, e.Backup), FileAttributes.Normal);
+            }
+            state.Files.Add(e);
+            SaveState(backup, state);
+        }
+        // (the workspace writes each file through a temp file and moves it over the old one: a hard link to the player's
+        // game loses only its name, never its content or attributes)
+        var ws = Workspace.OnFolder(gameDir, p => { BeforeWrite(p); IO.FileLinks.PrepareReplace(p); });
+        try
+        {
+            foreach (var op in man.Ops)
+                WorldOps.Run(ws, op, t => log?.Invoke("  " + t));
+        }
+        finally { ws.DeleteCache(); }
+        state.OpsDone.Add(key);
+        state.Applied.Add($"{DateTime.Now:yyyy-MM-dd HH:mm:ss} {man.Name} {man.Version} (world edits)");
+        SaveState(backup, state);
+        log?.Invoke($"  world edits of '{man.Name}': {man.Ops.Count} op(s), {changed.Count} file(s) changed");
+        return changed.Count;
+    }
+
+    /// <summary>Writes one file into a game folder with a backup for <see cref="Rollback"/> (combined changes of several mods).</summary>
+    public static void WriteFile(string gameDir, string rel, byte[] data, string label, Action<string>? log = null)
+    {
+        var backup = System.IO.Path.Combine(gameDir, BackupDirName);
+        Directory.CreateDirectory(backup);
+        var state = LoadState(backup);
+        var p = System.IO.Path.Combine(gameDir, rel.Replace('/', System.IO.Path.DirectorySeparatorChar));
+        if (!state.Files.Any(b => b.Path.Equals(rel, StringComparison.OrdinalIgnoreCase)))
+        {
+            var e = new BackupEntry { Path = rel, Existed = File.Exists(p), Patch = label };
+            if (e.Existed)
+            {
+                e.Backup = $"{state.Files.Count:D4}.bin";
+                File.Copy(p, System.IO.Path.Combine(backup, e.Backup), true);
+                File.SetAttributes(System.IO.Path.Combine(backup, e.Backup), FileAttributes.Normal);
+            }
+            state.Files.Add(e);
+            SaveState(backup, state);
+        }
+        Directory.CreateDirectory(System.IO.Path.GetDirectoryName(p)!);
+        File.WriteAllBytes(p + ".nbtmp", data);
+        IO.FileLinks.PrepareReplace(p);
+        File.Move(p + ".nbtmp", p, true);
+        log?.Invoke($"  {rel}: combined changes written ({data.Length:N0} bytes)");
+    }
+
     public sealed class BackupState
     {
         public List<BackupEntry> Files { get; set; } = new();
         public List<string> Applied { get; set; } = new();
+        /// <summary>Mods ("id version") whose world edits were replayed in this folder.</summary>
+        public List<string> OpsDone { get; set; } = new();
     }
 
     public sealed class BackupEntry
@@ -498,9 +647,8 @@ public static class PatchPackage
         foreach (var e in state.Files)
         {
             var p = System.IO.Path.Combine(gameDir, e.Path.Replace('/', System.IO.Path.DirectorySeparatorChar));
-            if (File.Exists(p)) File.SetAttributes(p, FileAttributes.Normal);
-            if (e.Existed) File.Copy(System.IO.Path.Combine(backup, e.Backup), p, true);
-            else if (File.Exists(p)) File.Delete(p);
+            IO.FileLinks.PrepareReplace(p);   // (never through a hard link to the player's game)
+            if (e.Existed) { File.Copy(System.IO.Path.Combine(backup, e.Backup), p, true); File.SetAttributes(p, FileAttributes.Normal); }
             log?.Invoke("  restored " + e.Path);
             n++;
         }

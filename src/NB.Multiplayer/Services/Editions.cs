@@ -96,9 +96,6 @@ public static class Editions
 
     static string Safe(string n) => string.Concat(n.Select(c => char.IsLetterOrDigit(c) || c is '-' or '_' or ' ' ? c : '_')).Trim();
 
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    static extern bool CreateHardLink(string lpFileName, string lpExistingFileName, IntPtr lpSecurityAttributes);
-
     /// <summary>Adds <paramref name="patchPath"/> to the mod library and builds an edition of just that mod.</summary>
     public static Edition Create(AppSettings s, string patchPath, IProgress<(string Text, double Fraction)> progress) =>
         Create(s, new[] { ModLibrary.Add(patchPath) }, null, progress);
@@ -116,7 +113,13 @@ public static class Editions
         name = (name ?? "").Trim();
         if (name.Length == 0)
         {
-            var names = mods.Select(m => m.Manifest.Name.Length > 0 ? m.Manifest.Name : m.Id).ToList();
+            // "Snowy Showdown Town + Co-op": tick-box tweaks are left out of the name, a co-op layer becomes "+ Co-op"
+            var named = mods.Where(m => !ModLibrary.IsTweak(m)).ToList();
+            if (named.Count == 0) named = mods.ToList();
+            var coopLayer = named.Where(m => ModCategories.Of(m.Manifest) == ModCategories.Coop).ToList();
+            var rest = named.Except(coopLayer).ToList();
+            var names = rest.Select(m => m.Manifest.Name.Length > 0 ? m.Manifest.Name : m.Id).ToList();
+            if (coopLayer.Count > 0) { if (names.Count == 0) names.AddRange(coopLayer.Select(m => m.Manifest.Name)); else names.Add("Co-op"); }
             name = names.Count == 1 || string.Join(" + ", names).Length <= 40 ? string.Join(" + ", names) : $"{names[0]} + {names.Count - 1} more";
         }
         if (string.Equals(name, VanillaName, StringComparison.OrdinalIgnoreCase)) name += " (mod)";
@@ -129,23 +132,9 @@ public static class Editions
         if (Directory.Exists(root)) DeleteTree(root);
         Directory.CreateDirectory(game);
 
-        var changed = new HashSet<string>(ModStack.ChangedFiles(mods).Select(f => f.Replace('/', '\\')), StringComparer.OrdinalIgnoreCase);
-        var files = Directory.GetFiles(s.GameDir, "*", SearchOption.AllDirectories)
-            .Where(f => !f.Contains(PatchPackage.BackupDirName)).ToList();
-        bool sameVolume = string.Equals(Path.GetPathRoot(Path.GetFullPath(s.GameDir)), Path.GetPathRoot(Path.GetFullPath(game)), StringComparison.OrdinalIgnoreCase);
-        for (int i = 0; i < files.Count; i++)
-        {
-            var rel = Path.GetRelativePath(s.GameDir, files[i]);
-            var dst = Path.Combine(game, rel);
-            Directory.CreateDirectory(Path.GetDirectoryName(dst)!);
-            progress.Report(($"Preparing game files ({i + 1}/{files.Count})", 0.4 * i / files.Count));
-            // patched files are real copies; everything else a hard link (or a copy on another drive)
-            if (changed.Contains(rel) || !sameVolume || !CreateHardLink(dst, files[i], IntPtr.Zero))
-            {
-                File.Copy(files[i], dst, true);
-                File.SetAttributes(dst, FileAttributes.Normal);
-            }
-        }
+        // patched files are real copies; everything else a hard link to the player's game (or a copy on another drive)
+        var changed = new HashSet<string>(ModStack.ChangedFiles(mods).Select(f => f.Replace('/', Path.DirectorySeparatorChar)), StringComparer.OrdinalIgnoreCase);
+        NB.Core.IO.FileLinks.LinkCopy(s.GameDir, game, changed, new Progress<(string Text, double Fraction)>(p => progress.Report((p.Text, 0.4 * p.Fraction))));
         progress.Report(($"Applying {name}", 0.45));
         ModStack.Apply(mods, game, new Progress<(string Text, double Fraction)>(p => progress.Report(($"Applying {p.Text}", 0.45 + 0.55 * p.Fraction))));
         // co-op settings come from the mod that provides them (the co-op layer)
@@ -193,18 +182,5 @@ public static class Editions
         Directory.Delete(root, true);
     }
 
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    static extern Microsoft.Win32.SafeHandles.SafeFileHandle CreateFileW(string name, uint access, uint share, IntPtr sa, uint disposition, uint flags, IntPtr template);
-    [DllImport("kernel32.dll", SetLastError = true)]
-    static extern bool SetFileInformationByHandle(Microsoft.Win32.SafeHandles.SafeFileHandle h, int infoClass, ref uint info, uint size);
-
-    static void DeleteIgnoringReadOnly(string path)
-    {
-        const uint DELETE = 0x00010000, SHARE_ALL = 7, OPEN_EXISTING = 3, OPEN_REPARSE_POINT = 0x00200000;
-        const int FileDispositionInfoEx = 21;
-        uint flags = 0x1 | 0x2 | 0x10;   // DELETE | POSIX_SEMANTICS | IGNORE_READONLY_ATTRIBUTE
-        using var h = CreateFileW(path, DELETE, SHARE_ALL, IntPtr.Zero, OPEN_EXISTING, OPEN_REPARSE_POINT, IntPtr.Zero);
-        if (h.IsInvalid || !SetFileInformationByHandle(h, FileDispositionInfoEx, ref flags, 4))
-            throw new IOException($"cannot delete {path} (error {Marshal.GetLastWin32Error()})");
-    }
+    static void DeleteIgnoringReadOnly(string path) => NB.Core.IO.FileLinks.DeleteIgnoringReadOnly(path);
 }

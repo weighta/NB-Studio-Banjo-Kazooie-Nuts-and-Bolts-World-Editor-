@@ -208,6 +208,7 @@ public sealed class MainForm : Form
         build.DropDownItems.Add(new ToolStripSeparator());
         build.DropDownItems.Add("Build Scene from JSON… (custom world: terrain, models, textures, water, markers)", null, async (_, _) => await BuildScene(null));
         build.DropDownItems.Add("Create Distributable Patch (.nbpatch)…", null, async (_, _) => await CreatePatch());
+        build.DropDownItems.Add("Create Patch from a Modified Game Folder…", null, async (_, _) => await CreatePatchFromFolder());
         build.DropDownItems.Add("Apply Patch to a Game Directory…", null, async (_, _) => await ApplyPatch());
         build.DropDownItems.Add("Roll Back Patches in a Game Directory…", null, (_, _) => RollbackPatch());
         build.DropDownItems.Add("Show Patch History of a Game Directory…", null, (_, _) => ShowPatchHistory());
@@ -480,6 +481,86 @@ public sealed class MainForm : Form
             Log($"Patch written: {target} ({new FileInfo(target).Length:N0} bytes, {man.Files.Count} file(s){(man.ExeMods.Count > 0 ? ", executable mods: " + string.Join(", ", man.ExeMods.Select(m => m.Id)) : "")}). It contains no original game data.");
         }
         catch (Exception e) { Error("Patch build failed", e); }
+        finally { _busy = false; SetProgress(null, 0); }
+    }
+
+    /// <summary>Clean-copy candidates for a modded folder: this workspace's original, NB Multiplayer's game folder, the originals of known projects.</summary>
+    IEnumerable<string?> CleanGameCandidates()
+    {
+        yield return _ws?.Original.Root;
+        foreach (var settings in new[] { Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NB-Multiplayer", "settings.json") })
+        {
+            string? dir = null;
+            try { if (File.Exists(settings)) dir = System.Text.Json.JsonDocument.Parse(File.ReadAllText(settings)).RootElement.TryGetProperty("GameDir", out var g) ? g.GetString() : null; }
+            catch (Exception) { }
+            yield return dir;
+        }
+        foreach (var p in ProjectRegistry.Load())
+        {
+            string? dir = null;
+            try { var wj = Path.Combine(p.Path, "workspace.json"); if (File.Exists(wj)) dir = System.Text.Json.JsonDocument.Parse(File.ReadAllText(wj)).RootElement.GetProperty("OriginalPath").GetString(); }
+            catch (Exception) { }
+            yield return dir;
+        }
+    }
+
+    async Task CreatePatchFromFolder()
+    {
+        using var dlg = new Panels.FolderPatchDialog(CleanGameCandidates());
+        if (dlg.ShowDialog(this) != DialogResult.OK || dlg.Report is not { } rep) return;
+        var guess = ModCategories.Find(rep.Category) ?? ModCategories.Tweak;
+        int exeWords = rep.Exe == null ? 0 : rep.Exe.Known.Count + (rep.Exe.Other.Count > 0 ? 1 : 0);
+        using var info = new Panels.PatchInfoDialog(rep.SuggestedName, Environment.UserName, guess, rep.Carried.Count(), exeWords,
+            $"The mod holds the differences between {rep.ModDir} and the clean game: {rep.Carried.Count()} file(s)" +
+            (exeWords > 0 ? $" and {exeWords} executable mod(s)" : "") + ". It contains no original game data.",
+            rep.SuggestedDescription, rep.Tags, rep.Multiplayer);
+        if (info.ShowDialog(this) != DialogResult.OK) return;
+        using var d = new SaveFileDialog { Filter = "NB patch (*.nbpatch)|*.nbpatch", FileName = string.Concat(info.ModName.Where(c => !Path.GetInvalidFileNameChars().Contains(c))) + ".nbpatch", Title = "Save the mod" };
+        if (d.ShowDialog(this) != DialogResult.OK) return;
+        var target = d.FileName;
+        _busy = true; SetProgress("Building mod…", 0);
+        try
+        {
+            var man = await Task.Run(() => PatchPackage.BuildFromFolders(rep, target, info.ModName, info.Author, info.Description,
+                new Progress<(string F, double P)>(p => BeginInvoke(() => SetProgress("Delta " + p.F, p.P))),
+                m => { m.Version = info.Version; m.Category = info.Category; m.Tags = info.Tags; m.Multiplayer = info.Multiplayer; }));
+            foreach (var f in man.Files) Log($"  {f.Kind} {f.Path}: {f.CopiedBytes:N0} bytes from the original + {f.LiteralBytes:N0} new");
+            Log($"Mod written: {target} ({new FileInfo(target).Length:N0} bytes, {man.Files.Count} file(s){(man.ExeMods.Count > 0 ? ", executable mods: " + string.Join(", ", man.ExeMods.Select(m => m.Id)) : "")}).");
+            _busy = false; SetProgress(null, 0);
+            if (MessageBox.Show(this, $"\"{man.Name}\" is ready.\n\nTry it now? NB Studio makes a test copy of the clean game (hard links: almost no disk space), applies the mod and starts it in Xenia.",
+                    "Mod created", MessageBoxButtons.YesNo, MessageBoxIcon.Information) == DialogResult.Yes)
+                await TryMod(target, rep.ReferenceDir!);
+        }
+        catch (Exception e) { Error("Mod build failed", e); }
+        finally { _busy = false; SetProgress(null, 0); }
+    }
+
+    /// <summary>"Try it": a hard-linked copy of the clean game with the mod applied, started in Xenia.</summary>
+    async Task TryMod(string patch, string cleanDir)
+    {
+        var exe = _settings.XeniaPath;
+        if (exe == null || !File.Exists(exe)) { PickXenia(); exe = _settings.XeniaPath; }
+        if (exe == null || !File.Exists(exe)) return;
+        var mod = ModStack.Load(patch);
+        var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NBModTool", "try", PatchPackage.Slug(mod.Manifest.Name));
+        _busy = true; SetProgress("Preparing a test copy…", 0);
+        try
+        {
+            await Task.Run(() =>
+            {
+                if (Directory.Exists(dir))
+                {   // links share the original's read-only attribute: delete names without touching attributes
+                    foreach (var f in Directory.GetFiles(dir, "*", SearchOption.AllDirectories)) NB.Core.IO.FileLinks.DeleteIgnoringReadOnly(f);
+                    Directory.Delete(dir, true);
+                }
+                var copies = new HashSet<string>(ModStack.ChangedFiles(new[] { mod }).Select(f => f.Replace('/', Path.DirectorySeparatorChar)), StringComparer.OrdinalIgnoreCase);
+                NB.Core.IO.FileLinks.LinkCopy(cleanDir, dir, copies, new Progress<(string Text, double Fraction)>(p => BeginInvoke(() => SetProgress(p.Text, 0.4 * p.Fraction))));
+                ModStack.Apply(new[] { mod }, dir, new Progress<(string Text, double Fraction)>(p => BeginInvoke(() => SetProgress(p.Text, 0.4 + 0.6 * p.Fraction))), s => BeginInvoke(() => Log(s)));
+            });
+            Process.Start(new ProcessStartInfo(exe, $"\"{Path.Combine(dir, "default.xex")}\"") { WorkingDirectory = Path.GetDirectoryName(exe)!, UseShellExecute = false });
+            Log($"Started {mod.Manifest.Name} in {Path.GetFileName(exe)} from the test copy {dir}.");
+        }
+        catch (Exception e) { Error("Could not start the test copy", e); }
         finally { _busy = false; SetProgress(null, 0); }
     }
 
@@ -1351,6 +1432,26 @@ public sealed class MainForm : Form
                     case "--delete": { var n = _view.Selected!.Name; await DeleteObject(_view.Selected!, confirm: false); L($"script: deleted {n}"); break; }
                     case "--import-model": { var obj = Next(); await ImportModel(_view.Selected!, obj, confirm: false); L($"script: imported {obj}"); break; }
                     case "--import-model-geometry": { var obj = Next(); await ImportModel(_view.Selected!, obj, confirm: false, materials: false); L($"script: imported {obj} (geometry only)"); break; }
+                    case "--folder-patch-shot":
+                    {
+                        // --folder-patch-shot <modified dir> <clean dir> <analysis png> <details png>: Create Patch from a Modified Game
+                        // Folder, analysed and captured, then the prefilled mod details captured; nothing is built
+                        var mod = Next(); var clean = Next(); var png1 = Next(); var png2 = Next();
+                        using var dlg = new Panels.FolderPatchDialog(CleanGameCandidates());
+                        dlg.Show(this); Application.DoEvents();
+                        await dlg.ScriptAnalyse(mod, clean); Application.DoEvents(); await Task.Delay(300); Application.DoEvents();
+                        using (var bmp = new Bitmap(dlg.Width, dlg.Height)) { dlg.DrawToBitmap(bmp, new Rectangle(0, 0, dlg.Width, dlg.Height)); bmp.Save(png1); }
+                        var rep = dlg.Report!;
+                        L($"script: folder analysed: {rep.Files.Count} file(s), category {rep.Category}, multiplayer {rep.Multiplayer}, reference {rep.ReferenceDir}");
+                        dlg.Close();
+                        int exeWords = rep.Exe == null ? 0 : rep.Exe.Known.Count + (rep.Exe.Other.Count > 0 ? 1 : 0);
+                        using var info = new Panels.PatchInfoDialog(rep.SuggestedName, Environment.UserName, ModCategories.Find(rep.Category) ?? ModCategories.Tweak, rep.Carried.Count(), exeWords,
+                            $"The mod holds the differences between {rep.ModDir} and the clean game: {rep.Carried.Count()} file(s)" + (exeWords > 0 ? $" and {exeWords} executable mod(s)" : "") + ". It contains no original game data.",
+                            rep.SuggestedDescription, rep.Tags, rep.Multiplayer);
+                        info.Show(this); Application.DoEvents(); await Task.Delay(300); Application.DoEvents();
+                        using (var bmp = new Bitmap(info.Width, info.Height)) { info.DrawToBitmap(bmp, new Rectangle(0, 0, info.Width, info.Height)); bmp.Save(png2); }
+                        info.Close(); L("script: mod details captured"); break;
+                    }
                     case "--import-dialog-shot":
                     {
                         // --import-dialog-shot <file.fbx> <png>: the import dialog of the selected object, captured, then cancelled

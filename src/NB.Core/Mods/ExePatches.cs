@@ -351,6 +351,34 @@ public static class ExePatches
             new ExeWord(0x82D2132C, 0x00000000, 0x4B6EF210, "b 0x8241053c  continue with the random pick"),
         });
 
+    public static readonly ExeMod SnowFollowsCamera = new(
+        "snow-follows-camera",
+        "Weather: tagged particle emitters follow the camera (falling snow everywhere)",
+        "The GPU particle update 0x82226BD0 copies the owning node's position (node +0xA0) into the emitter every frame " +
+        "(0x82226EC4..0x82226ED0, r10 = node, r8 = particle record). The load at 0x82226ECC branches to 0x82D21340: when the " +
+        "record's unused word +0x180 is 0x534E ('SN'), the camera position (0x82FADC30) is written to node +0xA0 first, so " +
+        "the emitter box moves with the camera. Untagged effects (every record of the retail game has 0 there) are unchanged. " +
+        "Used by Snowy Showdown Town (aid_gpuparticleeffect_banjox_snowtown1/2). Research: snow/research/fx/REPORT.md.",
+        "Xenia 2026-10-01: snow around the camera in the whole town, driving and on foot.",
+        new[]
+        {
+            new ExeWord(0x82226ECC, 0x100A58C3, 0x48AFA474, "b 0x82d21340 (was lvx128 v0,r10,r11): snow emitters follow the camera"),
+            new ExeWord(0x82D21340, 0x00000000, 0x81680180, "lwz r11,0x180(r8)        particle record +0x180"),
+            new ExeWord(0x82D21344, 0x00000000, 0x2B0B534E, "cmplwi cr6,r11,0x534e  follow-camera marker?"),
+            new ExeWord(0x82D21348, 0x00000000, 0x409A0024, "bne cr6 -> original"),
+            new ExeWord(0x82D2134C, 0x00000000, 0x3D6082FB, "lis r11,0x82fb"),
+            new ExeWord(0x82D21350, 0x00000000, 0x812BDC30, "lwz r9,-0x23d0(r11)        camera x [0x82fadc30]"),
+            new ExeWord(0x82D21354, 0x00000000, 0x912A00A0, "stw r9,0xa0(r10)          emitter node position x"),
+            new ExeWord(0x82D21358, 0x00000000, 0x812BDC34, "lwz r9  camera y"),
+            new ExeWord(0x82D2135C, 0x00000000, 0x912A00A4, "stw r9,0xa4(r10)"),
+            new ExeWord(0x82D21360, 0x00000000, 0x812BDC38, "lwz r9  camera z"),
+            new ExeWord(0x82D21364, 0x00000000, 0x912A00A8, "stw r9,0xa8(r10)"),
+            new ExeWord(0x82D21368, 0x00000000, 0x393D0040, "addi r9,r29,0x40          restore r9 (instance +0x40)"),
+            new ExeWord(0x82D2136C, 0x00000000, 0x396000A0, "li r11,160                restore r11"),
+            new ExeWord(0x82D21370, 0x00000000, 0x100A58C3, "lvx128 v0,r10,r11         (the hooked instruction: load node +0xA0)"),
+            new ExeWord(0x82D21374, 0x00000000, 0x4B505B5C, "b 0x82226ed0"),
+        });
+
     public static readonly ExeMod PhotoCameraUnlimited = new(
         "photo-camera-unlimited",
         "Unlimited photo camera range",
@@ -566,7 +594,7 @@ public static class ExePatches
 
     public static string FamilyOf(string id) => id.StartsWith("vehicle-part-limit") ? "vehicle-part-limit" : id.StartsWith("garage-build-area") ? "garage-build-area" : "";
 
-    public static readonly IReadOnlyList<ExeMod> All = new[] { ChangeVehicleInTown, TownVehiclesNormalRules, AiSpringTimer, TownAiRestartOnChangeVehicle, DeveloperMainMenu, DeveloperAllParts, WorldBounds2048, NoEscapeReset, TownNpcPathGuard, CoopRemoteDamage, CoopSharedTime, DrawDistanceX4, PhotoCameraUnlimited, PauseOpensPhotos, GarageBuildArea31, VehiclePartLimit400 };
+    public static readonly IReadOnlyList<ExeMod> All = new[] { ChangeVehicleInTown, TownVehiclesNormalRules, AiSpringTimer, TownAiRestartOnChangeVehicle, DeveloperMainMenu, DeveloperAllParts, WorldBounds2048, NoEscapeReset, TownNpcPathGuard, CoopRemoteDamage, CoopSharedTime, SnowFollowsCamera, DrawDistanceX4, PhotoCameraUnlimited, PauseOpensPhotos, GarageBuildArea31, VehiclePartLimit400 };
 
     /// <summary>Checks that every patched word currently holds its original value in the decrypted image.</summary>
     public static List<string> Check(byte[] image, uint imageBase, ExeMod mod)

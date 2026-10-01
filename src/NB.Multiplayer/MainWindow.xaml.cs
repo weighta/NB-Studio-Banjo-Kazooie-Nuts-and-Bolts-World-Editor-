@@ -207,7 +207,7 @@ public partial class MainWindow : Window
     void RefreshModLibrary(List<Edition> editions)
     {
         ModList.Children.Clear();
-        var mods = ModLibrary.List();
+        var mods = ModLibrary.Current(_ticked);   // newest version of each mod (and whatever is ticked, e.g. an edition's own versions)
         _ticked.RemoveWhere(sha => !mods.Any(m => m.Sha256 == sha));
         // filters: all + every category that has mods (author's category, or guessed from the files)
         var cats = mods.GroupBy(m => ModCategories.Of(m.Manifest).Id).ToDictionary(g => g.Key, g => g.Count());
@@ -264,6 +264,7 @@ public partial class MainWindow : Window
                 int files = man.Files.Count(f => f.Kind != "xexmods");
                 if (files > 0) details.Add($"{files} game file(s)");
                 if (man.ExeMods.Count > 0) details.Add($"{man.ExeMods.Count} executable tweak(s)");
+                if (man.Ops.Count > 0) details.Add($"{man.Ops.Count} world edit(s), replayed on top of other mods");
                 details.Add(m.Size >= 1048576 ? $"{m.Size / 1048576.0:N1} MB" : $"{m.Size / 1024.0:N0} KB");
             }
             if (usedBy.Count > 0) details.Add("in: " + string.Join(", ", usedBy));
@@ -289,6 +290,8 @@ public partial class MainWindow : Window
         BuildMods.Text = mods.Count == 0 ? "Tick at least one mod." : (_editing != null ? $"New mods of \"{_editing.Name}\": " : "Ticked: ") + string.Join(" + ", mods.Select(m => m.Manifest.Name));
         var problems = mods.Count > 1 ? NB.Core.Project.ModStack.Problems(mods) : new List<string>();
         CombineProblems.Text = problems.Count == 0 ? "" : "These mods cannot be combined yet:\n" + string.Join("\n", problems.Select(p => "  - " + p));
+        var notes = mods.Count > 1 ? NB.Core.Project.ModStack.Notes(mods) : new List<string>();
+        if (notes.Count > 0) BuildMods.Text += "\n" + string.Join("\n", notes);
         CombineProblems.Visibility = problems.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
         if (problems.Count > 0) CombineButton.IsEnabled = false;
     }
@@ -392,6 +395,69 @@ public partial class MainWindow : Window
             EditionBusyText.Text = $"\"{ed.Name}\" is ready and selected for playing.";
         }
         catch (Exception ex) { EditionBusyText.Text = "The edition could not be built: " + ex.Message; }
+        RefreshEditions();
+    }
+
+    /// <summary>
+    /// "Add a modded game folder": a game folder someone modded by hand becomes a mod (NB.Core GameDiff: compared with the
+    /// retail fingerprints, differences taken against a clean copy). When the player's own game folder is the modded one,
+    /// NB Multiplayer offers to use the clean copy as the game folder from now on (editions are built on a clean game).
+    /// </summary>
+    async void AddModdedFolder_Click(object sender, RoutedEventArgs e)
+    {
+        var pick = new Microsoft.Win32.OpenFolderDialog { Title = "Choose the modded game folder (with default.xex and Bundle)" };
+        if (pick.ShowDialog(this) != true) return;
+        var mod = pick.FolderName;
+        if (!AppSettings.IsGameDir(mod)) { MessageBox.Show(this, "That folder is not a game folder (it needs default.xex and a Bundle folder).", "NB Multiplayer"); return; }
+        if (_game is { HasExited: false }) { MessageBox.Show(this, "Close the game first.", "NB Multiplayer"); return; }
+        EditionBusy.Visibility = Visibility.Visible;
+        EditionBusyText.Text = "Preparing..."; EditionBusyBar.Value = 0;
+        EditionsScroll.ScrollToTop();
+        var prog = new Progress<(string Text, double Fraction)>(p => { EditionBusyText.Text = p.Text; EditionBusyBar.Value = p.Fraction; });
+        var candidates = new List<string?> { S.GameDir };
+        foreach (var p in NB.Core.Project.ProjectRegistry.Load())
+        {
+            try { var wj = Path.Combine(p.Path, "workspace.json"); if (File.Exists(wj)) candidates.Add(System.Text.Json.JsonDocument.Parse(File.ReadAllText(wj)).RootElement.GetProperty("OriginalPath").GetString()); }
+            catch (Exception) { }
+        }
+        try
+        {
+            var cmp = await Task.Run(() => NB.Core.Project.GameDiff.CompareWithRetail(mod,
+                new Progress<(string Text, double Fraction)>(p => ((IProgress<(string, double)>)prog).Report(("Comparing with the original game: " + p.Text, 0.6 * p.Fraction)))));
+            if (cmp.All(c => c.State == "missing")) { EditionBusyText.Text = "That folder is the unmodified game: there is no mod in it."; return; }
+            var changed = cmp.Where(c => c.State == "changed").Select(c => c.Path).ToList();
+            string? clean = await Task.Run(() => NB.Core.Project.GameDiff.FindReference(candidates, changed, mod));
+            while (clean == null && changed.Count > 0)
+            {
+                MessageBox.Show(this, "To turn this folder into a mod, NB Multiplayer also needs an unmodified copy of the game (the mod holds only the differences, " +
+                    "no game data).\n\nChoose a clean copy of the game next. If you have none, extract the game disc again into a new folder.", "Add a modded game folder");
+                var cp = new Microsoft.Win32.OpenFolderDialog { Title = "Choose an unmodified copy of the game" };
+                if (cp.ShowDialog(this) != true) { EditionBusyText.Text = "Cancelled: no clean copy of the game was chosen."; return; }
+                clean = await Task.Run(() => NB.Core.Project.GameDiff.FindReference(new[] { cp.FolderName }, changed, mod));
+                if (clean == null) MessageBox.Show(this, "That copy is modified too (or is not a game folder).", "Add a modded game folder");
+            }
+            var rep = await Task.Run(() => NB.Core.Project.GameDiff.Analyze(mod, clean,
+                new Progress<(string Text, double Fraction)>(p => ((IProgress<(string, double)>)prog).Report((p.Text, 0.6 + 0.2 * p.Fraction))), default, cmp));
+            var name = rep.SuggestedName.Length > 0 ? rep.SuggestedName : "My modded game";
+            var tmp = Path.Combine(Path.GetTempPath(), NB.Core.Project.PatchPackage.Slug(name) + ".nbpatch");
+            await Task.Run(() => NB.Core.Project.PatchPackage.BuildFromFolders(rep, tmp, name, S.PlayerName, rep.SuggestedDescription,
+                new Progress<(string File, double Fraction)>(p => ((IProgress<(string, double)>)prog).Report(("Making the mod: " + p.File, 0.8 + 0.2 * p.Fraction)))));
+            var added = ModLibrary.Add(tmp);
+            File.Delete(tmp);
+            _ticked.Add(added.Sha256);
+            EditionBusyBar.Value = 1;
+            var cat = NB.Core.Project.ModCategories.Of(added.Manifest).Name;
+            EditionBusyText.Text = $"\"{added.Manifest.Name}\" is in your mods ({cat}; {rep.Carried.Count()} file(s)" +
+                (added.Manifest.ExeMods.Count > 0 ? $", {added.Manifest.ExeMods.Count} executable change(s)" : "") + "). It is ticked below: build an edition with it." +
+                (rep.Warnings.Count > 0 ? "\n" + string.Join("\n", rep.Warnings) : "");
+            if (clean != null && string.Equals(Path.GetFullPath(mod).TrimEnd('\\'), Path.GetFullPath(S.GameDir).TrimEnd('\\'), StringComparison.OrdinalIgnoreCase)
+                && MessageBox.Show(this, $"Your game folder is the modded one. Use the clean copy\n{clean}\nas your game folder from now on?\n\n" +
+                    "Editions are built on a clean game; your changes stay available as the mod \"" + added.Manifest.Name + "\".", "NB Multiplayer", MessageBoxButton.YesNo) == MessageBoxResult.Yes)
+            {
+                S.GameDir = clean; S.Save();
+            }
+        }
+        catch (Exception ex) { EditionBusyText.Text = "The folder could not be turned into a mod: " + ex.Message; }
         RefreshEditions();
     }
 

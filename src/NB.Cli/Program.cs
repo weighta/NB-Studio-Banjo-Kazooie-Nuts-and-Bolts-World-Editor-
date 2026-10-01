@@ -5,6 +5,10 @@ namespace NB.Cli;
 
 static class Program
 {
+    /// <summary>World edits from a JSON file: a list of string lists (NB.Core.Project.WorldOps).</summary>
+    static List<List<string>> ReadOps(string path) =>
+        System.Text.Json.JsonSerializer.Deserialize<List<List<string>>>(File.ReadAllText(path)) ?? new();
+
     static int Main(string[] args)
     {
         if (args.Length == 0) { Usage(); return 1; }
@@ -91,28 +95,34 @@ static class Program
                 }
                 case "tex-extract":
                 {
-                    // tex-extract <caff> <outdir> [name filter]
-                    var c = NB.Core.Formats.CaffFile.Read(File.ReadAllBytes(args[1]));
+                    // tex-extract <caff | stream archive> <outdir> [name filter]
+                    var raw0 = File.ReadAllBytes(args[1]);
                     string filter = args.Length > 3 ? args[3] : "";
                     int ok = 0, fail = 0, sizeMismatch = 0;
-                    for (int s = 1; s <= c.Symbols.Count; s++)
+                    var caffs = NB.Core.Formats.BundleArchive.IsArchive(raw0)
+                        ? NB.Core.Formats.BundleArchive.Read(raw0).Entries.Where(e => e.Kind == "caff").Select(e => NB.Core.Formats.CaffFile.Read(e.Data!)).ToList()
+                        : new List<NB.Core.Formats.CaffFile> { NB.Core.Formats.CaffFile.Read(raw0) };
+                    foreach (var c in caffs)
                     {
-                        var name = c.Symbols[s - 1];
-                        if (!name.Contains("aid_texture") || !name.Contains(filter)) continue;
-                        var parts = c.PartsOf(s).ToList();
-                        var cpu = parts.FirstOrDefault(p => c.SectionOf(p).Name == ".data");
-                        var gpu = parts.FirstOrDefault(p => c.SectionOf(p).Name == ".texturegpu");
-                        if (cpu == null || gpu == null || !NB.Core.Textures.TextureHeader.IsTexture(cpu.Data)) continue;
-                        string shortName = name.Replace("D:\\LocalLibrary\\BanjoX\\", "").Split('\\')[0];
-                        try
+                        for (int s = 1; s <= c.Symbols.Count; s++)
                         {
-                            var t = new NB.Core.Textures.TextureAsset(cpu.Data, gpu.Data);
-                            if (t.ExpectedGpuSize != gpu.Data.Length) { sizeMismatch++; Console.WriteLine($"size {shortName}: {t.Header} expected 0x{t.ExpectedGpuSize:X} got 0x{gpu.Data.Length:X}"); }
-                            var (rgba, w, h) = t.Decode(0);
-                            NB.Core.Textures.ImageIO.Save(Path.Combine(args[2], shortName + ".png"), rgba, w, h);
-                            ok++;
+                            var name = c.Symbols[s - 1];
+                            if (!name.Contains("aid_texture") || !name.Contains(filter)) continue;
+                            var parts = c.PartsOf(s).ToList();
+                            var cpu = parts.FirstOrDefault(p => c.SectionOf(p).Name == ".data");
+                            var gpu = parts.FirstOrDefault(p => c.SectionOf(p).Name == ".texturegpu");
+                            if (cpu == null || gpu == null || !NB.Core.Textures.TextureHeader.IsTexture(cpu.Data)) continue;
+                            string shortName = name.Replace("D:\\LocalLibrary\\BanjoX\\", "").Split('\\')[0];
+                            try
+                            {
+                                var t = new NB.Core.Textures.TextureAsset(cpu.Data, gpu.Data);
+                                if (t.ExpectedGpuSize != gpu.Data.Length) { sizeMismatch++; Console.WriteLine($"size {shortName}: {t.Header} expected 0x{t.ExpectedGpuSize:X} got 0x{gpu.Data.Length:X}"); }
+                                var (rgba, w, h) = t.Decode(0);
+                                NB.Core.Textures.ImageIO.Save(Path.Combine(args[2], shortName + ".png"), rgba, w, h);
+                                ok++;
+                            }
+                            catch (Exception e) { fail++; Console.WriteLine($"fail {shortName}: {e.Message}"); }
                         }
-                        catch (Exception e) { fail++; Console.WriteLine($"fail {shortName}: {e.Message}"); }
                     }
                     Console.WriteLine($"decoded={ok} failed={fail} sizeMismatch={sizeMismatch}");
                     return 0;
@@ -179,6 +189,18 @@ static class Program
                     int draws = scene.Objects.Sum(o => o.Model?.Draws.Count ?? 0), missing = scene.Objects.Count(o => o.Model == null);
                     Console.WriteLine($"objects={scene.Objects.Count} models={scene.Models.Count} draws(total instanced)={draws} missingModels={missing} in {sw.Elapsed.TotalSeconds:F1}s");
                     foreach (var l in scene.Log.Take(15)) Console.WriteLine("  " + l);
+                    return 0;
+                }
+                case "tex-batch":
+                {
+                    // tex-batch <workspace> <bundle hex> <dir>: replace every texture of ONE bundle (resident + its streamed top level)
+                    // that has a PNG named after it in <dir> (aid_texture_..._0x...mip.png); other bundles keep their copies
+                    var ws = NB.Core.Project.Workspace.Open(args[1]);
+                    uint b = Convert.ToUInt32(args[2], 16);
+                    var items = Directory.GetFiles(args[3], "*.png").Select(f => { var (rgba, w, h) = NB.Core.Textures.ImageIO.Load(f); return (Path.GetFileNameWithoutExtension(f), rgba, w, h); }).ToList();
+                    var res = NB.Core.Textures.TextureReplacer.ReplaceMany(ws, b, items);
+                    Console.WriteLine($"{items.Count} image(s): resident {res.ResidentAssets}, streamed {res.StreamedAssets}");
+                    foreach (var n in res.Notes) Console.WriteLine("  " + n);
                     return 0;
                 }
                 case "tex-replace":
@@ -1272,189 +1294,39 @@ static class Program
                 }
                 case "objparams-set":
                 {
-                    // objparams-set <workspace> <objparams asset> <offset hex> <u32 hex | asset name>: write one u32 in an objparams
-                    // .data in every resident and streamed copy (e.g. vehicle part +0x120 = garage description dialog id)
+                    // objparams-set <workspace> <objparams asset> <offset hex> <u32 hex | asset name> [--bundle hex]: one u32 in every resident and streamed copy
                     var ws = NB.Core.Project.Workspace.Open(args[1]);
-                    var idx = NB.Core.Project.AssetIndex.LoadOrBuild(ws);
-                    string name = args[2].StartsWith("aid_") ? args[2] : "aid_objparams_banjox_vehicleblock_" + args[2];
-                    int off = Convert.ToInt32(args[3], 16);
-                    uint val = args[4].StartsWith("aid_") ? idx.Entries.FirstOrDefault(e => e.Name == args[4])?.Id ?? throw new InvalidDataException($"no asset {args[4]}") : Convert.ToUInt32(args[4], 16);
-                    uint id = idx.Entries.First(e => e.Name == name).Id;
-                    int n = 0;
-                    void Patch(byte[] d, string where)
-                    {
-                        if (off < 0 || off + 4 > d.Length) throw new ArgumentException($"offset outside {name} ({d.Length} bytes)");
-                        uint old = NB.Core.IO.BE.U32(d, off); NB.Core.IO.BE.W32(d, off, val); n++;
-                        Console.WriteLine($"{where}: +0x{off:X} 0x{old:X8} -> 0x{val:X8}");
-                    }
-                    foreach (var e in idx.Entries.Where(x => x.Name == name && !x.Streamed).GroupBy(x => x.Bundle).Select(g => g.First()))
-                    {
-                        var caff = ws.LoadResident(e.Bundle);
-                        Patch(caff.PartsOf(e.Symbol).First(p => caff.SectionOf(p).Name == ".data").Data, $"{e.Bundle:x6}");
-                        ws.SaveResident(e.Bundle, caff, $"{name} +0x{off:X} = 0x{val:X8}");
-                    }
-                    foreach (var b in idx.Entries.Where(x => x.Name == name && x.Streamed).Select(x => x.Bundle).Distinct())
-                    {
-                        var arch = ws.LoadStream(b); bool changed = false;
-                        foreach (var en in arch.Entries.Where(x => x.Id == id && x.Kind == "caff"))
-                        {
-                            var sc = NB.Core.Formats.CaffFile.Read(en.Data!);
-                            int sym = sc.Symbols.FindIndex(s => NB.Core.Formats.AssetIds.DisplayName(s) == name) + 1;
-                            if (sym == 0) continue;
-                            Patch(sc.PartsOf(sym).First(p => sc.SectionOf(p).Name == ".data").Data, $"{b:x6} streamed");
-                            en.Data = sc.Write(); changed = true;
-                        }
-                        if (changed) ws.SaveStream(b, arch, $"{name} +0x{off:X} = 0x{val:X8}");
-                    }
-                    return n > 0 ? 0 : 1;
+                    NB.Core.Project.WorldOps.Run(ws, args.Take(1).Concat(args.Skip(2)).ToList(), Console.WriteLine, () => NB.Core.Project.AssetIndex.LoadOrBuild(ws));
+                    return 0;
                 }
                 case "script-insert":
                 {
-                    // script-insert <workspace> <bundle hex> <script asset> <after offset hex> <command hex bytes>: insert one script
-                    // command after the command at that offset (e.g. "0000000C 00000065 00010000" = spawn marker set 0x00010000).
-                    // Only safe where no relative skip (e.g. op 0x1C) spans the insertion point.
+                    // script-insert <workspace> <bundle hex> <script asset> <after: offset hex | op:XX> <command hex>: insert one script command (NB.Core.Project.WorldOps)
                     var ws = NB.Core.Project.Workspace.Open(args[1]);
-                    uint b = Convert.ToUInt32(args[2], 16);
-                    var caff = ws.LoadResident(b);
-                    int sym = caff.Symbols.FindIndex(s => NB.Core.Formats.AssetIds.DisplayName(s) == args[3]) + 1;
-                    if (sym == 0) throw new InvalidDataException($"{args[3]} not in {b:x6}");
-                    if (caff.Relocs.Any(r => caff.Parts[r.FromPart - 1].Symbol == sym)) throw new InvalidDataException("script has pointers");
-                    var part = caff.PartsOf(sym).First(p => caff.SectionOf(p).Name == ".data");
-                    var sc = NB.Core.World.ScriptAsset.Parse(part.Data);
-                    int after = Convert.ToInt32(args[4], 16);
-                    int ci = sc.Commands.FindIndex(c => c.Offset == after);
-                    if (ci < 0) throw new ArgumentException($"no command at 0x{after:X}");
-                    var cmd = Convert.FromHexString(string.Concat(args.Skip(5)).Replace(" ", ""));
-                    if (NB.Core.IO.BE.S32(cmd, 0) != cmd.Length) throw new ArgumentException("command size field must equal its length");
-                    if (ci + 1 < sc.Commands.Count && sc.Commands[ci + 1].Data.AsSpan().SequenceEqual(cmd)) { Console.WriteLine("already inserted"); return 0; }
-                    sc.Commands.Insert(ci + 1, new NB.Core.World.ScriptCommand { Data = cmd });
-                    part.Data = sc.Write(); part.Size = part.Data.Length;
-                    ws.SaveResident(b, caff, $"{args[3]}: command {Convert.ToHexString(cmd)} inserted after 0x{after:X}");
-                    Console.WriteLine($"inserted {cmd.Length}-byte command after 0x{after:X}; header {Convert.ToHexString(sc.Header)}");
+                    NB.Core.Project.WorldOps.Run(ws, args.Take(1).Concat(args.Skip(2)).ToList(), Console.WriteLine, () => NB.Core.Project.AssetIndex.LoadOrBuild(ws));
                     return 0;
                 }
                 case "asset-copy":
                 {
-                    // asset-copy <workspace> <src bundle hex> <src asset> <dst bundle hex> [new name]: copy a self-contained asset (no
-                    // pointers into shared data, e.g. a vehicle blueprint) into another resident bundle
+                    // asset-copy <workspace> <src bundle hex> <src asset> <dst bundle hex> [new name]: copy a self-contained asset (e.g. a vehicle blueprint) into another resident bundle
                     var ws = NB.Core.Project.Workspace.Open(args[1]);
-                    uint sb = Convert.ToUInt32(args[2], 16), db = Convert.ToUInt32(args[4], 16);
-                    string src = args[3], nn = args.Length > 5 ? args[5] : src;
-                    var sc = ws.LoadResident(sb);
-                    int ss = sc.Symbols.FindIndex(s => NB.Core.Formats.AssetIds.DisplayName(s) == src) + 1;
-                    if (ss == 0) throw new InvalidDataException($"{src} not in {sb:x6}");
-                    var dc = ws.LoadResident(db);
-                    int ns = NB.Core.Formats.CaffEdit.CopyAsset(sc, ss, dc, nn);
-                    ws.SaveResident(db, dc, $"{nn}: copied from {src} ({sb:x6})");
-                    Console.WriteLine($"{nn} ({NB.Core.Formats.AssetIds.IdOf(nn):X8}) in {db:x6} = {src} from {sb:x6}: {dc.PartsOf(ns).Count()} part(s)");
+                    NB.Core.Project.WorldOps.Run(ws, args.Take(1).Concat(args.Skip(2)).ToList(), Console.WriteLine, () => NB.Core.Project.AssetIndex.LoadOrBuild(ws));
                     NB.Core.Project.AssetIndex.LoadOrBuild(ws, null, true);
                     return 0;
                 }
                 case "objparams-copy":
                 {
-                    // objparams-copy <workspace> <src bundle hex> <src asset> <dst bundle hex> <dst template asset> [new name]
-                    //   copy an objparams record into another bundle: clone a same-class, same-size record there under the source's
-                    //   name (or new name) and overwrite its .data with the source's (objparams records carry asset ids, no pointers)
+                    // objparams-copy <workspace> <src bundle hex> <src asset> <dst bundle hex> <dst template asset> [new name]: copy an objparams record into another bundle
                     var ws = NB.Core.Project.Workspace.Open(args[1]);
-                    uint sb = Convert.ToUInt32(args[2], 16), db = Convert.ToUInt32(args[4], 16);
-                    string N(string n) => n.StartsWith("aid_") ? n : "aid_objparams_banjox_" + n;
-                    string src = N(args[3]), tpl = N(args[5]), nn = args.Length > 6 ? N(args[6]) : src;
-                    var sc = ws.LoadResident(sb);
-                    int ss = sc.Symbols.FindIndex(s => NB.Core.Formats.AssetIds.DisplayName(s) == src) + 1;
-                    if (ss == 0) throw new InvalidDataException($"{src} not in {sb:x6}");
-                    if (sc.Relocs.Any(r => sc.Parts[r.FromPart - 1].Symbol == ss)) throw new InvalidDataException($"{src} has pointers; not a plain objparams record");
-                    var sd = sc.PartsOf(ss).First(p => sc.SectionOf(p).Name == ".data").Data;
-                    var dc = ws.LoadResident(db);
-                    int ns = dc.Symbols.FindIndex(s => NB.Core.Formats.AssetIds.DisplayName(s) == nn) + 1;
-                    if (ns == 0)
-                    {
-                        int ts = dc.Symbols.FindIndex(s => NB.Core.Formats.AssetIds.DisplayName(s) == tpl) + 1;
-                        if (ts == 0) throw new InvalidDataException($"{tpl} not in {db:x6}");
-                        ns = NB.Core.Formats.CaffEdit.CloneAsset(dc, ts, nn);
-                    }
-                    var part = dc.PartsOf(ns).First(p => dc.SectionOf(p).Name == ".data");
-                    if (part.Data.Length != sd.Length) throw new InvalidDataException($"size differs: {part.Data.Length} vs {sd.Length} (use a template of the same class)");
-                    part.Data = (byte[])sd.Clone();
-                    ws.SaveResident(db, dc, $"{nn}: copied from {src} ({sb:x6})");
-                    Console.WriteLine($"{nn} ({NB.Core.Formats.AssetIds.IdOf(nn):X8}) in {db:x6} = {src} from {sb:x6}");
+                    NB.Core.Project.WorldOps.Run(ws, args.Take(1).Concat(args.Skip(2)).ToList(), Console.WriteLine, () => NB.Core.Project.AssetIndex.LoadOrBuild(ws));
                     NB.Core.Project.AssetIndex.LoadOrBuild(ws, null, true);
                     return 0;
                 }
                 case "ai-route":
                 {
-                    // ai-route <workspace> <world bundle hex> <marker asset> [options]: add a looping AI vehicle (NB.Core.World.AiRoute)
-                    //   --oval cx cy cz rx rz n | --points "x,y,z;x,y,z;…"   route (closed loop)   --width w (8)   --tag t (9)
-                    //   --vehicle <aid_vehicle_…> [--vehicle-template <aid_vehicle_…>]  (clone the template in 4f/685374 when missing)
-                    //   --driver <objparams actor> (actor_npc_thomas)  --strategy <new objparams name> --strategy-template <jogger> --speed s (40)
-                    //   --spawn-node k (0: spawn at the first node)  --remove-from <index> (drop earlier appended nodes/spawns first)
+                    // ai-route <workspace> <world bundle hex> <marker asset> [options]: add a looping AI vehicle (options: NB.Core.Project.WorldOps)
                     var ws = NB.Core.Project.Workspace.Open(args[1]);
-                    var idx = NB.Core.Project.AssetIndex.LoadOrBuild(ws);
-                    uint wb = Convert.ToUInt32(args[2], 16);
-                    string Opt(string k, string def) { int i = Array.LastIndexOf(args, k); return i > 0 && i + 1 < args.Length ? args[i + 1] : def; }   // last one wins
-                    float Fl(string s) => float.Parse(s, System.Globalization.CultureInfo.InvariantCulture);
-                    string Obj(string n) => n.StartsWith("aid_") ? n : "aid_objparams_banjox_" + n;
-                    var caff = ws.LoadResident(wb);
-                    int ms = caff.Symbols.FindIndex(s => NB.Core.Formats.AssetIds.DisplayName(s) == args[3]) + 1;
-                    if (ms == 0) throw new InvalidDataException($"{args[3]} not in {wb:x6}");
-                    if (args.Contains("--remove-from"))
-                        Console.WriteLine($"removed {NB.Core.World.AiRoute.RemoveFrom(caff, ms, int.Parse(Opt("--remove-from", "0")), 21, 22)} appended record(s)");
-                    if (NB.Core.World.AiRoute.FixTerminator(caff, ms)) Console.WriteLine("closing type-0 record moved back to the end");
-                    if (args.Contains("--remove-only")) { ws.SaveResident(wb, caff, $"AI route removed from {args[3]}"); return 0; }
-                    // route
-                    var pts = new List<System.Numerics.Vector3>();
-                    int oi = Array.IndexOf(args, "--oval");
-                    if (oi > 0) pts = NB.Core.World.AiRoute.Oval(new(Fl(args[oi + 1]), Fl(args[oi + 2]), Fl(args[oi + 3])), Fl(args[oi + 4]), Fl(args[oi + 5]), int.Parse(args[oi + 6]));
-                    else foreach (var t in Opt("--points", "").Split(';', StringSplitOptions.RemoveEmptyEntries)) { var c = t.Split(',').Select(Fl).ToArray(); pts.Add(new(c[0], c[1], c[2])); }
-                    if (pts.Count < 3) throw new ArgumentException("give --oval or --points");
-                    byte[] spawnTplEarly() { var tc = ws.LoadResident(0x757c4b); int t2 = tc.Symbols.FindIndex(s => NB.Core.Formats.AssetIds.DisplayName(s) == "aid_marker_banjox_ui_frontend_startscreen") + 1; return NB.Core.World.AiRoute.FirstRecord(tc, t2, 21)!; }
-                    var nodeTpl = NB.Core.World.AiRoute.FirstRecord(caff, ms, 22) ?? throw new InvalidDataException("no path node in the marker asset to copy");
-                    var title = ws.LoadResident(0x757c4b);
-                    int ts = title.Symbols.FindIndex(s => NB.Core.Formats.AssetIds.DisplayName(s) == "aid_marker_banjox_ui_frontend_startscreen") + 1;
-                    var spawnTpl = NB.Core.World.AiRoute.FirstRecord(title, ts, 21)!;
-                    int first = NB.Core.World.AiRoute.MaxIndex(caff, ms) + 1;
-                    // --player-slot x y z yaw: a vehicle-spawn record with no vehicle (slot 0) placed BEFORE the AI spawn. The town
-                    // script's trolley command (opcode 0x8D, marker 0) places Banjo's trolley at the level's first type-21 record;
-                    // without this, the first one is the AI spawn and every player vehicle appeared there (live trace).
-                    int pi = Array.IndexOf(args, "--player-slot");
-                    if (pi > 0)
-                    {
-                        NB.Core.World.AiRoute.AddPlayerSlot(caff, ms, spawnTplEarly(), first, new(Fl(args[pi + 1]), Fl(args[pi + 2]), Fl(args[pi + 3])), Fl(args[pi + 4]));
-                        Console.WriteLine($"player vehicle marker #{first} at ({args[pi + 1]}, {args[pi + 2]}, {args[pi + 3]})");
-                        first++;
-                    }
-                    NB.Core.World.AiRoute.AddLoop(caff, ms, pts, Fl(Opt("--width", "8")), int.Parse(Opt("--tag", "9")), nodeTpl, first, int.Parse(Opt("--loop-from", "0")));   // --loop-from k: last node links to node k
-                    Console.WriteLine($"path: {pts.Count} nodes, indices {first}..{first + pts.Count - 1}, tag {Opt("--tag", "9")}");
-                    if (args.Contains("--nodes-only")) { ws.SaveResident(wb, caff, $"AI route nodes only in {args[3]}"); return 0; }
-                    // strategy (in the world bundle)
-                    string stratName = Obj(Opt("--strategy", "actorstrategy_ultra_ai"));
-                    if (!args.Contains("--keep-strategy"))   // --keep-strategy: use an existing strategy record as is
-                    {
-                        int tplS = caff.Symbols.FindIndex(s => NB.Core.Formats.AssetIds.DisplayName(s) == Obj(Opt("--strategy-template", "actorstrategy_showdowntown_mrfit"))) + 1;
-                        if (tplS == 0) throw new InvalidDataException("strategy template not in the world bundle");
-                        NB.Core.World.AiRoute.MakeVehicleStrategy(caff, tplS, stratName, Fl(Opt("--speed", "40")));
-                    }
-                    // vehicle blueprint (4f/685374)
-                    string veh = Opt("--vehicle", "aid_vehicle_banjox_ultra_ai1");
-                    var common = ws.LoadResident(0x685374);
-                    if (!common.Symbols.Any(s => NB.Core.Formats.AssetIds.DisplayName(s) == veh) && !caff.Symbols.Any(s => NB.Core.Formats.AssetIds.DisplayName(s) == veh))
-                    {   // (a vehicle already in the world bundle, e.g. from asset-copy, is used as is)
-                        string vt = Opt("--vehicle-template", "aid_vehicle_banjox_test_gm_sdt1");
-                        int vs = common.Symbols.FindIndex(s => NB.Core.Formats.AssetIds.DisplayName(s) == vt) + 1;
-                        if (vs == 0) throw new InvalidDataException($"vehicle template {vt} not in 685374");
-                        NB.Core.Formats.CaffEdit.CloneAsset(common, vs, veh);
-                        ws.SaveResident(0x685374, common, $"AI vehicle {veh} cloned from {vt}");
-                        Console.WriteLine($"vehicle {veh} cloned from {vt} (replace its blocks with vehicle-replace)");
-                    }
-                    uint vehId = NB.Core.Formats.AssetIds.IdOf(veh)!.Value, drvId = Opt("--driver", "actor_npc_thomas") == "none" ? 0u : NB.Core.Formats.AssetIds.IdOf(Obj(Opt("--driver", "actor_npc_thomas")))!.Value, stId = NB.Core.Formats.AssetIds.IdOf(stratName)!.Value;
-                    int k = int.Parse(Opt("--spawn-node", "0"));
-                    var sp = pts[k]; var nx = pts[(k + 1) % pts.Count];
-                    int sa = Array.LastIndexOf(args, "--spawn-at");   // --spawn-at x y z: spawn elsewhere (e.g. a runway), heading for the start node
-                    if (sa > 0) { nx = pts[k]; sp = new(Fl(args[sa + 1]), Fl(args[sa + 2]), Fl(args[sa + 3])); }
-                    int si = first + pts.Count;
-                    NB.Core.World.AiRoute.AddVehicleSpawn(caff, ms, spawnTpl, si, sp + new System.Numerics.Vector3(0, 1.5f, 0), MathF.Atan2(nx.X - sp.X, nx.Z - sp.Z), first + k, vehId, drvId, stId, mask: Convert.ToUInt32(Opt("--mask", "0"), 16));   // --mask hex: marker set (0 = at level load)
-                    Console.WriteLine($"spawn #{si} at {sp} → node {first + k}: vehicle {vehId:X8}, driver {drvId:X8}, strategy {stId:X8}");
-
-                    ws.SaveResident(wb, caff, $"AI route: {pts.Count} nodes + vehicle spawn in {args[3]}");
+                    NB.Core.Project.WorldOps.Run(ws, args.Take(1).Concat(args.Skip(2)).ToList(), Console.WriteLine, () => NB.Core.Project.AssetIndex.LoadOrBuild(ws));
                     NB.Core.Project.AssetIndex.LoadOrBuild(ws, null, true);
                     return 0;
                 }
@@ -2071,6 +1943,101 @@ static class Program
                     Console.WriteLine($"exported {n} file(s) to {args[2]}");
                     return 0;
                 }
+                case "ops-apply":
+                {
+                    // ops-apply <workspace | game folder> <ops.json>: run world edits (a JSON list of string lists, see WorldOps) on a
+                    // workspace or, with a plain game folder, in place like an edition build (with backups for patch-rollback)
+                    var ops = ReadOps(args[2]);
+                    if (File.Exists(Path.Combine(args[1], "workspace.json")))
+                    {
+                        var ws = NB.Core.Project.Workspace.Open(args[1]);
+                        foreach (var op in ops) NB.Core.Project.WorldOps.Run(ws, op, Console.WriteLine, () => NB.Core.Project.AssetIndex.LoadOrBuild(ws));
+                        NB.Core.Project.AssetIndex.LoadOrBuild(ws, null, true);
+                    }
+                    else
+                        Console.WriteLine($"{NB.Core.Project.PatchPackage.ApplyOps(new NB.Core.Project.PatchPackage.PatchManifest { Name = Path.GetFileNameWithoutExtension(args[2]), Id = "ops-" + Path.GetFileNameWithoutExtension(args[2]), Ops = ops }, args[1], Console.WriteLine)} file(s) changed");
+                    return 0;
+                }
+                case "game-verify":
+                {
+                    // game-verify <game dir>: compare every file with the retail fingerprints (size + SHA-256)
+                    var sw = System.Diagnostics.Stopwatch.StartNew();
+                    var res = NB.Core.Project.GameDiff.CompareWithRetail(args[1]);
+                    foreach (var r in res) Console.WriteLine($"{r.State,-8} {r.Path}");
+                    Console.WriteLine(res.Count == 0 ? $"retail: all {NB.Core.Project.GameDiff.Retail.Count} files match ({sw.Elapsed.TotalSeconds:F0}s)" : $"{res.Count} difference(s) ({sw.Elapsed.TotalSeconds:F0}s)");
+                    return res.Count == 0 ? 0 : 1;
+                }
+                case "game-diff":
+                case "patch-from-folder":
+                {
+                    // game-diff <modified game dir> [--ref <clean game dir>]...: what a hand-modded game folder changes, per asset
+                    // patch-from-folder <modified game dir> <out.nbpatch> [--ref dir]... [--name N] [--author A] [--desc D] [--version V]
+                    //             [--category c] [--multiplayer m] [--tags a,b]: build a mod from it (clean reference: the first --ref that is retail)
+                    bool build = args[0] == "patch-from-folder";
+                    string Opt(string k, string d) { int i = Array.IndexOf(args, k); return i >= 0 && i + 1 < args.Length ? args[i + 1] : d; }
+                    var sw = System.Diagnostics.Stopwatch.StartNew();
+                    int lastPc = -1;
+                    var cmp = NB.Core.Project.GameDiff.CompareWithRetail(args[1], new Progress<(string T, double F)>(p => { int pc = (int)(p.F * 100); if (pc != lastPc) { lastPc = pc; Console.Error.Write($"\r{pc}% "); } }));
+                    Console.Error.WriteLine();
+                    var refs = Enumerable.Range(0, args.Length - 1).Where(i => args[i] == "--ref").Select(i => args[i + 1]).ToList();
+                    var refDir = NB.Core.Project.GameDiff.FindReference(refs, cmp.Where(c => c.State == "changed").Select(c => c.Path), args[1]);
+                    Console.WriteLine($"reference: {refDir ?? "(none of the --ref folders has the original files)"}");
+                    var rep = NB.Core.Project.GameDiff.Analyze(args[1], refDir, null, default, cmp);
+                    foreach (var f in rep.Files)
+                    {
+                        Console.WriteLine($"{f.State,-8} {f.Path}  [{f.Area}]  {f.Summary}  kinds: {string.Join(",", f.Kinds)}");
+                        foreach (var a in f.Changed.Take(12)) Console.WriteLine("           ~ " + a);
+                        foreach (var a in f.Added.Take(12)) Console.WriteLine("           + " + a);
+                        foreach (var a in f.Removed.Take(12)) Console.WriteLine("           - " + a);
+                        int more = f.Changed.Count + f.Added.Count + f.Removed.Count - Math.Min(12, f.Changed.Count) - Math.Min(12, f.Added.Count) - Math.Min(12, f.Removed.Count);
+                        if (more > 0) Console.WriteLine($"           ... {more} more");
+                    }
+                    if (rep.Exe != null)
+                    {
+                        foreach (var m in rep.Exe.Known) Console.WriteLine($"exe: known mod {m.Id} ({m.Name})");
+                        foreach (var w in rep.Exe.Other.Take(20)) Console.WriteLine($"exe: {w.Address:X8} {w.Original:X8} -> {w.Patched:X8}");
+                        if (rep.Exe.Other.Count > 20) Console.WriteLine($"exe: ... {rep.Exe.Other.Count - 20} more words");
+                    }
+                    foreach (var w in rep.Warnings) Console.WriteLine("warning: " + w);
+                    Console.WriteLine($"suggested: category {rep.Category}, multiplayer {rep.Multiplayer}, tags [{string.Join(", ", rep.Tags)}], name \"{rep.SuggestedName}\"");
+                    Console.WriteLine($"  {rep.SuggestedDescription}");
+                    if (!build) return 0;
+                    var tags = Opt("--tags", "");
+                    var man = NB.Core.Project.PatchPackage.BuildFromFolders(rep, args[2], Opt("--name", rep.SuggestedName), Opt("--author", ""), Opt("--desc", rep.SuggestedDescription),
+                        new Progress<(string F, double P)>(p => Console.WriteLine($"  [{sw.Elapsed.TotalSeconds,6:F1}s] {p.F}")),
+                        m =>
+                        {
+                            m.Version = Opt("--version", m.Version); m.Id = Opt("--id", m.Id); m.Category = Opt("--category", m.Category); m.Multiplayer = Opt("--multiplayer", m.Multiplayer);
+                            if (tags.Length > 0) m.Tags = tags.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+                        });
+                    foreach (var f in man.Files) Console.WriteLine($"{f.Kind,-7} {f.Path}: {f.TargetSize:N0} bytes = {f.CopiedBytes:N0} copied + {f.LiteralBytes:N0} new");
+                    Console.WriteLine($"exe mods: {string.Join(", ", man.ExeMods.Select(m => $"{m.Id} ({m.Words.Count} words)"))}");
+                    Console.WriteLine($"wrote {args[2]} ({new FileInfo(args[2]).Length:N0} bytes) in {sw.Elapsed.TotalSeconds:F0}s");
+                    return 0;
+                }
+                case "xex-poke":
+                {
+                    // xex-poke <in default.xex> <out default.xex> [--mod <exe mod id>]... [address=value]...: write words into the
+                    // executable image like a hand edit (testing "patch from a modified folder"); the result is decrypted, unsigned
+                    var xex = NB.Core.Formats.XexFile.Read(File.ReadAllBytes(args[1]));
+                    var words = new List<(uint, uint)>();
+                    for (int i = 3; i < args.Length; i++)
+                    {
+                        if (args[i] == "--mod") { var m = NB.Core.Mods.ExePatches.Resolve(args[++i]) ?? throw new ArgumentException("unknown exe mod " + args[i]); words.AddRange(m.Words.Select(w => (w.Address, w.Patched))); continue; }
+                        var kv = args[i].Split('='); words.Add((Convert.ToUInt32(kv[0], 16), Convert.ToUInt32(kv[1], 16)));
+                    }
+                    File.WriteAllBytes(args[2], xex.WritePatched(words));
+                    Console.WriteLine($"{words.Count} word(s) written -> {args[2]}");
+                    return 0;
+                }
+                case "link-copy":
+                {
+                    // link-copy <game dir> <new dir> [relative path]...: copy a game folder as hard links (same drive), the listed
+                    // files as real copies (to be changed); the original is never written
+                    NB.Core.IO.FileLinks.LinkCopy(args[1], args[2], new HashSet<string>(args.Skip(3).Select(f => f.Replace('/', Path.DirectorySeparatorChar)), StringComparer.OrdinalIgnoreCase));
+                    Console.WriteLine($"linked {args[1]} -> {args[2]} ({args.Length - 3} real cop{(args.Length - 3 == 1 ? "y" : "ies")})");
+                    return 0;
+                }
                 case "patch-build":
                 {
                     // patch-build <workspace> <out.nbpatch> [--name N] [--author A] [--desc D] [--version V] [--id ID] [--multiplayer cosmetic|world|coop]
@@ -2089,8 +2056,10 @@ static class Program
                             m.Version = Opt("--version", m.Version); m.Id = Opt("--id", m.Id); m.Multiplayer = Opt("--multiplayer", m.Multiplayer);
                             m.Requires = Ids("--requires"); m.Conflicts = Ids("--conflicts");
                             m.Category = Opt("--category", m.Category); m.Tags = Ids("--tags");
+                            if (Opt("--ops", "") is { Length: > 0 } of) m.Ops = ReadOps(of);   // --ops ops.json: world edits replayed onto the game (WorldOps)
                         });
                     Console.WriteLine($"mod {man.Id} {man.Version}  multiplayer: {(man.Multiplayer.Length > 0 ? man.Multiplayer : "(not stated)")}");
+                    if (man.Ops.Count > 0) Console.WriteLine($"world edits: {man.Ops.Count} op(s) ({string.Join(", ", man.Ops.Select(o => o[0]).Distinct())})");
                     foreach (var f in man.Files) Console.WriteLine($"{f.Kind,-5} {f.Path}: {f.TargetSize:N0} bytes = {f.CopiedBytes:N0} copied from the original + {f.LiteralBytes:N0} new");
                     Console.WriteLine($"exe mods: {string.Join(", ", man.ExeMods.Select(m => m.Id))}");
                     Console.WriteLine($"wrote {args[2]} ({new FileInfo(args[2]).Length:N0} bytes, {man.Files.Count} files) in {sw.Elapsed.TotalSeconds:F0}s");
@@ -2130,7 +2099,8 @@ static class Program
                     var probs = NB.Core.Project.ModStack.Problems(mods);
                     foreach (var p in probs) Console.WriteLine("PROBLEM: " + p);
                     if (probs.Count > 0) return 1;
-                    Console.WriteLine("these mods can be combined");
+                    foreach (var note in NB.Core.Project.ModStack.Notes(mods)) Console.WriteLine("note: " + note);
+                    Console.WriteLine("these mods can be combined (shared files are checked asset by asset when they are applied)");
                     if (!apply) return 0;
                     int n = NB.Core.Project.ModStack.Apply(mods, args[1], null, Console.WriteLine);
                     Console.WriteLine($"applied: {n} file(s) written");

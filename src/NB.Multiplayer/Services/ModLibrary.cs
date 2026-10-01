@@ -64,6 +64,20 @@ public static class ModLibrary
             .Select(f => Get(Path.GetFileNameWithoutExtension(f.Name))).OfType<ModStack.Mod>().ToList();
     }
 
+    /// <summary>
+    /// The library as the Mods page shows it: the newest version of each mod (by version number, then date). Older versions
+    /// stay in the library for the editions and rooms that still use them, plus any in <paramref name="keep"/>.
+    /// </summary>
+    public static List<ModStack.Mod> Current(ICollection<string>? keep = null)
+    {
+        var all = List();
+        var newest = all.GroupBy(m => m.Id, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.OrderByDescending(m => System.Version.TryParse(m.Manifest.Version.Contains('.') ? m.Manifest.Version : m.Manifest.Version + ".0", out var v) ? v : new System.Version(0, 0))
+                          .ThenByDescending(m => m.Manifest.Created).First().Sha256)
+            .ToHashSet();
+        return all.Where(m => newest.Contains(m.Sha256) || (keep?.Contains(m.Sha256) ?? false)).ToList();
+    }
+
     public static void Remove(string sha256)
     {
         lock (_cache) _cache.Remove(sha256);

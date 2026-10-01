@@ -47,7 +47,9 @@
 | **Executable mods** | Toggle researched game-code changes (vehicles and Change Vehicle in town, destructible town vehicles, 2000-part vehicles, bigger world and garage, longer draw distance, all parts unlocked, debug menus...) as Xenia patches or baked into the executable. |
 | **Testing** | Launch your modded game in Xenia with one key (F5), and tweak a running game live (teleport, gravity, camera). |
 | **Sharing** | Export a `.nbpatch` mod: a small differential patch with only your changes, plus its name, version, category (map, vehicle parts, gameplay, visuals, audio, tweak, co-op), tags and description. It contains no game data; others apply it to their own copy with one click (with backup and rollback) or add it to NB Multiplayer's mod library. |
-| **Command line** | `cli/NB.Cli.exe`: every format tool, patch building and applying, combining mods (`stack-check`, `stack-apply`), the tick-box tweak mods, AI routes and vehicles, scripted Xenia tests. |
+| **Mods from modded folders** | Build > *Create Patch from a Modified Game Folder*: a game folder modded by hand becomes a mod. NB Studio compares it with the original game (size and SHA-256 of every retail file, shipped with the tool), shows what changed per file and asset (textures, models, markers, scripts, parts), recognises known executable tweaks in an edited `default.xex`, and fills in the category and tags. *Try it* starts the result in Xenia. |
+| **Combining mods** | Mods that change the same bundle are merged asset by asset; real conflicts are named down to the asset. Mods can carry *world edits* that are replayed on top of other mods (Showdown Town co-op works on any town this way). |
+| **Command line** | `cli/NB.Cli.exe`: every format tool, patch building and applying, combining mods (`stack-check`, `stack-apply`), mods from modded folders (`game-verify`, `game-diff`, `patch-from-folder`), world edits (`ops-apply`), the tick-box tweak mods, AI routes and vehicles, scripted Xenia tests. |
 
 Everything is non-destructive: NB Studio works on a **workspace** (a copy of your game), never on your original files,
 and keeps a history of every saved file.
@@ -80,6 +82,18 @@ and keeps a history of every saved file.
   <img src="docs/images/studio-texture-library.png" alt="Texture library" width="70%">
 </p>
 <p align="center"><i>The texture library of a Showdown Town building: export, replace, or edit externally and re-apply.</i></p>
+
+<p align="center">
+  <img src="docs/images/studio-folder-analysis.png" alt="Create Patch from a Modified Game Folder" width="49%">
+  <img src="docs/images/studio-folder-details.png" alt="The mod's details, filled in" width="49%">
+</p>
+<p align="center"><i>Create Patch from a Modified Game Folder: what a hand-modded folder changes, asset by asset, and the mod details NB Studio fills in from it.</i></p>
+
+<p align="center">
+  <img src="docs/images/snowy-night.jpg" alt="Snowy Showdown Town" width="49%">
+  <img src="docs/images/snowy-times-of-day.jpg" alt="Snowy Showdown Town at four times of day" width="49%">
+</p>
+<p align="center"><i>Snowy Showdown Town, the first official map mod (bundled with NB Multiplayer), made with these tools: snow textures, holly and bunting, camera-following snowfall and winter light, fog and skies. Recipe: <code>snow/build.sh</code>.</i></p>
 
 ## Installation
 
@@ -155,9 +169,20 @@ exact game files it was made for, and never distributes game data. Its `patch.js
 `Version`, `Category` (`map`, `parts`, `gameplay`, `visual`, `audio`, `tweak`, `coop`), `Tags`, `Multiplayer`
 (`world`, `cosmetic`, `coop`), `Requires` and `Conflicts`.
 
-**Stacking.** `src/NB.Core/Project/ModStack.cs` applies several mods to one game copy (NB Multiplayer editions): mods
-must change different game files, and their executable mods are merged into one `default.xex` (a word two mods change
-must get the same value). `NB.Cli stack-check / stack-apply / stack-explain` show what combines and why not.
+**Stacking.** `src/NB.Core/Project/ModStack.cs` applies several mods to one game copy (NB Multiplayer editions). Files
+that several mods change are merged asset by asset (`ModMerge.cs`, three-way against the original: every changed asset is
+taken from the mod that changed it; CAFF symbols and stream-archive entries alike); two mods changing the same asset
+differently is a conflict, reported by name. Then every mod's **world edits** (`patch.json` format 3 `Ops`, see
+`WorldOps.cs`: objparams-copy/set, asset-copy, ai-route, script-insert located by content) are replayed in recipe
+order, and the executable mods are merged into one `default.xex` (a word two mods change must get the same value).
+`NB.Cli stack-check / stack-apply / stack-explain` show what combines and why not. Game copies made of hard links are
+never written through: a changed file always becomes a file of its own.
+
+**Modded folders.** `src/NB.Core/Project/GameDiff.cs` compares a folder with `Data/retail_fingerprints.json` (path, size,
+SHA-256 of the 1,981 retail files), finds a clean reference among candidate folders (it must have the retail version of
+every changed file), lists changed/added/removed assets per bundle, and diffs the executable image word by word
+(complete known executable mods are recognised; other words become one executable mod of the new patch).
+`PatchPackage.BuildFromFolders` then writes an ordinary `.nbpatch`.
 
 **Testing.** Xenia runs the workspace's game directory; executable mods are written as Xenia patch files (or baked into
 `default.xex` for consoles that run unsigned code). The *Live (game)* tab attaches to a running Xenia and reads/writes
@@ -244,7 +269,15 @@ draws it and can import new collision meshes.
 
 ### Executable
 `default.xex` decrypts with the retail key to a PE image. Researched code locations power the *Executable mods* list:
-vehicles in town, debug menus and recovered parts (see `docs/research`).
+vehicles in town, debug menus and recovered parts (see `docs/research`), the co-op hooks, and *snow follows the camera*
+(the GPU particle update copies node +0xA0 into the emitter at 0x82226ECC; a code cave writes the camera position there
+for particle records tagged at +0x180, see `snow/research/fx/REPORT.md`).
+
+### Light, fog and sky **[verified in Xenia]**
+Showdown Town's four times of day (`aid_script_banjox_showdowntown_{morning,midday,afternoon,night}` in 685374) pick a
+skydome (op 0x2C) and run a light setup in the town bundle (`aid_script_banjox_lightsetup_showdowntown_*`): ambient
+(+0x08), sun colour (+0x0C), sun intensity (+0x1C), fog start/end/max (+0x50/+0x54/+0x58) and fog colour (+0x68). Details:
+`snow/research/light/REPORT.md`.
 
 ### Runtime: vehicles and physics **[verified in Xenia, used by Showdown Town co-op]**
 Guest addresses in the running game (big-endian floats), as read and written by `src/NB.Core/Live/CoopSync.cs`:

@@ -9,9 +9,11 @@ public sealed record RecipeMod(string Id, string Name, string Version, string Sh
 /// <summary>
 /// Editions as recipes: an ordered list of mods (.nbpatch files) applied to the player's own game.
 ///
-/// Mods are still per-file differences against the original game, so two mods can be stacked only when they change
-/// different game files. Executable mods are lists of word changes and are merged: they are written into default.xex
-/// together after the files, and a word two mods change must get the same value from both.
+/// Mods are per-file differences against the original game. When several mods change the same bundle, their changes are
+/// combined asset by asset (<see cref="ModMerge"/>); two mods changing the same asset differently is a conflict.
+/// World edits (<see cref="PatchPackage.PatchManifest.Ops"/>) are replayed after every mod's files, in recipe order.
+/// Executable mods are lists of word changes and are merged: they are written into default.xex together after the files,
+/// and a word two mods change must get the same value from both.
 /// </summary>
 public static class ModStack
 {
@@ -36,7 +38,6 @@ public static class ModStack
     {
         var res = new List<string>();
         var seen = new Dictionary<string, Mod>(StringComparer.OrdinalIgnoreCase);
-        var files = new Dictionary<string, Mod>(StringComparer.OrdinalIgnoreCase);
         var words = new Dictionary<uint, (uint Value, Mod Mod, string ExeMod)>();
         string N(Mod m) => $"\"{m.Manifest.Name}\"";
         foreach (var m in mods)
@@ -48,11 +49,9 @@ public static class ModStack
             foreach (var other in seen.Values)
                 if (m.Manifest.Conflicts.Contains(other.Id, StringComparer.OrdinalIgnoreCase) || other.Manifest.Conflicts.Contains(m.Id, StringComparer.OrdinalIgnoreCase))
                     res.Add($"{N(m)} and {N(other)} cannot be combined (their authors say so).");
-            foreach (var f in m.Manifest.Files.Where(f => f.Kind != "xexmods"))
-            {
-                if (files.TryGetValue(f.Path, out var first)) res.Add($"{N(first)} and {N(m)} both change {f.Path}.");
-                else files[f.Path] = m;
-            }
+            if (m.Manifest.Format > PatchPackage.CurrentFormat) res.Add($"{N(m)} needs a newer version of this app.");
+            foreach (var op in m.Manifest.Ops)
+                if (WorldOps.Problem(op) is { } bad) { res.Add($"{N(m)}: {bad}."); break; }
             foreach (var e in m.Manifest.ExeMods)
                 foreach (var w in e.Words)
                 {
@@ -64,6 +63,13 @@ public static class ModStack
         }
         return res.Distinct().ToList();
     }
+
+    /// <summary>Files that several of the mods change: combined asset by asset when the edition is built (shown as a note).</summary>
+    public static List<string> Notes(IReadOnlyList<Mod> mods) =>
+        mods.SelectMany(m => m.Manifest.Files.Where(f => f.Kind != "xexmods").Select(f => (f.Path, m)))
+            .GroupBy(x => x.Path, StringComparer.OrdinalIgnoreCase).Where(g => g.Count() > 1)
+            .Select(g => $"{string.Join(" and ", g.Select(x => $"\"{x.m.Manifest.Name}\""))} both change {g.Key}: their changes are combined asset by asset.")
+            .ToList();
 
     /// <summary>
     /// Applies the mods to <paramref name="gameDir"/> (an unmodified game copy) in order. Throws with every problem when
@@ -77,12 +83,43 @@ public static class ModStack
             return PatchPackage.Apply(mods[0].Path, gameDir, null, log,
                 new Progress<(string File, double Fraction)>(p => progress?.Report(($"{mods[0].Manifest.Name}: {p.File}", p.Fraction))));
         int n = 0;
+        // files several mods change: merged from the original before anything is written
+        var shared = mods.SelectMany(m => m.Manifest.Files.Where(f => f.Kind != "xexmods").Select(f => (F: f, M: m)))
+            .GroupBy(x => x.F.Path, StringComparer.OrdinalIgnoreCase).Where(g => g.Count() > 1).ToList();
+        var merged = new List<(string Path, byte[] Data)>();
+        var conflicts = new List<string>();
+        foreach (var g in shared)
+        {
+            progress?.Report(($"Combining {g.Key}", 0));
+            var p = Path.Combine(gameDir, g.Key.Replace('/', Path.DirectorySeparatorChar));
+            byte[]? orig = File.Exists(p) ? File.ReadAllBytes(p) : null;
+            try
+            {
+                var variants = g.Select(x => new ModMerge.Variant(x.M.Manifest.Name, ModMerge.Target(x.M.Path, x.F, orig ?? Array.Empty<byte>()))).ToList();
+                merged.Add((g.Key, ModMerge.Merge(g.Key, orig, variants)));
+                log?.Invoke($"  {g.Key}: changes of {string.Join(" + ", g.Select(x => x.M.Manifest.Name))} combined");
+            }
+            catch (ModMerge.MergeException e) { conflicts.AddRange(e.Conflicts); }
+        }
+        if (conflicts.Count > 0) throw new InvalidOperationException("These mods change the same things:" + Environment.NewLine + string.Join(Environment.NewLine, conflicts));
+        var skip = shared.Select(g => g.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
         for (int i = 0; i < mods.Count; i++)
         {
             var m = mods[i];
             n += PatchPackage.Apply(m.Path, gameDir, null, log,
                 new Progress<(string File, double Fraction)>(p => progress?.Report(($"{m.Manifest.Name}: {p.File}", (i + p.Fraction) / mods.Count))),
-                withoutExecutable: true);
+                withoutExecutable: true, withoutOps: true, skipFiles: skip);
+        }
+        foreach (var (path, data) in merged)
+        {
+            PatchPackage.WriteFile(gameDir, path, data, string.Join(" + ", mods.Select(m => m.Manifest.Name)), log);
+            n++;
+        }
+        // world edits, in recipe order, on top of every mod's files
+        foreach (var m in mods.Where(m => m.Manifest.Ops.Count > 0))
+        {
+            progress?.Report(($"{m.Manifest.Name}: world edits", 1));
+            n += PatchPackage.ApplyOps(m.Manifest, gameDir, log);
         }
         progress?.Report(("Executable mods", 1));
         n += PatchPackage.ApplyExeMods(gameDir, mods.Select(m => m.Manifest).ToList(), string.Join(" + ", mods.Select(m => m.Manifest.Name)), log);

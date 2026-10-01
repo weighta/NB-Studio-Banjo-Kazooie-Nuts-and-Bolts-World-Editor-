@@ -15,7 +15,7 @@
     <AssemblyName>NBMultiplayer</AssemblyName>
     <RootNamespace>NB.Multiplayer</RootNamespace>
     <Product>NB Multiplayer</Product>
-    <Version>1.5.0</Version>
+    <Version>1.6.0</Version>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
   </PropertyGroup>
 
@@ -28,6 +28,9 @@
     <None Include="..\..\..\coop\dist\ShowdownTownCoop.nbpatch" Link="patches\ShowdownTownCoop.nbpatch" Condition="Exists('..\..\..\coop\dist\ShowdownTownCoop.nbpatch')"
           CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
     <None Include="..\..\..\ultra\dist\UltraParts.nbpatch" Link="patches\UltraParts.nbpatch" Condition="Exists('..\..\..\ultra\dist\UltraParts.nbpatch')"
+          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
+    <!-- official map mod: Snowy Showdown Town (snow/build.sh) -->
+    <None Include="..\..\..\snow\dist\SnowyShowdownTown.nbpatch" Link="patches\SnowyShowdownTown.nbpatch" Condition="Exists('..\..\..\snow\dist\SnowyShowdownTown.nbpatch')"
           CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
     <None Include="..\..\..\coop\saves\AllUnlocked.sav" Link="saves\AllUnlocked.sav" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
     <None Include="..\..\..\coop\saves\savegame.header.template" Link="saves\savegame.header.template" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />

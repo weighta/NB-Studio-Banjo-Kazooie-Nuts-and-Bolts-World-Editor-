@@ -247,6 +247,8 @@
                                        Text="Mods change the game: new maps, vehicle parts, gameplay, looks and tweaks. Tick the mods you want and build an edition from them, then play it alone or host it. Everyone in a room plays the host's edition; friends get missing mods from the host automatically. Your own game folder is never changed."/>
                             <StackPanel Orientation="Horizontal" Margin="0,0,0,14">
                                 <Button Style="{StaticResource Primary}" Content="Add a mod (.nbpatch)" Click="AddEdition_Click"/>
+                                <Button Style="{StaticResource BaseButton}" Content="Add a modded game folder" Margin="12,0,0,0" Click="AddModdedFolder_Click"
+                                        ToolTip="Turn a game folder you modded by hand (replaced files, edited default.xex) into a mod"/>
                                 <Button Style="{StaticResource Link}" Content="Make your own mods in NB Studio" Margin="18,0,0,0" VerticalAlignment="Center" Click="GoProjects_Click"/>
                             </StackPanel>
                             <StackPanel x:Name="EditionBusy" Visibility="Collapsed" Margin="0,0,0,14">

@@ -11,6 +11,7 @@
   <ItemGroup>
     <PackageReference Include="System.Drawing.Common" Version="9.0.0" />
     <PackageReference Include="System.IO.Hashing" Version="9.0.0" />
+    <EmbeddedResource Include="Data/retail_fingerprints.json" LogicalName="retail_fingerprints.json" />
   </ItemGroup>
 
   <ItemGroup>

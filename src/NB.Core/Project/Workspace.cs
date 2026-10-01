@@ -45,6 +45,29 @@ public sealed class Workspace
         return ws;
     }
 
+    /// <summary>
+    /// A game folder edited in place without a project (mod ops replayed onto an edition): no workspace.json, no history;
+    /// decompressed bundles are cached in a temporary folder (<see cref="DeleteCache"/>). <paramref name="beforeWrite"/> runs
+    /// before a file is replaced (backups); files are replaced through a temp file, so hard-linked copies of the user's game
+    /// are never written through.
+    /// </summary>
+    public static Workspace OnFolder(string gameDir, Action<string>? beforeWrite = null)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "NBModTool", "folder-" + Guid.NewGuid().ToString("N")[..12]);
+        Directory.CreateDirectory(root);
+        var g = new GameDirectory(gameDir);
+        return new Workspace { Root = root, Original = g, Game = g, Manifest = new WorkspaceManifest { OriginalPath = g.Root, Created = DateTime.Now }, _folder = true, _beforeWrite = beforeWrite };
+    }
+
+    bool _folder;
+    Action<string>? _beforeWrite;
+
+    /// <summary>Removes the temporary cache of a <see cref="OnFolder"/> workspace.</summary>
+    public void DeleteCache()
+    {
+        if (_folder) try { Directory.Delete(Root, true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+    }
+
     /// <summary>Copies the original game into <paramref name="root"/>/game. Existing files are left untouched.</summary>
     public static Workspace Create(string originalDir, string root, IProgress<(string File, double Fraction)>? progress = null)
     {
@@ -80,7 +103,7 @@ public sealed class Workspace
         return ws;
     }
 
-    public void SaveManifest() => File.WriteAllText(ManifestPath, JsonSerializer.Serialize(Manifest, new JsonSerializerOptions { WriteIndented = true }));
+    public void SaveManifest() { if (!_folder) File.WriteAllText(ManifestPath, JsonSerializer.Serialize(Manifest, new JsonSerializerOptions { WriteIndented = true })); }
 
     // ------------------------------------------------------------ bundles
 
@@ -172,6 +195,7 @@ public sealed class Workspace
     /// <summary>Keeps the current version of a working-copy file before it is overwritten (last <see cref="HistoryKeep"/> per file).</summary>
     public void Snapshot(string path)
     {
+        if (_folder) { _beforeWrite?.Invoke(path); return; }
         if (!File.Exists(path)) return;
         var rel = Path.GetRelativePath(Game.Root, path);
         var dir = Path.Combine(HistoryDir, rel);
