@@ -1,8 +1,7 @@
 # Showdown Town co-op – test log
 
 Two NB Multiplayer copies on one PC (`mp/uitest` host, `mp/uitest2` joiner), Steam relay (direct test socket), two muted
-Xenia games with the all-unlocked save (`W:\bktextures\SaveGameAllUnlocked` copied into both test profiles; the
-profiles' own saves backed up first). Harness: `mp/coop_flow.sh`, `ultra_flow.sh`, `cv_stress.sh`,
+Xenia games with an all-unlocked save copied into both test profiles (their own saves backed up first). Harness: `mp/coop_flow.sh`, `ultra_flow.sh`, `cv_stress.sh`,
 `mk6.sh`, `zapper.sh`, `faceoff.py`, `fight.py`, `coop_where.py`, `blocks.py`, `hurt.py`, `mailbox.py`, `alive.py`.
 
 | # | Date | Scenario | Result |
