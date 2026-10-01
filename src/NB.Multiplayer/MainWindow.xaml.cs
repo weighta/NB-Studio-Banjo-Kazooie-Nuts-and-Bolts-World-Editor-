@@ -519,7 +519,11 @@ public partial class MainWindow : Window
             ReachText.Text = "Room code copied to the clipboard. Friends join through Steam: no port forwarding needed.";
         }
         else await CheckReachAsync();
-        if (edition.IsCoop) _coopNet = CoopNet.StartHost(S.Instance, S.PlayerName, _steamHost);
+        if (edition.IsCoop)
+        {
+            _coopNet = CoopNet.StartHost(S.Instance, S.PlayerName, _steamHost);
+            _coopNet.TimeOfDay = S.CoopTimeOfDay is >= 1 and <= 4 ? S.CoopTimeOfDay : Random.Shared.Next(1, 5);
+        }
         LaunchGame("127.0.0.1:" + Net.Port, _roomCode);
     }
 
@@ -752,6 +756,30 @@ public partial class MainWindow : Window
             RoomPlayers.Items.Add(chip);
         }
         RoomPlayers.Items.Add(new TextBlock { Text = _coop?.Status ?? "Start the game to sync.", Style = (Style)FindResource("SubText"), Margin = new Thickness(0, 8, 0, 0) });
+        // Showdown Town's time of day is the same for everyone in the room (the host chooses; it applies when the town loads)
+        var tod = new WrapPanel { Margin = new Thickness(0, 12, 0, 0) };
+        tod.Children.Add(new TextBlock { Text = "Time of day", FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 8) });
+        int now = _coopNet?.TimeOfDay ?? 0;
+        if (_server != null)
+        {
+            for (int i = 0; i <= 4; i++)
+            {
+                int v = i;
+                var rb = new RadioButton { Style = (Style)FindResource("Chip"), GroupName = "tod", Content = CoopNet.TimeNames[i] + (i == 0 && S.CoopTimeOfDay == 0 && now > 0 ? $" ({CoopNet.TimeNames[now]})" : ""),
+                    IsChecked = S.CoopTimeOfDay == i };
+                rb.Checked += (_, _) =>
+                {
+                    S.CoopTimeOfDay = v; S.Save();
+                    if (_coopNet != null) _coopNet.TimeOfDay = v > 0 ? v : Random.Shared.Next(1, 5);
+                    ShowCoopRoom();
+                };
+                tod.Children.Add(rb);
+            }
+        }
+        else tod.Children.Add(new TextBlock { Text = now > 0 ? CoopNet.TimeNames[now] + " (chosen by the host)" : "set by the host", Style = (Style)FindResource("SubText"), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 0, 8) });
+        RoomPlayers.Items.Add(tod);
+        RoomPlayers.Items.Add(new TextBlock { Text = "Everyone's Showdown Town uses the room's time of day. A change applies the next time the town loads (for example after visiting a world).",
+            Style = (Style)FindResource("SubText"), FontSize = 12, TextWrapping = TextWrapping.Wrap, MaxWidth = 700 });
         RoomDot.Fill = B("Good");
         RoomStatus.Text = $"Co-op ({names.Count} player{(names.Count == 1 ? "" : "s")})";
     }

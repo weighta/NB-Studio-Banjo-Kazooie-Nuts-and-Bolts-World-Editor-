@@ -324,6 +324,33 @@ public static class ExePatches
             new ExeWord(0x82D212EC, 0x00000000, 0x4B4E2A14, "b 0x82203d00  block health as before"),
         });
 
+    public static readonly ExeMod CoopSharedTime = new(
+        "coop-shared-time",
+        "Co-op: the room decides Showdown Town's time of day",
+        "Showdown Town's time of day is picked each time the town loads by 0x824104C0 from aid_misc_banjox_showdowntownsettings_" +
+        "timeofday (4 entries of 0x50 bytes: morning, midday, afternoon, night = script id, f32 weight, ..., game-flag name): an " +
+        "entry whose game flag is not set yet wins (the intro forces midday), otherwise a weighted random pick with the game's LCG " +
+        "(0x82F9DFE4), so every player's game rolled its own. The random pick (0x82410538) branches to 0x82D21300: when the word " +
+        "0x82FBCB30 (co-op mailbox) is 1..4, that entry is returned; 0 keeps the random pick. NB Multiplayer writes the room's " +
+        "time of day there before the town loads. Assembled by coop/shared_time_asm.py.",
+        "Static analysis 2026-10-01; in-game result: coop/TESTLOG.md.",
+        new[]
+        {
+            new ExeWord(0x82410538, 0x393D0004, 0x48910DC8, "b 0x82d21300 (was addi r9,r29,4): the room decides the time of day"),
+            new ExeWord(0x82D21300, 0x00000000, 0x3D6082FC, "lis r11,0x82fc"),
+            new ExeWord(0x82D21304, 0x00000000, 0x814BCB30, "lwz r10,0xcb30(r11)  room time of day [0x82FBCB30]: 0 = random, 1..4 = morning..night"),
+            new ExeWord(0x82D21308, 0x00000000, 0x2B0A0000, "cmplwi cr6,r10,0"),
+            new ExeWord(0x82D2130C, 0x00000000, 0x419A001C, "beq cr6 -> random pick as usual"),
+            new ExeWord(0x82D21310, 0x00000000, 0x2B0A0004, "cmplwi cr6,r10,4"),
+            new ExeWord(0x82D21314, 0x00000000, 0x41990014, "bgt cr6 -> out of range: random pick"),
+            new ExeWord(0x82D21318, 0x00000000, 0x394AFFFF, "addi r10,r10,-1"),
+            new ExeWord(0x82D2131C, 0x00000000, 0x1D6A0050, "mulli r11,r10,0x50"),
+            new ExeWord(0x82D21320, 0x00000000, 0x7C6BEA14, "add r3,r11,r29  the room's entry of the settings record"),
+            new ExeWord(0x82D21324, 0x00000000, 0x4B6EF2A0, "b 0x824105c4  return it"),
+            new ExeWord(0x82D21328, 0x00000000, 0x393D0004, "addi r9,r29,0x4  (the instruction the hook replaced)"),
+            new ExeWord(0x82D2132C, 0x00000000, 0x4B6EF210, "b 0x8241053c  continue with the random pick"),
+        });
+
     public static readonly ExeMod PhotoCameraUnlimited = new(
         "photo-camera-unlimited",
         "Unlimited photo camera range",
@@ -539,7 +566,7 @@ public static class ExePatches
 
     public static string FamilyOf(string id) => id.StartsWith("vehicle-part-limit") ? "vehicle-part-limit" : id.StartsWith("garage-build-area") ? "garage-build-area" : "";
 
-    public static readonly IReadOnlyList<ExeMod> All = new[] { ChangeVehicleInTown, TownVehiclesNormalRules, AiSpringTimer, TownAiRestartOnChangeVehicle, DeveloperMainMenu, DeveloperAllParts, WorldBounds2048, NoEscapeReset, TownNpcPathGuard, CoopRemoteDamage, DrawDistanceX4, PhotoCameraUnlimited, PauseOpensPhotos, GarageBuildArea31, VehiclePartLimit400 };
+    public static readonly IReadOnlyList<ExeMod> All = new[] { ChangeVehicleInTown, TownVehiclesNormalRules, AiSpringTimer, TownAiRestartOnChangeVehicle, DeveloperMainMenu, DeveloperAllParts, WorldBounds2048, NoEscapeReset, TownNpcPathGuard, CoopRemoteDamage, CoopSharedTime, DrawDistanceX4, PhotoCameraUnlimited, PauseOpensPhotos, GarageBuildArea31, VehiclePartLimit400 };
 
     /// <summary>Checks that every patched word currently holds its original value in the decrypted image.</summary>
     public static List<string> Check(byte[] image, uint imageBase, ExeMod mod)

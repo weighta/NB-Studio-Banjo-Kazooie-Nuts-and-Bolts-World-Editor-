@@ -25,6 +25,8 @@ public sealed class AppSettings
     public string ProjectsDir { get; set; } = "";
     /// <summary>Put the bundled all-unlocked save into the profile before every game (Settings; see Saves).</summary>
     public bool UseAllUnlockedSave { get; set; }
+    /// <summary>Showdown Town co-op: the time of day the host's room plays in (0 = random each session, 1..4 = morning..night).</summary>
+    public int CoopTimeOfDay { get; set; }
 
     /// <summary>%LOCALAPPDATA%\NB-Multiplayer, or NB_MP_ROOT (tests: a separate settings/profile folder).</summary>
     public static string Root => Environment.GetEnvironmentVariable("NB_MP_ROOT") is { Length: > 0 } r ? r

@@ -21,7 +21,7 @@ echo "== executable mods"
 python - "$WS/workspace.json" <<'EOF'
 import json, sys
 p = sys.argv[1]; m = json.load(open(p))
-m['ExeMods'] = ['town-vehicles-normal-rules', 'change-vehicle-town', 'town-ai-restart-on-change-vehicle', 'town-npc-path-guard', 'coop-remote-damage']
+m['ExeMods'] = ['town-vehicles-normal-rules', 'change-vehicle-town', 'town-ai-restart-on-change-vehicle', 'town-npc-path-guard', 'coop-remote-damage', 'coop-shared-time']
 json.dump(m, open(p, 'w'), indent=2)
 print('  ' + ', '.join(m['ExeMods']))
 EOF

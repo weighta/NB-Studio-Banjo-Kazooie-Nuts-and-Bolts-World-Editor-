@@ -211,6 +211,18 @@ public sealed class CoopSync
     /// Damage each remote player's puppet took since the last call: the exe mod logs every hit on a puppet (weapons,
     /// explosions; collisions are left to the players' own games) in a ring instead of applying it.
     /// </summary>
+    /// <summary>
+    /// The room's time of day for the next Showdown Town load (exe mod coop-shared-time): 0 = the game's own random pick,
+    /// 1..4 = morning, midday, afternoon, night. Written to the co-op mailbox word 0x82FBCB30.
+    /// </summary>
+    public void SetTimeOfDay(int phase)
+    {
+        if (_x.U32(TimeCave) != TimeCaveFirstWord) return;   // edition without the exe mod
+        if (_x.U32(Mailbox + 0x30) == (uint)phase) return;
+        var b = new byte[4]; BE.W32(b, 0, (uint)phase); _x.Write(Mailbox + 0x30, b);
+    }
+    const uint TimeCave = 0x82D21300, TimeCaveFirstWord = 0x3D6082FC;
+
     /// <summary>The "other material" of the last logged puppet hit (diagnostics; 0xFFFFFFFF = explosion).</summary>
     public uint LastHitMaterial { get; private set; }
 

@@ -14,6 +14,7 @@ Xenia games with an all-unlocked save copied into both test profiles (their own 
 | C6 | 2026-10-01 | **Weapons between players**: game 1 (Trolley Mk. 6 laser) fires at game 2's puppet | Puppet takes no damage in game 1 (hits logged, 10 laser hits = 120 damage, material 0x2F); NB Multiplayer forwards them; game 2's own block damage applies them: game 2's L.O.G. Tractor 56 → 53 blocks, 3 parts broke off and lie in the street as loose parts (with the game's RB magnet prompt). Ground contacts (material 0) and vehicle collisions (material 2) are not forwarded |
 | C7 | 2026-10-01 | Rockets (L.O.G. Lunar Zapper) | Rockets arc over a target 10–20 u away in this harness: no hit landed, so explosion forwarding (hook at 0x82612870) is in place but **not verified in game** |
 | C8 | 2026-10-01 | Update path: a 1.1 co-op edition → `Update co-op edition` | Rebuilt as Co-op 1.1 + All parts unlocked |
+| C9 | 2026-10-01 | **Shared time of day** (exe mod `coop-shared-time`, room setting on the host): room = Night, both games resume into town; room = Morning with the joiner loading town while the host's game was still at the title screen | Both towns night, then both morning (the joiner had the room's value before its town loaded: hello / settings packets). Before: each game picked its own random phase at every town load |
 
 Exe mod `coop-remote-damage` (assembled by `coop/remote_damage_asm.py`): hooks 0x825F1AE0 (contact pass → mailbox
 apply), 0x825F17E8 (block damage → puppet hit log) and 0x82612870 (explosion damage → puppet hit log). Code caves: the

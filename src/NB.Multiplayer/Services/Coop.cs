@@ -26,6 +26,10 @@ public sealed class CoopNet : IDisposable
     // host: peers by key ("udp:ip:port" / "steam:<connection>") -> sender
     readonly ConcurrentDictionary<string, (Action<byte[]> Send, DateTime Seen)> _peers = new();
     public readonly ConcurrentDictionary<long, (CoopState State, DateTime Seen, string Name)> Remotes = new();
+    /// <summary>The room's Showdown Town time of day: 0 = not known yet, 1..4 = morning, midday, afternoon, night. The host
+    /// decides it; joiners get it with the host's packets.</summary>
+    public volatile int TimeOfDay;
+    public static readonly string[] TimeNames = { "Random", "Morning", "Midday", "Afternoon", "Night" };
 
     CoopNet(long myId, string myName, bool host, UdpClient? udp, IPEndPoint? hostUdp, SteamNet.Host? sh, SteamNet.Client? sc)
     {
@@ -78,9 +82,24 @@ public sealed class CoopNet : IDisposable
         else if (_udp != null && _hostUdp != null) Try(() => _udp.Send(p, p.Length, _hostUdp));
     }
 
+    int _sent;
+    byte[] SettingsPacket()
+    {
+        var p = new byte[32]; p[0] = (byte)'N'; p[1] = (byte)'B'; p[2] = (byte)'C'; p[3] = (byte)'O'; p[4] = 3; p[8] = (byte)TimeOfDay;
+        return p;
+    }
+
+    /// <summary>Joiner, before gameplay: tells the host this game exists (the host answers with the room settings).</summary>
+    public void Hello()
+    {
+        if (_isHost) return;
+        var p = new byte[32]; p[0] = (byte)'N'; p[1] = (byte)'B'; p[2] = (byte)'C'; p[3] = (byte)'O'; p[4] = 4; BE.W64(p, 8, (ulong)MyId);
+        Send(p);
+    }
     public void SendLocal(CoopState st)
     {
         Send(Packet(MyId, st, _myName));
+        if (_isHost && TimeOfDay > 0 && _sent++ % 15 == 0) Send(SettingsPacket());   // twice a second: the room's time of day
     }
 
     static void Try(Action a) { try { a(); } catch (Exception) { } }
@@ -103,6 +122,13 @@ public sealed class CoopNet : IDisposable
     void OnPacket(byte[] p, string from, Action<byte[]>? reply)
     {
         if (p.Length < 32 || p[0] != 'N' || p[1] != 'B' || p[2] != 'C' || p[3] != 'O') return;
+        if (p[4] == 3) { if (!_isHost && p[8] is >= 1 and <= 4) TimeOfDay = p[8]; return; }   // room settings from the host
+        if (p[4] == 4)
+        {
+            // a joiner's game has started: register it and answer with the room's time of day at once (before its town loads)
+            if (_isHost && reply != null) { _peers[from] = (reply, DateTime.UtcNow); if (TimeOfDay > 0) Try(() => reply(SettingsPacket())); }
+            return;
+        }
         if (p[4] == 2)
         {
             // damage: for the local player, or forwarded by the host to the player it is for
@@ -174,6 +200,9 @@ public sealed class CoopService : IDisposable
                     x = XeniaLive.AttachPid(_pid, probe);
                     sync = new CoopSync(x, _puppetBlueprint, _park);
                 }
+                // before the town loads: every game in the room uses the room's time of day
+                if (_net.TimeOfDay > 0) sync!.SetTimeOfDay(_net.TimeOfDay);
+                else _net.Hello();
                 if (x.Player == 0) { Status = "Waiting for gameplay (load a save or start a new game)..."; Thread.Sleep(500); continue; }
                 var local = sync!.ReadLocal();
                 _net.SendLocal(local);
