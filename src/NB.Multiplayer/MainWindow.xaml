@@ -420,11 +420,23 @@
                         </Border>
                         <Border Style="{StaticResource CardBorder}" Margin="0,16,0,0">
                             <StackPanel>
-                                <TextBlock Text="How it works" Style="{StaticResource H2}" FontSize="16"/>
-                                <TextBlock Style="{StaticResource SubText}" Margin="0,6,0,0" FontSize="13.5" LineHeight="21">
-                                    NB Multiplayer runs the game in an NB build of the Xenia emulator (Xenia Canary netplay by AdrianCassar, with NB networking
-                                    changes) and hosts a small room server on the host's PC. The game uses its own Xbox LIVE multiplayer; nothing is sent to
-                                    Microsoft or to any public server. Room codes encode the host's address and a fingerprint of the host's game files.
+                                <TextBlock Text="What it does" Style="{StaticResource H2}" FontSize="16"/>
+                                <TextBlock Style="{StaticResource SubText}" Margin="0,6,0,0" FontSize="13.5" LineHeight="21" TextWrapping="Wrap">
+                                    Your hub for playing and modding Nuts &amp; Bolts with friends:<LineBreak/>
+                                    - Online play: the game's own Xbox LIVE parties, races and sports, through Steam (no port forwarding).<LineBreak/>
+                                    - Showdown Town co-op: play single player together, see each other in town, build and change vehicles at
+                                    the same time, and fight (weapon hits break parts off the other player's vehicle).<LineBreak/>
+                                    - Mods &amp; editions: a mod library with categories and tick-box tweaks; editions combine mods, and friends
+                                    get missing mods from the host when they join.<LineBreak/>
+                                    - Projects: your NB Studio projects; NB Studio is installed and updated for you.<LineBreak/>
+                                    - The all-unlocked save, Play solo, and automatic updates from GitHub.
+                                </TextBlock>
+                                <TextBlock Text="How it works" Style="{StaticResource H2}" FontSize="16" Margin="0,16,0,0"/>
+                                <TextBlock Style="{StaticResource SubText}" Margin="0,6,0,0" FontSize="13.5" LineHeight="21" TextWrapping="Wrap">
+                                    The game runs in an NB build of the Xenia emulator (Xenia Canary netplay by AdrianCassar, with NB networking
+                                    changes). For online matches the host's NB Multiplayer is the Xbox LIVE server and relay; for co-op it syncs the
+                                    players' vehicles between their games. Nothing is sent to Microsoft or to any public server. Room codes encode the
+                                    host's address (or Steam ID) and a fingerprint of the host's game files.
                                 </TextBlock>
                                 <TextBlock Style="{StaticResource SubText}" Margin="0,10,0,0" FontSize="12.5"
                                            Text="Xenia is licensed under the BSD license (xenia\LICENSE-xenia.txt). Banjo-Kazooie: Nuts &amp; Bolts is a trademark of Microsoft; you need your own copy of the game. Fan project, not affiliated with Rare or Microsoft."/>

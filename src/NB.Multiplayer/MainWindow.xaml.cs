@@ -855,7 +855,7 @@ public partial class MainWindow : Window
             dynamic lnk = shell.CreateShortcut(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "NB Multiplayer.lnk"));
             lnk.TargetPath = Environment.ProcessPath;
             lnk.WorkingDirectory = AppContext.BaseDirectory;
-            lnk.Description = "Banjo-Kazooie: Nuts & Bolts online with friends";
+            lnk.Description = "Banjo-Kazooie: Nuts & Bolts online, co-op and mods";
             lnk.Save();
         }
         catch (Exception) { }

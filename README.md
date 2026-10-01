@@ -4,8 +4,10 @@
 
 <p align="center">
   <b>A world editor and modding toolkit for <i>Banjo-Kazooie: Nuts &amp; Bolts</i> (Xbox 360).</b><br>
-  Open the game's worlds in 3D, move and replace scenery, swap textures, import models and vehicle parts,
-  edit text, audio and video, and share your changes as small patches that anyone can apply to their own copy.
+  Open the game's worlds in 3D, move and replace scenery, swap textures, import models and new vehicle parts, add AI
+  vehicles and routes, edit text, audio and video, and turn your changes into mods: small patches with a name, version
+  and category that anyone can apply to their own copy, or combine and play online with friends in
+  <a href="https://github.com/weighta/NB-Multiplayer">NB Multiplayer</a>.
 </p>
 
 <p align="center">
@@ -39,12 +41,13 @@
 | **Models** | Preview any model in 3D, export to OBJ or FBX (with skeleton and skin for characters), import OBJ/FBX geometry to replace scenery, build new scenery from imported models. |
 | **Textures** | Decode all 14,049 textures (DXT1/3/5, DXN, CTX1, ARGB, cube and volume maps), browse a model's or world's textures in the texture library, export PNG, replace with your own image. |
 | **Collision** | View and import world collision (Havok 5.5 extended meshes); box collision for imported scenery. |
-| **Markers & paths** | Edit actor spawns, pickups, volumes, script triggers and AI path routes (the race paths the computer drivers follow). |
+| **Markers & paths** | Edit actor spawns, pickups, volumes, script triggers and AI path routes (the race paths the computer drivers follow), and add AI vehicles that drive your own routes. |
 | **Vehicle parts** | Part Importer: build new garage parts (model, physics, stats, attach points, garage tier dialogs). |
 | **Text, audio, video** | Edit in-game text in all languages, replace music and sound effects (XWB banks), replace videos. |
-| **Executable mods** | Toggle researched game-code changes (e.g. vehicles in town, debug menus) as Xenia patches or baked into the executable. |
+| **Executable mods** | Toggle researched game-code changes (vehicles and Change Vehicle in town, destructible town vehicles, 2000-part vehicles, bigger world and garage, longer draw distance, all parts unlocked, debug menus...) as Xenia patches or baked into the executable. |
 | **Testing** | Launch your modded game in Xenia with one key (F5), and tweak a running game live (teleport, gravity, camera). |
-| **Sharing** | Export a `.nbpatch`: a small differential patch with only your changes. It contains no game data, and others apply it to their own copy with one click (with backup and rollback). |
+| **Sharing** | Export a `.nbpatch` mod: a small differential patch with only your changes, plus its name, version, category (map, vehicle parts, gameplay, visuals, audio, tweak, co-op), tags and description. It contains no game data; others apply it to their own copy with one click (with backup and rollback) or add it to NB Multiplayer's mod library. |
+| **Command line** | `cli/NB.Cli.exe`: every format tool, patch building and applying, combining mods (`stack-check`, `stack-apply`), the tick-box tweak mods, AI routes and vehicles, scripted Xenia tests. |
 
 Everything is non-destructive: NB Studio works on a **workspace** (a copy of your game), never on your original files,
 and keeps a history of every saved file.
@@ -56,6 +59,11 @@ and keeps a history of every saved file.
   <img src="docs/images/studio-showdown-town.png" alt="Showdown Town in the world editor" width="49%">
 </p>
 <p align="center"><i>Start page, and Showdown Town opened in the world editor (terrain, scenery, markers and the AI race route).</i></p>
+
+<p align="center">
+  <img src="docs/images/studio-banjos-house.png" alt="Banjo's House" width="60%">
+</p>
+<p align="center"><i>Banjo's House in the 3D view (NB Studio 1.1.1 decodes its instanced wall meshes correctly).</i></p>
 
 <p align="center">
   <img src="docs/images/studio-town-viewport.png" alt="Showdown Town viewport" width="70%">
@@ -268,8 +276,9 @@ The editor is `src/NB.Studio/bin/Release/net9.0-windows/NBModStudio.exe`, and th
 
 ## Related: NB Multiplayer
 
-Play Nuts & Bolts online with friends, including games modded with NB Studio:
-**[weighta/NB-Multiplayer](https://github.com/weighta/NB-Multiplayer)**. Its app is built from `src/NB.Multiplayer` in
+Play Nuts & Bolts online and in Showdown Town co-op with friends, including games modded with NB Studio:
+**[weighta/NB-Multiplayer](https://github.com/weighta/NB-Multiplayer)**. It keeps a mod library where your mods are
+listed by category and combined into editions, installs and updates NB Studio, and lists your projects. Its app is built from `src/NB.Multiplayer` in
 this repository. It also lists your NB Studio projects (NB Studio records every project it opens in
 `%APPDATA%\NBModTool\projects.json`), opens them here, and turns them into mods for its mod library.
 
