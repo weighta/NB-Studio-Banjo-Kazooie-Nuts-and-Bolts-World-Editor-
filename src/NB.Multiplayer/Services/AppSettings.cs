@@ -19,6 +19,10 @@ public sealed class AppSettings
     public string SkippedVersion { get; set; } = "";
     public string HostAddress { get; set; } = "";
     public bool ShortcutOffered { get; set; }
+    /// <summary>The player's own NBModStudio.exe ("" = the copy NB Multiplayer installs).</summary>
+    public string StudioPath { get; set; } = "";
+    /// <summary>Where new NB Studio projects are created ("" = Documents\NB Studio Projects).</summary>
+    public string ProjectsDir { get; set; } = "";
 
     /// <summary>%LOCALAPPDATA%\NB-Multiplayer, or NB_MP_ROOT (tests: a separate settings/profile folder).</summary>
     public static string Root => Environment.GetEnvironmentVariable("NB_MP_ROOT") is { Length: > 0 } r ? r

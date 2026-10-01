@@ -19,6 +19,7 @@ public static class GameLauncher
     {
         if (!File.Exists(XeniaExe)) throw new FileNotFoundException("The Xenia build is missing next to NB Multiplayer (xenia folder). Reinstall.", XeniaExe);
         Directory.CreateDirectory(AppSettings.DataDir);
+        SetProjectTweaks(null, null);   // editions carry their tweaks in their own default.xex
         var args = new List<string>();
         var extra = Environment.GetEnvironmentVariable("NB_XENIA_EXTRA");   // testing: extra Xenia options
         if (!string.IsNullOrWhiteSpace(extra)) args.AddRange(extra.Split(' ', StringSplitOptions.RemoveEmptyEntries));
@@ -36,16 +37,62 @@ public static class GameLauncher
             $"--nb_relay={apiHostPort.Split(':')[0]}:{apiPort + 1}",
             $"--nb_create_profile={s.PlayerName}", $"--nb_room_code={roomCode}", Path.Combine(edition.GameDir, "default.xex"),
         });
-        string cmd = string.Join(" ", new[] { XeniaExe }.Concat(args).Select(Quote));
-        // Started by Windows (WMI), not as a child of this app: once this app uses the Steam API, the Steam overlay hooks
-        // the processes it starts, and the overlay in Xenia leaves the game window black.
+        return StartDetached(XeniaExe, args, Path.GetDirectoryName(XeniaExe)!);
+    }
+
+    /// <summary>
+    /// Plays a game folder on its own (no room): an edition, or an NB Studio project whose executable tweaks
+    /// (<paramref name="projectExeMods"/>) are applied by Xenia in memory, as NB Studio does when it launches a workspace.
+    /// </summary>
+    public static Process StartSolo(AppSettings s, string gameDir, IReadOnlyList<string>? projectExeMods = null)
+    {
+        if (!File.Exists(XeniaExe)) throw new FileNotFoundException("The Xenia build is missing next to NB Multiplayer (xenia folder). Reinstall.", XeniaExe);
+        Directory.CreateDirectory(AppSettings.DataDir);
+        var xex = Path.Combine(gameDir, "default.xex");
+        SetProjectTweaks(xex, projectExeMods);
+        var args = new List<string>();
+        var extra = Environment.GetEnvironmentVariable("NB_XENIA_EXTRA");
+        if (!string.IsNullOrWhiteSpace(extra)) args.AddRange(extra.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+        args.AddRange(new[]
+        {
+            $"--storage_root={AppSettings.DataDir}", $"--log_file={Path.Combine(AppSettings.DataDir, "xenia.log")}",
+            "--network_mode=0", $"--nb_create_profile={s.PlayerName}", xex,
+        });
+        return StartDetached(XeniaExe, args, Path.GetDirectoryName(XeniaExe)!);
+    }
+
+    /// <summary>
+    /// Xenia loads patch files from &lt;storage root&gt;\patches for every game with a matching executable. A project's
+    /// tweaks are written there only for that launch; any other launch removes them again (so Vanilla stays vanilla).
+    /// </summary>
+    static void SetProjectTweaks(string? xex, IReadOnlyList<string>? ids)
+    {
+        var mods = ids == null ? new List<NB.Core.Mods.ExeMod>() : NB.Core.Mods.ExePatches.ResolveAll(ids);
+        ulong hash = 0;
+        if (mods.Count > 0 && xex != null)
+        {
+            var xb = File.ReadAllBytes(xex);
+            var img = NB.Core.Formats.XexFile.Read(xb).GetImage();
+            hash = NB.Core.Mods.ExePatches.ResolveXeniaHash(NB.Core.Mods.ExePatches.XeniaModuleHash(xb, img), AppSettings.DataDir) ?? 0;
+            if (hash == 0) mods.Clear();
+        }
+        NB.Core.Mods.ExePatches.WriteXeniaPatchFile(AppSettings.DataDir, hash, mods);
+    }
+
+    /// <summary>
+    /// Starts a program through Windows (WMI), not as a child of this app: once this app uses the Steam API, the Steam
+    /// overlay hooks the processes it starts, and the overlay in Xenia leaves the game window black.
+    /// </summary>
+    public static Process StartDetached(string exe, IEnumerable<string> args, string workingDir)
+    {
+        string cmd = string.Join(" ", new[] { exe }.Concat(args).Select(Quote));
         using var cls = new System.Management.ManagementClass("Win32_Process");
         var inParams = cls.GetMethodParameters("Create");
         inParams["CommandLine"] = cmd;
-        inParams["CurrentDirectory"] = Path.GetDirectoryName(XeniaExe);
+        inParams["CurrentDirectory"] = workingDir;
         var result = cls.InvokeMethod("Create", inParams, null);
         uint rc = (uint)result["ReturnValue"];
-        if (rc != 0) throw new InvalidOperationException($"Windows could not start Xenia (WMI error {rc}).");
+        if (rc != 0) throw new InvalidOperationException($"Windows could not start {Path.GetFileName(exe)} (WMI error {rc}).");
         return Process.GetProcessById((int)(uint)result["ProcessId"]);
     }
 
@@ -71,7 +118,9 @@ public static class GameLauncher
 }
 
 /// <summary>What a room server reports (GET /nb/room).</summary>
-public sealed record RoomInfo(string Name, string HostXuid, string Edition, List<(string Xuid, string Name)> Players, CompatProfile? Compat);
+/// <param name="Recipe">The mods of the host's edition (empty = Vanilla); null from hosts older than NB Multiplayer 1.2.</param>
+public sealed record RoomInfo(string Name, string HostXuid, string Edition, List<(string Xuid, string Name)> Players, CompatProfile? Compat,
+    List<NB.Core.Project.RecipeMod>? Recipe = null);
 
 public static class Net
 {
@@ -136,10 +185,29 @@ public static class Net
                 compat = new CompatProfile { Fingerprint = fp };
                 if (j["files"] is JsonObject fo) foreach (var (k, v) in fo) compat.Files[k] = v!.GetValue<string>();
             }
+            List<NB.Core.Project.RecipeMod>? recipe = null;
+            if (j["recipe"] is JsonArray ra)
+                recipe = ra.Select(m => new NB.Core.Project.RecipeMod(m?["id"]?.GetValue<string>() ?? "", m?["name"]?.GetValue<string>() ?? "",
+                    m?["version"]?.GetValue<string>() ?? "", (m?["sha256"]?.GetValue<string>() ?? "").ToLowerInvariant(), m?["size"]?.GetValue<long>() ?? 0)).ToList();
             return new RoomInfo(j["name"]?.GetValue<string>() ?? "", j["host"]?.GetValue<string>() ?? "",
-                j["edition"]?.GetValue<string>() ?? Editions.VanillaName, players, compat);
+                j["edition"]?.GetValue<string>() ?? Editions.VanillaName, players, compat, recipe);
         }
         catch (Exception) { return null; }
+    }
+
+    /// <summary>Downloads one mod of the host's edition from the room (checked against its SHA-256) into the mod library.</summary>
+    public static async Task<NB.Core.Project.ModStack.Mod> DownloadModAsync(string host, int port, NB.Core.Project.RecipeMod mod, IProgress<double>? progress = null)
+    {
+        using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(15) };
+        using var resp = await http.GetAsync($"http://{host}:{port}/nb/mods/{mod.Sha256}", HttpCompletionOption.ResponseHeadersRead);
+        if (!resp.IsSuccessStatusCode) throw new InvalidOperationException($"the host could not send \"{mod.Name}\" ({(int)resp.StatusCode})");
+        long total = resp.Content.Headers.ContentLength ?? mod.Size;
+        await using var src = await resp.Content.ReadAsStreamAsync();
+        var ms = new MemoryStream();
+        var buf = new byte[81920];
+        int n;
+        while ((n = await src.ReadAsync(buf)) > 0) { ms.Write(buf, 0, n); if (total > 0) progress?.Report((double)ms.Length / total); }
+        return ModLibrary.AddDownloaded(ms.ToArray(), mod.Sha256);
     }
 
     /// <summary>Can this PC connect to its own room server through <paramref name="ip"/>? (Fails when a firewall such as

@@ -76,6 +76,8 @@ and keeps a history of every saved file.
 ## Installation
 
 1. **Download** the latest `NB-Studio-x.y.z.zip` from the [Releases](../../releases) page and unzip it anywhere.
+   (Or let [NB Multiplayer](https://github.com/weighta/NB-Multiplayer) do it: *Projects > Get NB Studio* installs NB
+   Studio, keeps it up to date and lists your projects.)
 2. You need **your own copy of the game**, extracted to a folder: the folder that contains `default.xex` and the
    `Bundle` folder (for example extracted from your disc image with *extract-xiso*). NB Studio never changes this folder.
 3. Run **`NBModStudio.exe`**. Requirements: Windows 10/11 64-bit, a GPU with OpenGL 3.3.
@@ -107,9 +109,13 @@ replaces the object's model, importing the file's materials and textures. For co
 starts the game from the workspace. *Tools > Test Mode: Skip Intro* makes a new game start straight in Showdown Town (about 40
 seconds from launch).
 
-**7. Share it.** *Build > Create Distributable Patch (.nbpatch)...* writes a `.nbpatch`. Other players apply it with
-*Build > Apply Patch to a Game Directory...* (it checks their files first and keeps a backup; *Roll Back Patches* undoes it), or play it online with friends as an *edition* in
-[NB Multiplayer](https://github.com/weighta/NB-Multiplayer).
+**7. Share it.** *Build > Create Distributable Patch (.nbpatch)...* asks what the mod is (name, version, category,
+tags, whether multiplayer players need it, description; the category starts as a guess from the files you changed) and
+writes a `.nbpatch`. Other players apply it with *Build > Apply Patch to a Game Directory...* (it checks their files
+first and keeps a backup; *Roll Back Patches* undoes it), or add it to the mod library of
+[NB Multiplayer](https://github.com/weighta/NB-Multiplayer), combine it with other mods and tweaks, and play it online.
+
+<p align="center"><img src="docs/images/studio-export-dialog.png" alt="Create Distributable Patch" width="60%"></p>
 
 ## How the tool works
 
@@ -137,7 +143,13 @@ uncompressed bundles fine, so no recompression is needed. Each save is recorded 
 
 **Sharing.** A `.nbpatch` holds binary deltas (COPY/ADD operations) of each changed file against the expanded
 original, plus the SHA-256 of the expected source and result. Applying verifies both, so a patch only ever applies to the
-exact game files it was made for, and never distributes game data.
+exact game files it was made for, and never distributes game data. Its `patch.json` (format 2) also names the mod: `Id`,
+`Version`, `Category` (`map`, `parts`, `gameplay`, `visual`, `audio`, `tweak`, `coop`), `Tags`, `Multiplayer`
+(`world`, `cosmetic`, `coop`), `Requires` and `Conflicts`.
+
+**Stacking.** `src/NB.Core/Project/ModStack.cs` applies several mods to one game copy (NB Multiplayer editions): mods
+must change different game files, and their executable mods are merged into one `default.xex` (a word two mods change
+must get the same value). `NB.Cli stack-check / stack-apply / stack-explain` show what combines and why not.
 
 **Testing.** Xenia runs the workspace's game directory; executable mods are written as Xenia patch files (or baked into
 `default.xex` for consoles that run unsigned code). The *Live (game)* tab attaches to a running Xenia and reads/writes
@@ -258,7 +270,8 @@ The editor is `src/NB.Studio/bin/Release/net9.0-windows/NBModStudio.exe`, and th
 
 Play Nuts & Bolts online with friends, including games modded with NB Studio:
 **[weighta/NB-Multiplayer](https://github.com/weighta/NB-Multiplayer)**. Its app is built from `src/NB.Multiplayer` in
-this repository.
+this repository. It also lists your NB Studio projects (NB Studio records every project it opens in
+`%APPDATA%\NBModTool\projects.json`), opens them here, and turns them into mods for its mod library.
 
 ## Credits and legal
 

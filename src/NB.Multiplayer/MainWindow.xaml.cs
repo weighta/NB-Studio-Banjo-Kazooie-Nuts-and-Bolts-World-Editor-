@@ -50,7 +50,9 @@ public partial class MainWindow : Window
         UpdatesCheck.IsChecked = S.CheckForUpdates;
         JoinBox.Text = S.LastJoin;
         BuildAddressOptions();
+        try { if (File.Exists(CoopPatch)) ModLibrary.Add(CoopPatch); } catch (Exception) { }
         RefreshEditions();
+        _ = MakeTweaksAsync();
         RefreshSetup();
         _timer.Tick += async (_, _) => await TickAsync();
         _timer.Start();
@@ -83,11 +85,14 @@ public partial class MainWindow : Window
         if (PagePlay == null) return;
         PagePlay.Visibility = NavPlay.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
         PageEditions.Visibility = NavEditions.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+        PageProjects.Visibility = NavProjects.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+        if (NavProjects.IsChecked == true) RefreshProjects();
         PageSettings.Visibility = NavSettings.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
         PageAbout.Visibility = NavAbout.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
     }
     void GoSettings_Click(object s, RoutedEventArgs e) => NavSettings.IsChecked = true;
     void GoEditions_Click(object s, RoutedEventArgs e) => NavEditions.IsChecked = true;
+    void GoProjects_Click(object s, RoutedEventArgs e) => NavProjects.IsChecked = true;
 
     void RefreshSetup()
     {
@@ -136,6 +141,12 @@ public partial class MainWindow : Window
             var use = new Button { Content = ed.Name == S.Edition ? "Selected" : "Play this edition", IsEnabled = ed.Name != S.Edition };
             use.Click += (_, _) => { S.Edition = ed.Name; S.Save(); RefreshEditions(); };
             buttons.Children.Add(use);
+            if (!ed.IsVanilla && ed.Mods.Count > 0)
+            {
+                var change = new Button { Content = "Change mods", Margin = new Thickness(8, 0, 0, 0) };
+                change.Click += (_, _) => StartEditing(ed);
+                buttons.Children.Add(change);
+            }
             if (!ed.IsVanilla)
             {
                 var del = new Button { Content = "Delete", Margin = new Thickness(8, 0, 0, 0) };
@@ -158,6 +169,177 @@ public partial class MainWindow : Window
             card.Child = dock;
             EditionList.Children.Add(card);
         }
+        RefreshModLibrary(all);
+    }
+
+    readonly HashSet<string> _ticked = new(StringComparer.OrdinalIgnoreCase);
+    string _modFilter = "";            // "" = all categories
+    Edition? _editing;                 // "Change mods" of this edition
+
+    /// <summary>Makes the built-in tweak mods from the player's game (once per game executable), then shows them.</summary>
+    async Task MakeTweaksAsync()
+    {
+        if (!AppSettings.IsGameDir(S.GameDir)) return;
+        var dir = S.GameDir;
+        int n = await Task.Run(() => { try { return ModLibrary.EnsureTweaks(dir); } catch (Exception) { return 0; } });
+        if (n > 0) RefreshEditions();
+    }
+
+    Border Badge(string text, bool accent = false) => new()
+    {
+        CornerRadius = new CornerRadius(9), Padding = new Thickness(9, 2, 9, 3), Margin = new Thickness(8, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center,
+        Background = accent ? B("Accent") : B("CardHi"),
+        Child = new TextBlock { Text = text, FontSize = 11.5, FontWeight = FontWeights.SemiBold, Foreground = accent ? B("AccentText") : B("Sub") },
+    };
+
+    void RefreshModLibrary(List<Edition> editions)
+    {
+        ModList.Children.Clear();
+        var mods = ModLibrary.List();
+        _ticked.RemoveWhere(sha => !mods.Any(m => m.Sha256 == sha));
+        // filters: all + every category that has mods (author's category, or guessed from the files)
+        var cats = mods.GroupBy(m => ModCategories.Of(m.Manifest).Id).ToDictionary(g => g.Key, g => g.Count());
+        if (_modFilter.Length > 0 && !cats.ContainsKey(_modFilter)) _modFilter = "";
+        ModFilters.Items.Clear();
+        void Filter(string id, string text)
+        {
+            var rb = new RadioButton { Style = (Style)FindResource("Chip"), GroupName = "modfilter", Content = text, IsChecked = _modFilter == id };
+            rb.Checked += (_, _) => { _modFilter = id; RefreshModLibrary(Editions.List(S)); };
+            ModFilters.Items.Add(rb);
+        }
+        Filter("", $"All  {mods.Count}");
+        foreach (var c in ModCategories.All.Where(c => cats.ContainsKey(c.Id))) Filter(c.Id, $"{c.Name}  {cats[c.Id]}");
+
+        var shown = mods.Where(m => _modFilter.Length == 0 || ModCategories.Of(m.Manifest).Id == _modFilter)
+            .OrderBy(m => ModLibrary.IsTweak(m) ? 1 : 0).ToList();   // community mods first, then the built-in tweaks
+        if (mods.Count == 0)
+            ModList.Children.Add(new TextBlock { Text = "No mods yet. Add a .nbpatch file above, join a room that plays a modded edition, or make one in NB Studio.", Style = (Style)FindResource("SubText") });
+        foreach (var m in shown)
+        {
+            var man = m.Manifest;
+            var cat = ModCategories.Of(man);
+            bool tweak = ModLibrary.IsTweak(m);
+            var usedBy = editions.Where(e => e.Mods.Any(x => x.Sha256 == m.Sha256)).Select(e => e.Name).ToList();
+            var card = new Border { Style = (Style)FindResource("CardBorder"), Margin = new Thickness(0, 0, 0, 10), Padding = new Thickness(18, 14, 18, 14),
+                BorderBrush = _ticked.Contains(m.Sha256) ? B("Accent") : B("Line") };
+            var dock = new DockPanel();
+            if (!tweak)
+            {
+                var remove = new Button { Content = "Remove", VerticalAlignment = VerticalAlignment.Center, Padding = new Thickness(12, 6, 12, 6), FontSize = 13,
+                    IsEnabled = usedBy.Count == 0, ToolTip = usedBy.Count == 0 ? "Remove this mod from the library" : "Used by an edition: delete the edition first" };
+                remove.Click += (_, _) => { ModLibrary.Remove(m.Sha256); RefreshEditions(); };
+                DockPanel.SetDock(remove, Dock.Right);
+                dock.Children.Add(remove);
+            }
+            var tick = new CheckBox { IsChecked = _ticked.Contains(m.Sha256), VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 3, 12, 0) };
+            System.Windows.Automation.AutomationProperties.SetName(tick, "Include " + man.Name);
+            tick.Checked += (_, _) => { _ticked.Add(m.Sha256); card.BorderBrush = B("Accent"); CheckCombination(); };
+            tick.Unchecked += (_, _) => { _ticked.Remove(m.Sha256); card.BorderBrush = B("Line"); CheckCombination(); };
+            DockPanel.SetDock(tick, Dock.Left);
+            dock.Children.Add(tick);
+            var text = new StackPanel();
+            var title = new WrapPanel();
+            title.Children.Add(new TextBlock { Text = man.Name, FontWeight = FontWeights.SemiBold, FontSize = 15, VerticalAlignment = VerticalAlignment.Center });
+            if (!tweak) title.Children.Add(new TextBlock { Text = $"  {man.Version}" + (man.Author.Length > 0 ? $"  by {man.Author}" : ""), Foreground = B("Sub"), FontSize = 13, VerticalAlignment = VerticalAlignment.Center });
+            title.Children.Add(Badge(cat.Name, accent: true));
+            if (tweak) title.Children.Add(Badge("Built-in"));
+            foreach (var t in man.Tags.Take(4)) title.Children.Add(Badge(t));
+            text.Children.Add(title);
+            if (man.Description.Length > 0) text.Children.Add(new TextBlock { Text = man.Description, FontSize = 13, Margin = new Thickness(0, 4, 0, 0), TextWrapping = TextWrapping.Wrap });
+            var details = new List<string> { ModLibrary.MultiplayerText(man) };
+            if (!tweak)
+            {
+                int files = man.Files.Count(f => f.Kind != "xexmods");
+                if (files > 0) details.Add($"{files} game file(s)");
+                if (man.ExeMods.Count > 0) details.Add($"{man.ExeMods.Count} executable tweak(s)");
+                details.Add(m.Size >= 1048576 ? $"{m.Size / 1048576.0:N1} MB" : $"{m.Size / 1024.0:N0} KB");
+            }
+            if (usedBy.Count > 0) details.Add("in: " + string.Join(", ", usedBy));
+            text.Children.Add(new TextBlock { Style = (Style)FindResource("SubText"), FontSize = 12, Margin = new Thickness(0, 4, 0, 0), TextWrapping = TextWrapping.Wrap,
+                Text = string.Join("   -   ", details) });
+            dock.Children.Add(text);
+            card.Child = dock;
+            ModList.Children.Add(card);
+        }
+        CheckCombination();
+    }
+
+    List<NB.Core.Project.ModStack.Mod> TickedMods() =>
+        ModLibrary.List().Where(m => _ticked.Contains(m.Sha256)).OrderBy(m => ModLibrary.IsTweak(m) ? 1 : 0).ToList();
+
+    void CheckCombination()
+    {
+        var mods = TickedMods();
+        BuildBar.Visibility = mods.Count > 0 || _editing != null ? Visibility.Visible : Visibility.Collapsed;
+        CancelEditButton.Visibility = _editing != null ? Visibility.Visible : Visibility.Collapsed;
+        CombineButton.IsEnabled = mods.Count > 0;
+        CombineButton.Content = _editing != null ? $"Rebuild \"{_editing.Name}\"" : mods.Count > 1 ? $"Build an edition from {mods.Count} mods" : "Build an edition";
+        BuildMods.Text = mods.Count == 0 ? "Tick at least one mod." : (_editing != null ? $"New mods of \"{_editing.Name}\": " : "Ticked: ") + string.Join(" + ", mods.Select(m => m.Manifest.Name));
+        var problems = mods.Count > 1 ? NB.Core.Project.ModStack.Problems(mods) : new List<string>();
+        CombineProblems.Text = problems.Count == 0 ? "" : "These mods cannot be combined yet:\n" + string.Join("\n", problems.Select(p => "  - " + p));
+        CombineProblems.Visibility = problems.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+        if (problems.Count > 0) CombineButton.IsEnabled = false;
+    }
+
+    /// <summary>"Change mods" of an edition: its mods are ticked; rebuilding replaces the edition (same name).</summary>
+    void StartEditing(Edition ed)
+    {
+        _editing = ed;
+        _ticked.Clear();
+        foreach (var m in ed.Mods) _ticked.Add(m.Sha256);
+        _modFilter = "";
+        CombineName.Text = ed.Name;
+        RefreshEditions();
+        EditionsScroll.ScrollToVerticalOffset(ModList.TranslatePoint(new Point(0, 0), (UIElement)EditionsScroll.Content).Y - 120);
+    }
+
+    void CancelEdit_Click(object sender, RoutedEventArgs e)
+    {
+        _editing = null; _ticked.Clear(); CombineName.Text = "";
+        RefreshEditions();
+    }
+
+    async void Combine_Click(object sender, RoutedEventArgs e)
+    {
+        var mods = TickedMods();
+        if (mods.Count == 0) return;
+        if (!AppSettings.IsGameDir(S.GameDir)) { MessageBox.Show(this, "Choose your game folder in Settings first.", "NB Multiplayer"); return; }
+        if (_game is { HasExited: false }) { MessageBox.Show(this, "Close the game first: editions cannot change while it runs.", "NB Multiplayer"); return; }
+        EditionBusy.Visibility = Visibility.Visible;
+        CombineButton.IsEnabled = false;
+        var prog = new Progress<(string Text, double Fraction)>(p => { EditionBusyText.Text = p.Text; EditionBusyBar.Value = p.Fraction; });
+        string name = CombineName.Text.Trim();
+        var editing = _editing;
+        EditionsScroll.ScrollToTop();
+        try
+        {
+            Edition ed;
+            if (editing != null)
+            {
+                // build the new recipe next to the old edition, then swap it in under the old name
+                var keepName = name.Length > 0 ? name : editing.Name;
+                ed = await Task.Run(() => Editions.Create(S, mods, Editions.FreeName(S, keepName + " (new)"), prog));
+                var built = ed;
+                ed = await Task.Run(() => { Editions.Delete(editing); return Editions.Rename(S, built, keepName); });
+            }
+            else ed = await Task.Run(() => Editions.Create(S, mods, name, prog));
+            S.Edition = ed.Name; S.Save();
+            EditionBusyText.Text = $"\"{ed.Name}\" is ready and selected for playing.";
+            _ticked.Clear(); CombineName.Text = ""; _editing = null;
+        }
+        catch (Exception ex) { EditionBusyText.Text = "The edition could not be built: " + ex.Message; }
+        RefreshEditions();
+    }
+
+    // ------------------------------------------------------------------ play solo
+
+    void Solo_Click(object sender, RoutedEventArgs e)
+    {
+        if (!Ready()) return;
+        if (_game is { HasExited: false }) { MessageBox.Show(this, "The game is already running.", "NB Multiplayer"); return; }
+        var ed = CurrentEdition;
+        try { _game = GameLauncher.StartSolo(S, ed.GameDir); }
+        catch (Exception ex) { MessageBox.Show(this, "The game could not start:\n" + ex.Message, "NB Multiplayer"); }
     }
 
     /// <summary>The Showdown Town co-op patch shipped with the app (patches\ShowdownTownCoop.nbpatch).</summary>
@@ -251,7 +433,11 @@ public partial class MainWindow : Window
         try
         {
             var compat = await Task.Run(() => CompatProfile.FromGame(edition.GameDir));
-            _server = new RoomServer { RoomName = $"{S.PlayerName}'s room", HostCompat = compat, Edition = edition.Name };
+            _server = new RoomServer
+            {
+                RoomName = $"{S.PlayerName}'s room", HostCompat = compat, Edition = edition.Name,
+                Recipe = edition.Mods.ToList(), ModFile = ModLibrary.Find,
+            };
             _server.Start(Net.Port, "0.0.0.0");
             _roomCode = RoomCode.Encode(IPAddress.Parse(ip), Net.Port, compat.Tag);
             if (steam)
@@ -380,23 +566,9 @@ public partial class MainWindow : Window
                 return;
             }
             // play the host's edition
-            if (!string.Equals(room.Edition, S.Edition, StringComparison.OrdinalIgnoreCase))
-            {
-                var mine = Editions.Find(S, room.Edition);
-                if (mine == null && File.Exists(CoopPatch) && PatchPackage.ReadManifest(CoopPatch).Name == room.Edition)
-                {
-                    // the host plays the co-op edition that ships with NB Multiplayer: install it now
-                    ShowJoin($"{room.Name} plays \"{room.Edition}\". Installing it (a minute or two)...", "Sub", false);
-                    try { mine = await Task.Run(() => Editions.Create(S, CoopPatch, new Progress<(string Text, double Fraction)>(_ => { }))); }
-                    catch (Exception ex) { ShowJoin("The co-op edition could not be installed: " + ex.Message, "Bad", false); return; }
-                }
-                if (mine == null)
-                {
-                    ShowJoin($"{room.Name} plays the edition \"{room.Edition}\", which you don't have. Get its .nbpatch file from the host and add it under Editions & mods.", "Bad", false);
-                    return;
-                }
-                S.Edition = mine.Name; S.Save(); RefreshEditions();
-            }
+            var mine = await HostEditionAsync(room, host, port);
+            if (mine == null) return;
+            if (mine.Name != S.Edition) { S.Edition = mine.Name; S.Save(); RefreshEditions(); }
             if (room.Compat != null)
             {
                 ShowJoin($"Found {room.Name}. Comparing your game files with the host's (the first time takes a few minutes)...", "Sub", false);
@@ -420,6 +592,46 @@ public partial class MainWindow : Window
             JoinButton.IsEnabled = true;
             JoinProgress.Visibility = Visibility.Collapsed;
         }
+    }
+
+    /// <summary>
+    /// The player's edition matching the host's: found by recipe, or built from it (mods the player lacks are downloaded
+    /// from the host's room). Hosts older than 1.2 only name their edition. Null (with the reason shown) when impossible.
+    /// </summary>
+    async Task<Edition?> HostEditionAsync(RoomInfo room, string host, int port)
+    {
+        if (room.Recipe == null)
+        {
+            var named = Editions.Find(S, room.Edition);
+            if (named == null && File.Exists(CoopPatch) && PatchPackage.ReadManifest(CoopPatch).Name == room.Edition)
+            {
+                ShowJoin($"{room.Name} plays \"{room.Edition}\". Installing it (a minute or two)...", "Sub", false);
+                try { named = await Task.Run(() => Editions.Create(S, CoopPatch, new Progress<(string Text, double Fraction)>(_ => { }))); }
+                catch (Exception ex) { ShowJoin("The co-op edition could not be installed: " + ex.Message, "Bad", false); return null; }
+            }
+            if (named == null)
+                ShowJoin($"{room.Name} plays the edition \"{room.Edition}\", which you don't have. Get its .nbpatch file from the host and add it under Editions & mods.", "Bad", false);
+            return named;
+        }
+        if (room.Recipe.Count == 0) return Editions.Find(S, Editions.VanillaName);
+        var have = Editions.FindRecipe(S, room.Recipe);
+        if (have != null) return have;
+        var mods = new List<NB.Core.Project.ModStack.Mod>();
+        foreach (var r in room.Recipe)
+        {
+            var m = ModLibrary.Get(r.Sha256);
+            if (m == null)
+            {
+                string what = $"{room.Name} plays \"{room.Edition}\". Getting {r.Name} {r.Version} from the host ({r.Size / 1048576.0:N1} MB)";
+                ShowJoin(what + "...", "Sub", false);
+                try { m = await Net.DownloadModAsync(host, port, r, new Progress<double>(f => JoinResultText.Text = $"{what}: {f:P0}")); }
+                catch (Exception ex) { ShowJoin($"Could not get \"{r.Name}\" from the host: {ex.Message}", "Bad", false); return null; }
+            }
+            mods.Add(m);
+        }
+        ShowJoin($"Building the edition \"{room.Edition}\" ({string.Join(" + ", mods.Select(x => x.Manifest.Name))}); a minute or two...", "Sub", false);
+        try { return await Task.Run(() => Editions.Create(S, mods, room.Edition, new Progress<(string Text, double Fraction)>(_ => { }))); }
+        catch (Exception ex) { ShowJoin("The host's edition could not be built: " + ex.Message, "Bad", false); return null; }
     }
 
     void JoinAnyway_Click(object sender, RoutedEventArgs e) { if (_pendingJoin != null) StartJoined(); }
@@ -555,6 +767,7 @@ public partial class MainWindow : Window
         S.GameDir = dlg.SelectedPath; S.Save();
         GameDirBox.Text = S.GameDir;
         RefreshSetup(); RefreshEditions();
+        _ = MakeTweaksAsync();
     }
 
     void UpdatesCheck_Changed(object sender, RoutedEventArgs e) { S.CheckForUpdates = UpdatesCheck.IsChecked == true; S.Save(); }

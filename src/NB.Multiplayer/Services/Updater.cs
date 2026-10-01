@@ -22,7 +22,7 @@ public static class Updater
     public static Version Current =>
         typeof(Updater).Assembly.GetName().Version is { } v ? new Version(v.Major, v.Minor, Math.Max(v.Build, 0)) : new Version(0, 0, 0);
 
-    static HttpClient Http()
+    internal static HttpClient Http()
     {
         var h = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
         h.DefaultRequestHeaders.UserAgent.ParseAdd($"NBMultiplayer/{Current}");
@@ -30,13 +30,13 @@ public static class Updater
         return h;
     }
 
-    /// <summary>The latest release, or null when there is none (or GitHub is unreachable).</summary>
-    public static async Task<Release?> LatestAsync()
+    /// <summary>The latest release of <paramref name="repo"/> (default: NB Multiplayer), or null when there is none (or GitHub is unreachable).</summary>
+    public static async Task<Release?> LatestAsync(string repo = Repo)
     {
         try
         {
             using var http = Http();
-            var json = JsonNode.Parse(await http.GetStringAsync($"https://api.github.com/repos/{Repo}/releases/latest"))!;
+            var json = JsonNode.Parse(await http.GetStringAsync($"https://api.github.com/repos/{repo}/releases/latest"))!;
             string tag = json["tag_name"]?.GetValue<string>() ?? "";
             if (!Version.TryParse(tag.TrimStart('v', 'V'), out var v)) return null;
             string? zip = null;
@@ -48,7 +48,7 @@ public static class Updater
                 }
             if (zip == null) return null;
             return new Release(v, tag, json["name"]?.GetValue<string>() ?? tag, json["body"]?.GetValue<string>() ?? "", zip,
-                json["html_url"]?.GetValue<string>() ?? ReleasesPage);
+                json["html_url"]?.GetValue<string>() ?? $"https://github.com/{repo}/releases");
         }
         catch (Exception) { return null; }
     }
@@ -59,23 +59,7 @@ public static class Updater
         var work = Path.Combine(Path.GetTempPath(), "NBMultiplayer-update");
         Directory.CreateDirectory(work);
         var zipPath = Path.Combine(work, $"{r.Tag}.zip");
-        using (var http = Http())
-        {
-            http.Timeout = TimeSpan.FromMinutes(20);
-            using var resp = await http.GetAsync(r.ZipUrl, HttpCompletionOption.ResponseHeadersRead);
-            resp.EnsureSuccessStatusCode();
-            long total = resp.Content.Headers.ContentLength ?? 0, done = 0;
-            await using var src = await resp.Content.ReadAsStreamAsync();
-            await using var dst = File.Create(zipPath);
-            var buf = new byte[1 << 16];
-            int n;
-            while ((n = await src.ReadAsync(buf)) > 0)
-            {
-                await dst.WriteAsync(buf.AsMemory(0, n));
-                done += n;
-                if (total > 0) progress.Report((double)done / total);
-            }
-        }
+        await DownloadAsync(r.ZipUrl, zipPath, progress);
         var staging = Path.Combine(work, r.Tag);
         if (Directory.Exists(staging)) Directory.Delete(staging, true);
         ZipFile.ExtractToDirectory(zipPath, staging);
@@ -91,6 +75,26 @@ public static class Updater
             ArgumentList = { "--apply-update", appDir, AppContext.BaseDirectory, Environment.ProcessId.ToString() },
             UseShellExecute = false,
         });
+    }
+
+    /// <summary>Downloads <paramref name="url"/> to <paramref name="path"/>, reporting 0..1.</summary>
+    public static async Task DownloadAsync(string url, string path, IProgress<double>? progress)
+    {
+        using var http = Http();
+        http.Timeout = TimeSpan.FromMinutes(20);
+        using var resp = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
+        resp.EnsureSuccessStatusCode();
+        long total = resp.Content.Headers.ContentLength ?? 0, done = 0;
+        await using var src = await resp.Content.ReadAsStreamAsync();
+        await using var dst = File.Create(path);
+        var buf = new byte[1 << 16];
+        int n;
+        while ((n = await src.ReadAsync(buf)) > 0)
+        {
+            await dst.WriteAsync(buf.AsMemory(0, n));
+            done += n;
+            if (total > 0) progress?.Report((double)done / total);
+        }
     }
 
     /// <summary>Update helper mode (runs from %TEMP%): wait for the app, copy the new files, restart it.</summary>

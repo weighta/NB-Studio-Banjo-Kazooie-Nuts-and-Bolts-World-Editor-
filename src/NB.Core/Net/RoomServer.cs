@@ -64,6 +64,11 @@ public sealed class RoomServer : IDisposable
     public string Edition { get; set; } = "Vanilla";
     /// <summary>The host's game files; joining NB Studios compare theirs before launching (GET /nb/room).</summary>
     public CompatProfile? HostCompat { get; set; }
+    /// <summary>The mods of the host's edition, in order (empty = Vanilla; null = not stated, older hosts). Joiners
+    /// build the same edition and download mods they lack from <see cref="ModFile"/> (GET /nb/mods/&lt;sha256&gt;).</summary>
+    public List<NB.Core.Project.RecipeMod>? Recipe { get; set; }
+    /// <summary>The host's .nbpatch file for a SHA-256 of the recipe (null = not available).</summary>
+    public Func<string, string?>? ModFile { get; set; }
 
     /// <summary>The UDP relay of the overlay (port + 1), null when not running.</summary>
     public RoomRelay? Relay => _relay;
@@ -316,8 +321,22 @@ public sealed class RoomServer : IDisposable
                 name = RoomName, host = host ?? "", edition = Edition,
                 players = _players.Values.Select(p => new { xuid = p.Xuid, gamertag = p.Gamertag, address = p.HostAddress, session = p.SessionId }).ToList(),
                 fingerprint = HostCompat?.Fingerprint ?? "", files = HostCompat?.Files ?? new Dictionary<string, string>(),
+                recipe = Recipe?.Select(m => new { id = m.Id, name = m.Name, version = m.Version, sha256 = m.Sha256, size = m.Size }).ToList(),
             };
         return Json(c, 200, dto);
+    }
+
+    /// <summary>GET /nb/mods/{sha256}: a mod of the host's edition, so joiners can build the same edition. Only the
+    /// mods named in <see cref="Recipe"/> are served.</summary>
+    async Task ModDownload(HttpContext c)
+    {
+        var sha = (c.Request.RouteValues["sha"] as string ?? "").ToLowerInvariant();
+        var path = Recipe?.Any(m => m.Sha256 == sha) == true ? ModFile?.Invoke(sha) : null;
+        if (path == null || !File.Exists(path)) { await Json(c, 404, new { error = "no such mod in this room" }); return; }
+        c.Response.StatusCode = 200;
+        c.Response.ContentType = "application/octet-stream";
+        c.Response.ContentLength = new FileInfo(path).Length;
+        await c.Response.SendFileAsync(path);
     }
 
     // ---------------------------------------------------------------- routes
@@ -327,6 +346,7 @@ public sealed class RoomServer : IDisposable
         app.MapMethods("/", ["GET", "HEAD"], Index);
         app.MapGet("/sessions", SessionsOverview);
         app.MapGet("/nb/room", RoomInfo);
+        app.MapGet("/nb/mods/{sha}", ModDownload);
         app.MapGet("/whoami", c => Json(c, 200, new { address = ClientAddress(c) }));
         app.MapDelete("/DeleteSessions", DeleteSessions);
         app.MapDelete("/DeleteSessions/{macAddress}", DeleteSessions);

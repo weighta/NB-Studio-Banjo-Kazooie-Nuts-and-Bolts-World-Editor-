@@ -39,7 +39,8 @@
 
                 <StackPanel>
                     <RadioButton x:Name="NavPlay" Style="{StaticResource Nav}" Content="Play" IsChecked="True" Checked="Nav_Checked"/>
-                    <RadioButton x:Name="NavEditions" Style="{StaticResource Nav}" Content="Editions &amp; mods" Checked="Nav_Checked"/>
+                    <RadioButton x:Name="NavEditions" Style="{StaticResource Nav}" Content="Mods &amp; editions" Checked="Nav_Checked"/>
+                    <RadioButton x:Name="NavProjects" Style="{StaticResource Nav}" Content="Projects" Checked="Nav_Checked"/>
                     <RadioButton x:Name="NavSettings" Style="{StaticResource Nav}" Content="Settings" Checked="Nav_Checked"/>
                     <RadioButton x:Name="NavAbout" Style="{StaticResource Nav}" Content="About &amp; updates" Checked="Nav_Checked"/>
                 </StackPanel>
@@ -88,7 +89,11 @@
                         <Border Style="{StaticResource CardBorder}" Margin="0,0,0,18" Padding="22,16">
                             <DockPanel>
                                 <TextBlock Text="Edition" Style="{StaticResource H2}" FontSize="16" VerticalAlignment="Center" Width="90"/>
-                                <Button DockPanel.Dock="Right" Style="{StaticResource Link}" Content="Manage editions" VerticalAlignment="Center" Click="GoEditions_Click"/>
+                                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Button Style="{StaticResource Link}" Content="Mods &amp; editions" VerticalAlignment="Center" Click="GoEditions_Click" Margin="0,0,16,0"/>
+                                    <Button x:Name="SoloButton" Content="Play solo" Padding="14,7" FontSize="13" Click="Solo_Click"
+                                            ToolTip="Play this edition on your own: single player, no room"/>
+                                </StackPanel>
                                 <StackPanel>
                                     <ItemsControl x:Name="EditionChips">
                                         <ItemsControl.ItemsPanel>
@@ -217,43 +222,129 @@
                     </StackPanel>
                 </ScrollViewer>
 
-                <!-- ======================================================== EDITIONS -->
-                <ScrollViewer x:Name="PageEditions" Visibility="Collapsed">
-                    <StackPanel Margin="36,30,36,36">
-                        <TextBlock Text="Editions &amp; mods" Style="{StaticResource H1}"/>
-                        <TextBlock Style="{StaticResource SubText}" FontSize="14" Margin="0,6,0,22"
-                                   Text="An edition is your game with a patch (.nbpatch) applied. Everyone in a room plays the host's edition. Editions are built next to NB Multiplayer; your own game folder is never changed."/>
-                        <StackPanel Orientation="Horizontal" Margin="0,0,0,14">
-                            <Button Style="{StaticResource Primary}" Content="Add edition from a .nbpatch file" Click="AddEdition_Click"/>
-                        </StackPanel>
-                        <StackPanel x:Name="EditionBusy" Visibility="Collapsed" Margin="0,0,0,14">
-                            <TextBlock x:Name="EditionBusyText" Style="{StaticResource SubText}"/>
-                            <ProgressBar x:Name="EditionBusyBar" Maximum="1" Margin="0,6,0,0"/>
-                        </StackPanel>
-                        <StackPanel x:Name="EditionList"/>
-
-                        <Border x:Name="CoopCard" Style="{StaticResource CardBorder}" Margin="0,12,0,0" BorderBrush="{StaticResource Accent}">
+                <!-- ======================================================== MODS & EDITIONS -->
+                <DockPanel x:Name="PageEditions" Visibility="Collapsed">
+                    <!-- build bar: what the ticked mods become -->
+                    <Border x:Name="BuildBar" DockPanel.Dock="Bottom" Background="#1D1F27" BorderBrush="{StaticResource Accent}" BorderThickness="0,1,0,0"
+                            Padding="36,14,36,16" Visibility="Collapsed">
+                        <StackPanel>
                             <DockPanel>
-                                <Image Source="Assets/mumbo_accent.png" Height="64" DockPanel.Dock="Left" Margin="0,0,18,0"/>
-                                <Button x:Name="CoopAddButton" DockPanel.Dock="Right" Style="{StaticResource Primary}" Content="Add co-op edition"
-                                        VerticalAlignment="Center" Click="AddCoop_Click"/>
+                                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Button x:Name="CancelEditButton" Content="Cancel" Padding="14,7" FontSize="13" Margin="0,0,10,0" Click="CancelEdit_Click"/>
+                                    <Button x:Name="CombineButton" Style="{StaticResource Primary}" Content="Build an edition" Click="Combine_Click"/>
+                                </StackPanel>
+                                <TextBlock Text="Name" VerticalAlignment="Center" Margin="0,0,10,0" DockPanel.Dock="Left" FontSize="13"/>
+                                <TextBox x:Name="CombineName" Margin="0,0,14,0" ToolTip="Name of the edition (optional)"/>
+                            </DockPanel>
+                            <TextBlock x:Name="BuildMods" Style="{StaticResource SubText}" FontSize="12.5" Margin="0,8,0,0" TextWrapping="Wrap"/>
+                            <TextBlock x:Name="CombineProblems" Foreground="{StaticResource Warn}" TextWrapping="Wrap" FontSize="13" Margin="0,6,0,0" Visibility="Collapsed"/>
+                        </StackPanel>
+                    </Border>
+                    <ScrollViewer x:Name="EditionsScroll">
+                        <StackPanel Margin="36,30,36,36">
+                            <TextBlock Text="Mods &amp; editions" Style="{StaticResource H1}"/>
+                            <TextBlock Style="{StaticResource SubText}" FontSize="14" Margin="0,6,0,18" TextWrapping="Wrap"
+                                       Text="Mods change the game: new maps, vehicle parts, gameplay, looks and tweaks. Tick the mods you want and build an edition from them, then play it alone or host it. Everyone in a room plays the host's edition; friends get missing mods from the host automatically. Your own game folder is never changed."/>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,14">
+                                <Button Style="{StaticResource Primary}" Content="Add a mod (.nbpatch)" Click="AddEdition_Click"/>
+                                <Button Style="{StaticResource Link}" Content="Make your own mods in NB Studio" Margin="18,0,0,0" VerticalAlignment="Center" Click="GoProjects_Click"/>
+                            </StackPanel>
+                            <StackPanel x:Name="EditionBusy" Visibility="Collapsed" Margin="0,0,0,14">
+                                <TextBlock x:Name="EditionBusyText" Style="{StaticResource SubText}" TextWrapping="Wrap"/>
+                                <ProgressBar x:Name="EditionBusyBar" Maximum="1" Margin="0,6,0,0"/>
+                            </StackPanel>
+
+                            <TextBlock Text="Editions" Style="{StaticResource H2}" Margin="0,4,0,12"/>
+                            <StackPanel x:Name="EditionList"/>
+
+                            <Border x:Name="CoopCard" Style="{StaticResource CardBorder}" Margin="0,0,0,12" BorderBrush="{StaticResource Accent}">
+                                <DockPanel>
+                                    <Image Source="Assets/mumbo_accent.png" Height="64" DockPanel.Dock="Left" Margin="0,0,18,0"/>
+                                    <Button x:Name="CoopAddButton" DockPanel.Dock="Right" Style="{StaticResource Primary}" Content="Add co-op edition"
+                                            VerticalAlignment="Center" Click="AddCoop_Click"/>
+                                    <StackPanel>
+                                        <TextBlock Text="Showdown Town co-op (preview)" Style="{StaticResource H2}"/>
+                                        <TextBlock Style="{StaticResource SubText}" Margin="0,4,16,0" TextWrapping="Wrap"
+                                                   Text="Play the single-player game together. Everyone plays their own save; NB Multiplayer drives the other players' vehicles through your Showdown Town (Banjo in a trolley), and you can bump into each other. Town vehicles break apart, and you can change or build vehicles anywhere in town."/>
+                                        <TextBlock Style="{StaticResource SubText}" Margin="0,6,16,0" FontSize="12"
+                                                   Text="Preview: players on foot, their own vehicle designs, shared crates and Acts are not synced yet."/>
+                                    </StackPanel>
+                                </DockPanel>
+                            </Border>
+
+                            <TextBlock Text="Mods" Style="{StaticResource H2}" Margin="0,20,0,4"/>
+                            <TextBlock Style="{StaticResource SubText}" Margin="0,0,0,12" TextWrapping="Wrap"
+                                       Text="Your mod library: mods you added, got from a host or made in NB Studio, plus the built-in tweaks. Tick mods to build an edition from them. (For now mods can be combined when they change different game files; tweaks always combine.)"/>
+                            <ItemsControl x:Name="ModFilters" Margin="0,0,0,8">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                            </ItemsControl>
+                            <StackPanel x:Name="ModList"/>
+
+                            <TextBlock Text="Coming next" Style="{StaticResource H2}" Margin="0,24,0,10"/>
+                            <Border Style="{StaticResource CardBorder}" Opacity="0.75">
                                 <StackPanel>
-                                    <TextBlock Text="Showdown Town co-op (preview)" Style="{StaticResource H2}"/>
-                                    <TextBlock Style="{StaticResource SubText}" Margin="0,4,16,0"
-                                               Text="Play the single-player game together. Everyone plays their own save; NB Multiplayer drives the other players' vehicles through your Showdown Town (Banjo in a trolley), and you can bump into each other. Town vehicles break apart, and you can change or build vehicles anywhere in town."/>
-                                    <TextBlock Style="{StaticResource SubText}" Margin="0,6,16,0" FontSize="12"
-                                               Text="Preview: players on foot, their own vehicle designs, shared crates and Acts are not synced yet."/>
+                                    <TextBlock Text="Mod depot" Style="{StaticResource H2}"/>
+                                    <TextBlock Style="{StaticResource SubText}" Margin="0,4,0,0" TextWrapping="Wrap"
+                                               Text="Browse and download community mods straight from GitHub, and share your own from NB Studio."/>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
+                </DockPanel>
+
+                <!-- ======================================================== PROJECTS -->
+                <ScrollViewer x:Name="PageProjects" Visibility="Collapsed">
+                    <StackPanel Margin="36,30,36,36">
+                        <TextBlock Text="Projects" Style="{StaticResource H1}"/>
+                        <TextBlock Style="{StaticResource SubText}" FontSize="14" Margin="0,6,0,22" TextWrapping="Wrap"
+                                   Text="Your NB Studio projects. NB Studio is the editor that makes mods: worlds, AI vehicles, vehicle parts, scripts and textures. Open a project, try it out, and turn it into a mod for your library and your friends."/>
+                        <Border x:Name="StudioCard" Style="{StaticResource CardBorder}" BorderBrush="{StaticResource Accent}">
+                            <DockPanel>
+                                <Image Source="Assets/nut_accent.png" Height="56" DockPanel.Dock="Left" Margin="0,0,18,0" VerticalAlignment="Top"/>
+                                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Button x:Name="StudioGetButton" Content="Get NB Studio" Padding="14,7" FontSize="13" Margin="0,0,10,0" Click="StudioGet_Click"/>
+                                    <Button x:Name="StudioOpenButton" Style="{StaticResource Primary}" Content="Open NB Studio" Click="StudioOpen_Click"/>
+                                </StackPanel>
+                                <StackPanel>
+                                    <TextBlock Text="NB Studio" Style="{StaticResource H2}"/>
+                                    <TextBlock x:Name="StudioStatus" Style="{StaticResource SubText}" Margin="0,4,16,0" TextWrapping="Wrap"/>
+                                    <ProgressBar x:Name="StudioProgress" Maximum="1" Margin="0,8,16,0" Visibility="Collapsed"/>
+                                    <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                        <Button Style="{StaticResource Link}" Content="Use my own copy of NB Studio" Click="StudioBrowse_Click"/>
+                                        <Button Style="{StaticResource Link}" Content="NB Studio on GitHub" Margin="18,0,0,0" Click="StudioReleases_Click"/>
+                                    </StackPanel>
                                 </StackPanel>
                             </DockPanel>
                         </Border>
-                        <TextBlock Text="Coming next" Style="{StaticResource H2}" Margin="0,24,0,10"/>
-                        <Border Style="{StaticResource CardBorder}" Opacity="0.75" Margin="0,12,0,0">
+
+                        <DockPanel Margin="0,24,0,12">
+                            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                <Button Content="Add an existing project" Padding="14,7" FontSize="13" Margin="0,0,10,0" Click="ProjectAdd_Click"/>
+                                <Button x:Name="ProjectNewButton" Style="{StaticResource Primary}" Content="New project" Click="ProjectNew_Click"/>
+                            </StackPanel>
+                            <TextBlock Text="Your projects" Style="{StaticResource H2}" VerticalAlignment="Center"/>
+                        </DockPanel>
+                        <Border x:Name="NewProjectCard" Style="{StaticResource CardBorder}" Margin="0,0,0,12" Visibility="Collapsed">
                             <StackPanel>
-                                <TextBlock Text="Patch depot" Style="{StaticResource H2}"/>
-                                <TextBlock Style="{StaticResource SubText}" Margin="0,4,0,0"
-                                           Text="Browse and download community patches straight from GitHub, and share your own from NB Studio."/>
+                                <TextBlock Text="New project" FontWeight="SemiBold"/>
+                                <TextBlock x:Name="NewProjectHelp" Style="{StaticResource SubText}" FontSize="12.5" Margin="0,2,0,8" TextWrapping="Wrap"/>
+                                <DockPanel>
+                                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                        <Button Content="Folder..." Padding="12,7" FontSize="13" Margin="10,0,0,0" Click="ProjectFolder_Click"/>
+                                        <Button Content="Cancel" Padding="12,7" FontSize="13" Margin="10,0,0,0" Click="ProjectNewCancel_Click"/>
+                                        <Button Style="{StaticResource Primary}" Content="Create" Margin="10,0,0,0" Click="ProjectCreate_Click"/>
+                                    </StackPanel>
+                                    <TextBox x:Name="NewProjectName"/>
+                                </DockPanel>
                             </StackPanel>
                         </Border>
+                        <StackPanel x:Name="ProjectBusy" Visibility="Collapsed" Margin="0,0,0,12">
+                            <TextBlock x:Name="ProjectBusyText" Style="{StaticResource SubText}" TextWrapping="Wrap"/>
+                            <ProgressBar x:Name="ProjectBusyBar" Maximum="1" Margin="0,6,0,0"/>
+                        </StackPanel>
+                        <StackPanel x:Name="ProjectList"/>
                     </StackPanel>
                 </ScrollViewer>
 

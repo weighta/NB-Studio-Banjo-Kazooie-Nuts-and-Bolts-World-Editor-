@@ -2056,15 +2056,23 @@ static class Program
                 }
                 case "patch-build":
                 {
-                    // patch-build <workspace> <out.nbpatch> [--name N] [--author A] [--desc D] [--no-exe] [--extra key=value ...]: differential patch
-                    // of every modified file (--extra: settings for tools, e.g. mode=coop puppetBlueprint=00123456 for NB Multiplayer)
+                    // patch-build <workspace> <out.nbpatch> [--name N] [--author A] [--desc D] [--version V] [--id ID] [--multiplayer cosmetic|world|coop]
+                    //             [--requires id,id] [--conflicts id,id] [--no-exe] [--extra key=value ...]: differential patch of every modified file
+                    // (--extra: settings for tools, e.g. mode=coop puppetBlueprint=00123456 for NB Multiplayer)
                     var ws = NB.Core.Project.Workspace.Open(args[1]);
                     string Opt(string k, string d) { int i = Array.IndexOf(args, k); return i >= 0 && i + 1 < args.Length ? args[i + 1] : d; }
                     var sw = System.Diagnostics.Stopwatch.StartNew();
                     var man = NB.Core.Project.PatchPackage.Build(ws, args[2], Opt("--name", Path.GetFileNameWithoutExtension(args[2])), Opt("--author", ""), Opt("--desc", ""),
                         !args.Contains("--no-exe"), new Progress<(string F, double P)>(p => Console.WriteLine($"  [{sw.Elapsed.TotalSeconds,6:F1}s] {p.F}")),
                         Enumerable.Range(0, args.Length - 1).Where(i => args[i] == "--extra" && args[i + 1].Contains('='))
-                            .Select(i => args[i + 1].Split('=', 2)).ToDictionary(kv => kv[0], kv => kv[1]));
+                            .Select(i => args[i + 1].Split('=', 2)).ToDictionary(kv => kv[0], kv => kv[1]),
+                        m =>
+                        {
+                            List<string> Ids(string k) => Opt(k, "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+                            m.Version = Opt("--version", m.Version); m.Id = Opt("--id", m.Id); m.Multiplayer = Opt("--multiplayer", m.Multiplayer);
+                            m.Requires = Ids("--requires"); m.Conflicts = Ids("--conflicts");
+                        });
+                    Console.WriteLine($"mod {man.Id} {man.Version}  multiplayer: {(man.Multiplayer.Length > 0 ? man.Multiplayer : "(not stated)")}");
                     foreach (var f in man.Files) Console.WriteLine($"{f.Kind,-5} {f.Path}: {f.TargetSize:N0} bytes = {f.CopiedBytes:N0} copied from the original + {f.LiteralBytes:N0} new");
                     Console.WriteLine($"exe mods: {string.Join(", ", man.ExeMods.Select(m => m.Id))}");
                     Console.WriteLine($"wrote {args[2]} ({new FileInfo(args[2]).Length:N0} bytes, {man.Files.Count} files) in {sw.Elapsed.TotalSeconds:F0}s");
@@ -2078,6 +2086,80 @@ static class Program
                     bool ok = res.All(r => r.State is "ok" or "applied" or "new");
                     Console.WriteLine(ok ? "patch can be applied" : "patch CANNOT be applied to this directory");
                     return ok ? 0 : 1;
+                }
+                case "tweak-build":
+                {
+                    // tweak-build <original default.xex> <out dir>: one tick-box mod per NB Multiplayer tweak (identical bytes on every PC)
+                    Directory.CreateDirectory(args[2]);
+                    foreach (var (mod, name, blurb) in NB.Core.Mods.ExePatches.Tweaks)
+                    {
+                        var outp = Path.Combine(args[2], "tweak-" + NB.Core.Project.PatchPackage.Slug(mod.Id) + ".nbpatch");
+                        NB.Core.Project.PatchPackage.BuildTweak(args[1], mod, name, blurb, outp);
+                        Console.WriteLine($"{NB.Core.Project.PatchPackage.FileSha(outp)[..16]}  {new FileInfo(outp).Length,6:N0}  {Path.GetFileName(outp)}");
+                    }
+                    return 0;
+                }
+                case "stack-check":
+                case "stack-apply":
+                {
+                    // stack-check <patch> <patch> ...: can these mods be combined into one edition (in this order)?
+                    // stack-apply <game dir> <patch> <patch> ...: applies them to an unmodified game copy (executable mods merged)
+                    bool apply = args[0] == "stack-apply";
+                    var mods = args.Skip(apply ? 2 : 1).Select(NB.Core.Project.ModStack.Load).ToList();
+                    foreach (var m in mods)
+                        Console.WriteLine($"{m.Id,-24} {m.Manifest.Version,-6} {m.Manifest.Files.Count,3} file(s), {m.Manifest.ExeMods.Count} exe mod(s)  sha {m.Sha256[..12]}");
+                    Console.WriteLine($"recipe key {NB.Core.Project.ModStack.Key(mods.Select(m => m.Sha256))}");
+                    var probs = NB.Core.Project.ModStack.Problems(mods);
+                    foreach (var p in probs) Console.WriteLine("PROBLEM: " + p);
+                    if (probs.Count > 0) return 1;
+                    Console.WriteLine("these mods can be combined");
+                    if (!apply) return 0;
+                    int n = NB.Core.Project.ModStack.Apply(mods, args[1], null, Console.WriteLine);
+                    Console.WriteLine($"applied: {n} file(s) written");
+                    return 0;
+                }
+                case "stack-explain":
+                {
+                    // stack-explain <original game dir> <patch> <patch> ...: for every game file several mods change, which archive
+                    // entries each mod changes (research for merging mods inside a file)
+                    var mods = args.Skip(2).Select(NB.Core.Project.ModStack.Load).ToList();
+                    var byFile = mods.SelectMany(m => m.Manifest.Files.Where(f => f.Kind == "delta").Select(f => (m, f)))
+                        .GroupBy(x => x.f.Path, StringComparer.OrdinalIgnoreCase).Where(g => g.Count() > 1);
+                    static Dictionary<uint, byte[]> Entries(byte[] d)
+                    {
+                        if (NB.Core.Compression.XCompressFile.IsCompressed(d)) d = NB.Core.Compression.XCompressFile.Decompress(d);
+                        var res = new Dictionary<uint, byte[]>();
+                        if (!NB.Core.Formats.BundleArchive.IsArchive(d)) return res;
+                        foreach (var e in NB.Core.Formats.BundleArchive.Read(d).Entries)
+                        {
+                            var x = e.Data ?? Array.Empty<byte>();
+                            if (NB.Core.Compression.XCompressFile.IsCompressed(x)) x = NB.Core.Compression.XCompressFile.Decompress(x);
+                            res[e.Id] = x;
+                        }
+                        return res;
+                    }
+                    foreach (var g in byFile)
+                    {
+                        var raw = File.ReadAllBytes(Path.Combine(args[1], g.Key.Replace('/', Path.DirectorySeparatorChar)));
+                        var orig = Entries(raw);
+                        var src = NB.Core.Project.PatchPackage.Expand(raw);
+                        Console.WriteLine($"== {g.Key}: {orig.Count} entries in the original");
+                        var changedBy = new Dictionary<uint, List<string>>();
+                        foreach (var (m, f) in g)
+                        {
+                            using var zip = System.IO.Compression.ZipFile.OpenRead(m.Path);
+                            var ms = new MemoryStream(); using (var st = zip.GetEntry(f.Entry)!.Open()) st.CopyTo(ms);
+                            var res = Entries(NB.Core.Project.Delta.Apply(src, ms.ToArray()));
+                            var ch = res.Where(kv => !orig.TryGetValue(kv.Key, out var o) || !o.AsSpan().SequenceEqual(kv.Value)).Select(kv => kv.Key)
+                                .Concat(orig.Keys.Where(k => !res.ContainsKey(k))).ToList();
+                            Console.WriteLine($"  {m.Manifest.Name}: {ch.Count} entr(y/ies) changed/added/removed: {string.Join(", ", ch.Select(k => k.ToString("x8")))}");
+                            foreach (var k in ch) (changedBy.TryGetValue(k, out var l) ? l : changedBy[k] = new()).Add(m.Manifest.Name);
+                        }
+                        var both = changedBy.Where(kv => kv.Value.Count > 1).ToList();
+                        Console.WriteLine(both.Count == 0 ? "  -> no entry is changed by two mods: an entry-level merge would combine them"
+                            : "  -> entries changed by more than one mod: " + string.Join(", ", both.Select(kv => $"{kv.Key:x8} ({string.Join(" + ", kv.Value)})")));
+                    }
+                    return 0;
                 }
                 case "patch-apply":
                 {

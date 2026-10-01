@@ -430,6 +430,24 @@ public static class ExePatches
         return list;
     }
 
+    /// <summary>The tweaks NB Multiplayer offers as tick-box mods: a short name and a one-line description for players.</summary>
+    public static IReadOnlyList<(ExeMod Mod, string Name, string Blurb)> Tweaks => new (ExeMod, string, string)[]
+    {
+        (VehiclePartLimit(2000), "Unlimited parts (2000)", "Build vehicles with up to 2000 parts instead of 250."),
+        (WorldBounds2048, "Bigger world edge", "Pushes the invisible edge of every world out to 2048 units."),
+        (NoEscapeReset, "No world-edge reset", "No reset when you fly past the world edge, above the sky or below the map."),
+        (GarageBuildArea31, "Bigger garage", "A bigger build area in Mumbo's Motors (31 cells per side instead of 19)."),
+        (DrawDistanceX4, "Longer draw distance", "Objects stay visible four times farther away."),
+        (ChangeVehicleInTown, "Change vehicles in town", "Change Vehicle and Build Vehicle in Showdown Town's pause menu (add the town crash fix too)."),
+        (TownNpcPathGuard, "Town crash fix", "Fixes a crash when changing vehicles in Showdown Town."),
+        (TownVehiclesNormalRules, "Breakable town vehicles", "Vehicles in Showdown Town take damage and break apart like in the other worlds."),
+        (TownAiRestartOnChangeVehicle, "Town AI keeps driving", "After Change Vehicle, the town's AI vehicles keep driving."),
+        (AiSpringTimer, "Jumping AI vehicles", "AI drivers fire their vehicles' springs now and then."),
+        (PhotoCameraUnlimited, "Free photo camera", "The photo-mode camera can fly anywhere."),
+        (DeveloperAllParts, "All parts unlocked", "A new game starts with every vehicle part unlocked (the developers' part list)."),
+        (DeveloperMainMenu, "Developer main menu", "The title screen opens the developers' hidden main menu."),
+    };
+
     public static string FamilyOf(string id) => id.StartsWith("vehicle-part-limit") ? "vehicle-part-limit" : id.StartsWith("garage-build-area") ? "garage-build-area" : "";
 
     public static readonly IReadOnlyList<ExeMod> All = new[] { ChangeVehicleInTown, TownVehiclesNormalRules, AiSpringTimer, TownAiRestartOnChangeVehicle, DeveloperMainMenu, DeveloperAllParts, WorldBounds2048, NoEscapeReset, TownNpcPathGuard, DrawDistanceX4, PhotoCameraUnlimited, PauseOpensPhotos, GarageBuildArea31, VehiclePartLimit400 };

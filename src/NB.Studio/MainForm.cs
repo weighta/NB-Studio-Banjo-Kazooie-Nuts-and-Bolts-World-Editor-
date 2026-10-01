@@ -365,6 +365,7 @@ public sealed class MainForm : Form
             _start.SetStatus($"Opening {Path.GetFileName(root.TrimEnd('\\', '/'))}…"); Application.DoEvents();
             _ws = Workspace.Open(root);
             _settings.LastWorkspace = root; _settings.Save();
+            ProjectRegistry.Touch(root);   // shared with NB Multiplayer's Projects page
             Log($"Workspace: {_ws.Root}\n  original (read-only): {_ws.Original.Root}\n  changes logged: {_ws.Manifest.Changes.Count}");
             await LoadIndex(false);
             UpdateTitle();
@@ -461,14 +462,19 @@ public sealed class MainForm : Form
     {
         if (_ws == null) return;
         if (_scene != null && _scene.Objects.Any(o => o.Dirty)) Log("Note: unsaved world edits are not in the patch (World > Save first).");
-        using var d = new SaveFileDialog { Filter = "NB patch (*.nbpatch)|*.nbpatch", FileName = Path.GetFileName(_ws.Root) + ".nbpatch", Title = "Save distributable patch" };
+        var changed = _ws.ModifiedFiles(hash: false);
+        var guess = ModCategories.Suggest(new PatchPackage.PatchManifest { Files = changed.Select(f => new PatchPackage.PatchFile { Path = f.Replace('\\', '/') }).ToList() });
+        using var info = new Panels.PatchInfoDialog(Path.GetFileName(_ws.Root.TrimEnd('\\', '/')), Environment.UserName, guess, changed.Count, _ws.Manifest.ExeMods.Count);
+        if (info.ShowDialog(this) != DialogResult.OK) return;
+        using var d = new SaveFileDialog { Filter = "NB patch (*.nbpatch)|*.nbpatch", FileName = string.Concat(info.ModName.Where(c => !Path.GetInvalidFileNameChars().Contains(c))) + ".nbpatch", Title = "Save distributable patch" };
         if (d.ShowDialog(this) != DialogResult.OK) return;
         var ws = _ws; var target = d.FileName;
         _busy = true; SetProgress("Building patch…", 0);
         try
         {
-            var man = await Task.Run(() => NB.Core.Project.PatchPackage.Build(ws, target, Path.GetFileNameWithoutExtension(target), Environment.UserName, "Made with NB Studio",
-                true, new Progress<(string F, double P)>(p => BeginInvoke(() => SetProgress("Delta " + p.F, p.P)))));
+            var man = await Task.Run(() => NB.Core.Project.PatchPackage.Build(ws, target, info.ModName, info.Author, info.Description.Length > 0 ? info.Description : "Made with NB Studio",
+                true, new Progress<(string F, double P)>(p => BeginInvoke(() => SetProgress("Delta " + p.F, p.P))), null,
+                m => { m.Version = info.Version; m.Category = info.Category; m.Tags = info.Tags; m.Multiplayer = info.Multiplayer; }));
             foreach (var f in man.Files) Log($"  {f.Kind} {f.Path}: {f.CopiedBytes:N0} bytes from the original + {f.LiteralBytes:N0} new");
             Log($"Patch written: {target} ({new FileInfo(target).Length:N0} bytes, {man.Files.Count} file(s){(man.ExeMods.Count > 0 ? ", executable mods: " + string.Join(", ", man.ExeMods.Select(m => m.Id)) : "")}). It contains no original game data.");
         }

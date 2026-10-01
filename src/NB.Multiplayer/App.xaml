@@ -166,6 +166,33 @@
             </Setter>
         </Style>
 
+        <!-- filter / category pills -->
+        <Style x:Key="Chip" TargetType="RadioButton">
+            <Setter Property="Foreground" Value="{StaticResource Text}"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Margin" Value="0,0,8,8"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RadioButton">
+                        <Border x:Name="b" CornerRadius="15" Padding="14,6" Background="{StaticResource CardHi}" BorderBrush="{StaticResource Line}" BorderThickness="1">
+                            <ContentPresenter x:Name="c" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="b" Property="BorderBrush" Value="#5A5E70"/>
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="b" Property="Background" Value="{StaticResource Accent}"/>
+                                <Setter TargetName="b" Property="BorderBrush" Value="{StaticResource Accent}"/>
+                                <Setter Property="Foreground" Value="{StaticResource AccentText}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <Style TargetType="TextBox">
             <Setter Property="Background" Value="#14151B"/>
             <Setter Property="Foreground" Value="{StaticResource Text}"/>

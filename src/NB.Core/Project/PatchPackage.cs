@@ -27,6 +27,11 @@ public static class PatchPackage
 
     public sealed class PatchManifest
     {
+        /// <summary>1 = original format; 2 adds <see cref="Id"/>, <see cref="Multiplayer"/>, <see cref="Requires"/> and <see cref="Conflicts"/>
+        /// (older readers ignore them).</summary>
+        public int Format { get; set; } = 1;
+        /// <summary>Stable mod id ("ultra", "showdown-town-coop"); empty in format 1 = derived from the name (<see cref="IdOf"/>).</summary>
+        public string Id { get; set; } = "";
         public string Name { get; set; } = "";
         public string Version { get; set; } = "1";
         public string Author { get; set; } = "";
@@ -40,6 +45,30 @@ public static class PatchPackage
         /// <summary>Extra settings for tools that use the patch, e.g. NB Multiplayer co-op editions:
         /// "mode" = "coop", "puppetBlueprint" = hex blueprint id of the puppet vehicles, "parkSpot" = "x,y,z".</summary>
         public Dictionary<string, string> Extra { get; set; } = new();
+        /// <summary>How the mod affects online play: "cosmetic" (looks/sounds only), "world" (levels, physics, parts: every
+        /// player must have it) or "coop" (adds what Showdown Town co-op needs). Empty = not stated (treated as "world").</summary>
+        public string Multiplayer { get; set; } = "";
+        /// <summary>Ids of mods that must come before this one in an edition.</summary>
+        public List<string> Requires { get; set; } = new();
+        /// <summary>Ids of mods this one cannot be combined with.</summary>
+        public List<string> Conflicts { get; set; } = new();
+        /// <summary>What kind of mod it is (<see cref="ModCategories"/>: map, parts, gameplay, visual, audio, tweak, coop);
+        /// empty = guessed from the files it changes.</summary>
+        public string Category { get; set; } = "";
+        /// <summary>Free-form labels shown on the mod ("Showdown Town", "AI vehicles", ...).</summary>
+        public List<string> Tags { get; set; } = new();
+    }
+
+    /// <summary>The mod id: <see cref="PatchManifest.Id"/>, or for older patches a slug of the name ("Showdown Town Co-op" -> "showdown-town-co-op").</summary>
+    public static string IdOf(PatchManifest m) => m.Id.Length > 0 ? m.Id : Slug(m.Name);
+
+    public static string Slug(string name)
+    {
+        var sb = new System.Text.StringBuilder();
+        foreach (var c in name.ToLowerInvariant())
+            if (char.IsAsciiLetterOrDigit(c)) sb.Append(c);
+            else if (sb.Length > 0 && sb[^1] != '-') sb.Append('-');
+        return sb.ToString().Trim('-');
     }
 
     public sealed class PatchFile
@@ -73,9 +102,11 @@ public static class PatchPackage
     /// Executable mods enabled in the workspace are recorded and written as a Xenia patch file when applied.
     /// </summary>
     public static PatchManifest Build(Workspace ws, string outPath, string name, string author, string description,
-        bool includeExeMods = true, IProgress<(string File, double Fraction)>? progress = null, Dictionary<string, string>? extra = null)
+        bool includeExeMods = true, IProgress<(string File, double Fraction)>? progress = null, Dictionary<string, string>? extra = null,
+        Action<PatchManifest>? configure = null)
     {
-        var man = new PatchManifest { Name = name, Author = author, Description = description, Created = DateTime.Now, Extra = extra ?? new() };
+        var man = new PatchManifest { Format = 2, Id = Slug(name), Name = name, Author = author, Description = description, Created = DateTime.Now, Extra = extra ?? new() };
+        if (man.Extra.GetValueOrDefault("mode") == "coop") man.Multiplayer = "coop";
         var files = ws.ModifiedFiles();
         if (File.Exists(outPath)) File.Delete(outPath);
         using (var zip = ZipFile.Open(outPath, ZipArchiveMode.Create))
@@ -137,10 +168,41 @@ public static class PatchPackage
                                                   LiteralBytes = 4 * man.ExeMods.Sum(m => m.Words.Count) });
                 }
             }
+            configure?.Invoke(man);
             var me = zip.CreateEntry(ManifestName, CompressionLevel.Optimal);
             using (var s = me.Open()) JsonSerializer.Serialize(s, man, Json);
             var readme = zip.CreateEntry("README.txt");
             using (var w = new StreamWriter(readme.Open())) w.Write(Readme(man));
+        }
+        return man;
+    }
+
+    /// <summary>
+    /// A mod made of one executable tweak (Tweaks in NB Multiplayer). The file is byte-for-byte the same on every PC with
+    /// the retail default.xex (fixed dates, one fixed layout), so players who tick the same tweak have the same mod.
+    /// </summary>
+    public static PatchManifest BuildTweak(string originalXex, Mods.ExeMod mod, string name, string blurb, string outPath)
+    {
+        var xb = File.ReadAllBytes(originalXex);
+        var fixedTime = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var man = new PatchManifest
+        {
+            Format = 2, Id = "tweak-" + Slug(mod.Id), Name = name, Version = "1", Author = "NB Studio", Description = blurb,
+            Created = fixedTime, Category = "tweak", Multiplayer = "world",
+        };
+        man.ExeMods.Add(new PatchExeMod { Id = mod.Id, Name = mod.Name, Words = mod.Words.Select(w => new[] { w.Address, w.Original, w.Patched }).ToList() });
+        var baked = Bake(xb, man);
+        man.Files.Add(new PatchFile { Path = "default.xex", Kind = "xexmods", SourceSha256 = Sha(xb), SourceSize = xb.Length, TargetSha256 = Sha(baked),
+                                      TargetSize = baked.Length, LiteralBytes = 4 * mod.Words.Count });
+        using (var fs = File.Create(outPath))
+        using (var zip = new ZipArchive(fs, ZipArchiveMode.Create))
+        {
+            var e = zip.CreateEntry(ManifestName, CompressionLevel.Optimal);
+            e.LastWriteTime = fixedTime;
+            using (var s = e.Open()) JsonSerializer.Serialize(s, man, Json);
+            var r = zip.CreateEntry("README.txt", CompressionLevel.Optimal);
+            r.LastWriteTime = fixedTime;
+            using (var w = new StreamWriter(r.Open())) w.Write(Readme(man));
         }
         return man;
     }
@@ -201,9 +263,10 @@ public static class PatchPackage
     public sealed record VerifyResult(string Path, string State, string Detail);   // State: ok | applied | missing | mismatch | new | exists
 
     /// <summary>Checks every file of the patch against a game directory (original? already patched?). Nothing is written.</summary>
-    public static List<VerifyResult> Verify(string patchPath, string gameDir)
+    public static List<VerifyResult> Verify(string patchPath, string gameDir) => Verify(ReadManifest(patchPath), gameDir);
+
+    public static List<VerifyResult> Verify(PatchManifest man, string gameDir)
     {
-        var man = ReadManifest(patchPath);
         var res = new List<VerifyResult>();
         foreach (var f in man.Files)
         {
@@ -228,7 +291,10 @@ public static class PatchPackage
     /// already patched), backs up each file it replaces, writes each result through a temp file after checking its
     /// SHA-256, and records the backup for <see cref="Rollback"/>. Returns the number of files written.
     /// </summary>
-    public static int Apply(string patchPath, string gameDir, string? xeniaDir = null, Action<string>? log = null, IProgress<(string File, double Fraction)>? progress = null)
+    /// <param name="withoutExecutable">Leave default.xex alone (the executable mods of several stacked mods are written
+    /// together afterwards with <see cref="ApplyExeMods"/>).</param>
+    public static int Apply(string patchPath, string gameDir, string? xeniaDir = null, Action<string>? log = null, IProgress<(string File, double Fraction)>? progress = null,
+        bool withoutExecutable = false)
     {
         PatchManifest? man = null;
         var lines = new List<string>();
@@ -236,6 +302,7 @@ public static class PatchPackage
         try
         {
             man = ReadManifest(patchPath);
+            if (withoutExecutable) { man.Files.RemoveAll(f => f.Kind == "xexmods"); man.ExeMods.Clear(); }
             log?.Invoke($"[{Now}] Applying patch '{man.Name}' {man.Version} ({System.IO.Path.GetFileName(patchPath)}) to {gameDir}");
             int n = ApplyCore(man, patchPath, gameDir, xeniaDir, L, progress);
             AppendLog(gameDir, "APPLY", man, patchPath, "OK", $"{n} file(s) written" + (lines.Count > 0 ? ": " + string.Join("; ", lines) : ""));
@@ -272,9 +339,34 @@ public static class PatchPackage
         return File.Exists(p) ? File.ReadAllLines(p).ToList() : new();
     }
 
-    static int ApplyCore(PatchManifest man, string patchPath, string gameDir, string? xeniaDir, Action<string>? log, IProgress<(string File, double Fraction)>? progress)
+    /// <summary>
+    /// Writes the executable mods of several mods into default.xex in one go (stacked editions). Every mod's own
+    /// "xexmods" entry must name the same original executable; words two mods both change must agree (<see cref="ModStack.Problems"/>).
+    /// </summary>
+    public static int ApplyExeMods(string gameDir, IReadOnlyList<PatchManifest> mods, string label, Action<string>? log = null)
     {
-        var check = Verify(patchPath, gameDir);
+        var withExe = mods.Where(m => m.Files.Any(f => f.Kind == "xexmods")).ToList();
+        if (withExe.Count == 0) return 0;
+        var xf = withExe[0].Files.First(f => f.Kind == "xexmods");
+        if (withExe.Any(m => m.Files.First(f => f.Kind == "xexmods") is var f && (f.SourceSha256 != xf.SourceSha256 || !f.Path.Equals(xf.Path, StringComparison.OrdinalIgnoreCase))))
+            throw new InvalidDataException("the mods were made for different game executables");
+        var combined = new PatchManifest { Name = label, Version = "", ExeMods = withExe.SelectMany(m => m.ExeMods).GroupBy(e => e.Id).Select(g => g.First()).ToList() };
+        var p = System.IO.Path.Combine(gameDir, xf.Path.Replace('/', System.IO.Path.DirectorySeparatorChar));
+        var baked = Bake(File.ReadAllBytes(p), combined);
+        combined.Files.Add(new PatchFile { Path = xf.Path, Kind = "xexmods", SourceSha256 = xf.SourceSha256, SourceSize = xf.SourceSize,
+                                           TargetSha256 = Sha(baked), TargetSize = baked.Length, LiteralBytes = 4 * combined.ExeMods.Sum(m => m.Words.Count) });
+        try
+        {
+            int n = ApplyCore(combined, null, gameDir, null, log, null);
+            AppendLog(gameDir, "APPLY", combined, null, "OK", "executable mods: " + string.Join(", ", combined.ExeMods.Select(m => m.Id)));
+            return n;
+        }
+        catch (Exception e) { AppendLog(gameDir, "APPLY", combined, null, "FAILED", e.Message.Replace('\n', ' ')); throw; }
+    }
+
+    static int ApplyCore(PatchManifest man, string? patchPath, string gameDir, string? xeniaDir, Action<string>? log, IProgress<(string File, double Fraction)>? progress)
+    {
+        var check = Verify(man, gameDir);
         var bad = check.Where(c => c.State is "missing" or "mismatch" or "exists").ToList();
         if (bad.Count > 0) throw new InvalidOperationException("patch cannot be applied:\n" + string.Join("\n", bad.Select(b => $"  {b.Path}: {b.Detail}")));
         var backup = System.IO.Path.Combine(gameDir, BackupDirName);
@@ -285,7 +377,7 @@ public static class PatchPackage
         var pending = new List<(PatchFile F, string P)>();
         try
         {
-            using var zip = ZipFile.OpenRead(patchPath);
+            using var zip = man.Files.Any(f => f.Kind != "xexmods") ? ZipFile.OpenRead(patchPath!) : null;
             foreach (var f in man.Files)
             {
                 progress?.Report((f.Path, (double)k++ / man.Files.Count));
@@ -296,7 +388,7 @@ public static class PatchPackage
                 else
                 {
                     byte[] payload;
-                    using (var s = zip.GetEntry(f.Entry)!.Open()) { var ms = new MemoryStream(); s.CopyTo(ms); payload = ms.ToArray(); }
+                    using (var s = zip!.GetEntry(f.Entry)!.Open()) { var ms = new MemoryStream(); s.CopyTo(ms); payload = ms.ToArray(); }
                     result = f.Kind == "new" ? payload : Delta.Apply(Expand(File.ReadAllBytes(p)), payload);
                 }
                 if (result.Length != f.TargetSize || Sha(result) != f.TargetSha256) throw new InvalidDataException($"{f.Path}: result does not match the patch (SHA-256)");
