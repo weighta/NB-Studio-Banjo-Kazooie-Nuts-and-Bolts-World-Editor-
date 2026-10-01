@@ -306,7 +306,7 @@
                                    Text="Your NB Studio projects. NB Studio is the editor that makes mods: worlds, AI vehicles, vehicle parts, scripts and textures. Open a project, try it out, and turn it into a mod for your library and your friends."/>
                         <Border x:Name="StudioCard" Style="{StaticResource CardBorder}" BorderBrush="{StaticResource Accent}">
                             <DockPanel>
-                                <Image Source="Assets/nut_accent.png" Height="56" DockPanel.Dock="Left" Margin="0,0,18,0" VerticalAlignment="Top"/>
+                                <Image Source="Assets/nut_gray.png" Height="56" DockPanel.Dock="Left" Margin="0,0,18,0" VerticalAlignment="Top"/>
                                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
                                     <Button x:Name="StudioGetButton" Content="Get NB Studio" Padding="14,7" FontSize="13" Margin="0,0,10,0" Click="StudioGet_Click"/>
                                     <Button x:Name="StudioOpenButton" Style="{StaticResource Primary}" Content="Open NB Studio" Click="StudioOpen_Click"/>
@@ -370,6 +370,16 @@
                                     <TextBox x:Name="GameDirBox" IsReadOnly="True"/>
                                 </DockPanel>
                                 <TextBlock x:Name="GameDirError" Foreground="{StaticResource Bad}" FontSize="12" Margin="0,4,0,0"/>
+                            </StackPanel>
+                        </Border>
+                        <Border x:Name="SaveCard" Style="{StaticResource CardBorder}" Margin="0,16,0,0">
+                            <StackPanel>
+                                <TextBlock Text="Save game" Style="{StaticResource H2}" FontSize="16"/>
+                                <CheckBox x:Name="AllUnlockedCheck" Margin="0,10,0,0" Checked="AllUnlocked_Changed" Unchecked="AllUnlocked_Changed"
+                                          Content="Start every game with the all-unlocked save"/>
+                                <TextBlock Style="{StaticResource SubText}" FontSize="12.5" Margin="24,4,0,0" TextWrapping="Wrap"
+                                           Text="No intro: SINGLE PLAYER > RESUME SAVED GAME takes you straight to Showdown Town with every world, Act, vehicle and part unlocked. The save is put back before each game, so progress made while it is on is not kept. Your own save is set aside and comes back when you turn this off."/>
+                                <TextBlock x:Name="SaveStatus" Style="{StaticResource SubText}" FontSize="12.5" Margin="24,6,0,0" TextWrapping="Wrap"/>
                             </StackPanel>
                         </Border>
                         <Border Style="{StaticResource CardBorder}" Margin="0,16,0,0">

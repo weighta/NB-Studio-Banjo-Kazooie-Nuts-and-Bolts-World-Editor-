@@ -153,7 +153,8 @@ public sealed class MainForm : Form
 
     static Icon LoadIcon()
     {
-        var p = Path.Combine(AppContext.BaseDirectory, "Assets", "nut.png");
+        // light gray nut: NB Studio's own colour (NB Multiplayer's nut is gold), visible on dark title bars and taskbars
+        var p = Path.Combine(AppContext.BaseDirectory, "Assets", "nut_gray.png");
         using var bmp = new Bitmap(p);
         return Icon.FromHandle(new Bitmap(bmp, 64, 64).GetHicon());
     }

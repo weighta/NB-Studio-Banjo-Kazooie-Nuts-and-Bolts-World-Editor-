@@ -1755,7 +1755,7 @@ static class Program
                         if (args.Length > 3 && !d.Textures.Any(t => t.Texture.Contains(args[3]))) continue;
                         var used = d.Indices.Where(k => k < d.Positions.Length).Select(k => d.Positions[k]).ToList();
                         string bb = used.Count == 0 ? "-" : $"({used.Min(p => p.X):F0},{used.Min(p => p.Y):F0},{used.Min(p => p.Z):F0})..({used.Max(p => p.X):F0},{used.Max(p => p.Y):F0},{used.Max(p => p.Z):F0})";
-                        Console.WriteLine($"#{i} vb{d.VbRecord} node {d.Node}{(lodOnly.Contains(d.Node) ? " LOD-ONLY" : "")}{(d.Instanced ? " INSTANCED" : "")} verts {d.Positions.Length} idx {d.Indices.Length} stride {d.Stride} col {(d.Colors != null ? "y" : "n")} {bb}");
+                        Console.WriteLine($"#{i} vb{d.VbRecord} node {d.Node}{(lodOnly.Contains(d.Node) ? " LOD-ONLY" : "")}{(d.Instanced ? " INSTANCED" : "")} verts {d.Positions.Length} idx {d.Indices.Length} prim {d.Primitive} ib 0x{d.IbObject:X} idxRange {(d.Indices.Length > 0 ? d.Indices.Min() + "-" + d.Indices.Max() : "-")} stride {d.Stride} col {(d.Colors != null ? "y" : "n")} {bb}");
                         Console.WriteLine("    " + string.Join(" | ", d.Textures.Select(t => $"s{t.Slot}:{t.Texture.Replace("aid_texture_banjox_", "")}")));
                         if (d.PixelConstants.Count > 0) Console.WriteLine("    pc " + string.Join(" ", d.PixelConstants.Select(kv => $"c{kv.Key}={kv.Value}")));
                     }

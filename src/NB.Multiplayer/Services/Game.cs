@@ -20,6 +20,7 @@ public static class GameLauncher
         if (!File.Exists(XeniaExe)) throw new FileNotFoundException("The Xenia build is missing next to NB Multiplayer (xenia folder). Reinstall.", XeniaExe);
         Directory.CreateDirectory(AppSettings.DataDir);
         SetProjectTweaks(null, null);   // editions carry their tweaks in their own default.xex
+        Saves.PrepareLaunch(s);
         var args = new List<string>();
         var extra = Environment.GetEnvironmentVariable("NB_XENIA_EXTRA");   // testing: extra Xenia options
         if (!string.IsNullOrWhiteSpace(extra)) args.AddRange(extra.Split(' ', StringSplitOptions.RemoveEmptyEntries));
@@ -50,6 +51,7 @@ public static class GameLauncher
         Directory.CreateDirectory(AppSettings.DataDir);
         var xex = Path.Combine(gameDir, "default.xex");
         SetProjectTweaks(xex, projectExeMods);
+        Saves.PrepareLaunch(s);
         var args = new List<string>();
         var extra = Environment.GetEnvironmentVariable("NB_XENIA_EXTRA");
         if (!string.IsNullOrWhiteSpace(extra)) args.AddRange(extra.Split(' ', StringSplitOptions.RemoveEmptyEntries));

@@ -15,7 +15,7 @@
     <AssemblyName>NBMultiplayer</AssemblyName>
     <RootNamespace>NB.Multiplayer</RootNamespace>
     <Product>NB Multiplayer</Product>
-    <Version>1.3.0</Version>
+    <Version>1.4.0</Version>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
   </PropertyGroup>
 
@@ -29,6 +29,8 @@
           CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
     <None Include="..\..\..\ultra\dist\UltraParts.nbpatch" Link="patches\UltraParts.nbpatch" Condition="Exists('..\..\..\ultra\dist\UltraParts.nbpatch')"
           CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
+    <None Include="..\..\..\coop\saves\AllUnlocked.sav" Link="saves\AllUnlocked.sav" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
+    <None Include="..\..\..\coop\saves\savegame.header.template" Link="saves\savegame.header.template" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
     <!-- Valve's redistributable Steam API (Steamworks SDK), next to the exe -->
     <None Include="$(NuGetPackageRoot)facepunch.steamworks\2.3.3\content\steam_api64.dll" Link="steam_api64.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
   </ItemGroup>

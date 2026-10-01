@@ -48,6 +48,10 @@ public partial class MainWindow : Window
         NameBox.Text = S.PlayerName;
         GameDirBox.Text = S.GameDir;
         UpdatesCheck.IsChecked = S.CheckForUpdates;
+        _loadingSettings = true;
+        AllUnlockedCheck.IsChecked = S.UseAllUnlockedSave;
+        _loadingSettings = false;
+        SaveCard.Visibility = Saves.Available ? Visibility.Visible : Visibility.Collapsed;
         JoinBox.Text = S.LastJoin;
         BuildAddressOptions();
         // mods that ship with NB Multiplayer (patches\*.nbpatch) are always in the library
@@ -816,6 +820,29 @@ public partial class MainWindow : Window
     }
 
     void UpdatesCheck_Changed(object sender, RoutedEventArgs e) { S.CheckForUpdates = UpdatesCheck.IsChecked == true; S.Save(); }
+
+    bool _loadingSettings;
+
+    void AllUnlocked_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_loadingSettings) return;
+        S.UseAllUnlockedSave = AllUnlockedCheck.IsChecked == true; S.Save();
+        if (_game is { HasExited: false }) { SaveStatus.Text = "Takes effect the next time the game starts (close the game first to switch saves now)."; return; }
+        try
+        {
+            if (S.UseAllUnlockedSave)
+            {
+                int n = Saves.Install();
+                SaveStatus.Text = n > 0 ? "The all-unlocked save is in place. Your own save is set aside." : "It is put in place when the game starts (your profile is created then).";
+            }
+            else
+            {
+                int n = Saves.Restore();
+                SaveStatus.Text = n > 0 ? "Your own save is back." : "";
+            }
+        }
+        catch (Exception ex) { SaveStatus.Text = "The save could not be changed: " + ex.Message; }
+    }
 
     void Shortcut_Click(object sender, RoutedEventArgs e) { CreateShortcut(); MessageBox.Show(this, "Shortcut created on the desktop.", "NB Multiplayer"); }
 

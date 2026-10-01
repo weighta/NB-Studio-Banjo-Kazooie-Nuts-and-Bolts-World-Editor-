@@ -16,9 +16,9 @@
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>NBModStudio</AssemblyName>
-    <Version>1.1.0</Version>
+    <Version>1.1.1</Version>
     <NoWarn>$(NoWarn);WFO1000</NoWarn>
-    <ApplicationIcon></ApplicationIcon>
+    <ApplicationIcon>Assets\studio.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>

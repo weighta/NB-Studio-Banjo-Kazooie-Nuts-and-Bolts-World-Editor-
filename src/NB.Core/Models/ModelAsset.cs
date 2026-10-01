@@ -389,6 +389,18 @@ public sealed class ModelAsset
             }
             catch (Exception e) { Warnings.Add($"draw vb 0x{dr.VbRecord:X}: {e.Message}"); }
         }
+        // Instancing is a property of the vertex buffer's shader: when one draw of a buffer is instanced, all are. A draw whose
+        // raw indices stay below the vertex count was not detected above (Banjo's House walls: raw 0..2463 = vertices 0..615,
+        // right before the next draw's 616..) and must be decoded the same way.
+        foreach (var grp in Draws.Where(x => x.Indices != null).GroupBy(x => x.VbRecord))
+        {
+            if (!grp.Any(x => x.Instanced)) continue;
+            foreach (var dr in grp.Where(x => !x.Instanced))
+            {
+                dr.Instanced = true;
+                for (int i = 0; i < dr.Indices.Length; i++) dr.Indices[i] >>= 2;
+            }
+        }
     }
 
     static int[] StripToList(int[] s)
