@@ -14,6 +14,7 @@ public static class BE
     public static float F32(ReadOnlySpan<byte> d, int o) => BinaryPrimitives.ReadSingleBigEndian(d[o..]);
 
     public static void W16(Span<byte> d, int o, ushort v) => BinaryPrimitives.WriteUInt16BigEndian(d[o..], v);
+    public static void W64(Span<byte> d, int o, ulong v) => BinaryPrimitives.WriteUInt64BigEndian(d[o..], v);
     public static void W32(Span<byte> d, int o, uint v) => BinaryPrimitives.WriteUInt32BigEndian(d[o..], v);
     public static void W32(Span<byte> d, int o, int v) => BinaryPrimitives.WriteInt32BigEndian(d[o..], v);
     public static void WF32(Span<byte> d, int o, float v) => BinaryPrimitives.WriteSingleBigEndian(d[o..], v);

@@ -34,6 +34,13 @@ public sealed class XeniaLive : IDisposable
     public static XeniaLive Attach(byte[] textProbe)
     {
         var p = Process.GetProcessesByName("xenia_canary").FirstOrDefault() ?? throw new InvalidOperationException("Xenia Canary is not running");
+        return AttachPid(p.Id, textProbe);
+    }
+
+    /// <summary>Attaches to one Xenia process (any build, e.g. the NB netplay build that NB Multiplayer starts).</summary>
+    public static XeniaLive AttachPid(int pid, byte[] textProbe)
+    {
+        var p = Process.GetProcessById(pid);
         var h = OpenProcess(PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_VM_OPERATION | PROCESS_QUERY_INFORMATION, false, p.Id);
         if (h == IntPtr.Zero) throw new InvalidOperationException("cannot open the Xenia process (run as the same user)");
         foreach (long b in new long[] { 0x100000000, 0x200000000, 0x300000000, 0x400000000, 0x10000000000 })
@@ -62,6 +69,27 @@ public sealed class XeniaLive : IDisposable
     /// <summary>Position of the player's vehicle (or of Banjo when no vehicle is spawned).</summary>
     public Vector3 PlayerPosition => V3(Player + 0xCB0);
     public Vector3 CameraPosition => V3(CameraMatrix);
+
+    /// <summary>Guest addresses (4-byte aligned, in RW regions) holding the big-endian value <paramref name="value"/>.</summary>
+    public List<uint> FindU32(uint value, uint lo = 0x40000000, ulong hi = 0x60000000)
+    {
+        var res = new List<uint>();
+        byte b0 = (byte)(value >> 24), b1 = (byte)(value >> 16), b2 = (byte)(value >> 8), b3 = (byte)value;
+        foreach (var (va, size) in Regions(lo, hi))
+            for (long off = 0; off < size; off += 1 << 24)
+            {
+                int n = (int)Math.Min(1 << 24, size - off);
+                var d = Read((uint)(va + off), n);
+                for (int i = d.AsSpan().IndexOf(b0); i >= 0 && i + 3 < d.Length;)
+                {
+                    if ((i & 3) == 0 && d[i + 1] == b1 && d[i + 2] == b2 && d[i + 3] == b3) res.Add((uint)(va + off + i));
+                    int next = d.AsSpan(i + 1).IndexOf(b0);
+                    if (next < 0) break;
+                    i += next + 1;
+                }
+            }
+        return res;
+    }
 
     /// <summary>Guest RW regions in [lo, hi) (for scans).</summary>
     public IEnumerable<(uint Va, int Size)> Regions(uint lo = 0x40000000, ulong hi = 0x100000000)

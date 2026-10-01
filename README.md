@@ -226,6 +226,21 @@ draws it and can import new collision meshes.
 `default.xex` decrypts with the retail key to a PE image. Researched code locations power the *Executable mods* list:
 vehicles in town, debug menus and recovered parts (see `docs/research`).
 
+### Runtime: vehicles and physics **[verified in Xenia, used by Showdown Town co-op]**
+Guest addresses in the running game (big-endian floats), as read and written by `src/NB.Core/Live/CoopSync.cs`:
+
+| What | Where |
+|---|---|
+| Player position | `[0x82FAC7AC] + 0xCB0` (x, y, z) |
+| Vehicle object | vtable `0x82FB7F78`; blueprint id `+0x18A4`; spawn link `+0x8B8`; position `+0x50`; blocks `+0x1488`/`+0x148C` (0xB0 bytes each) |
+| Vehicle rigid body | a whole vehicle is **one** Havok rigid body: `[vehicle + 0x7C0]` |
+| Motion state (body + 0x110) | position `+0x00`; 3×3 rotation (columns) `-0x30`; centres of mass `+0x10`/`+0x20`; rotation quaternions (x,y,z,w) `+0x30`/`+0x40`; linear velocity `+0x90`; angular velocity `+0xA0` |
+
+Writing the linear and angular velocity every frame steers a vehicle physically (it still collides and can be bumped);
+moving all three positions (`+0x00`, `+0x10`, `+0x20`) together teleports it. The co-op edition itself is built by
+[`coop/build.sh`](coop/build.sh): three AI "puppet" trolleys on the town's road loop
+([`coop/town_route.txt`](coop/town_route.txt)) plus the town executable mods.
+
 ## Building from source
 
 Requirements: Windows 10/11, the [.NET 9 SDK](https://dotnet.microsoft.com/download).

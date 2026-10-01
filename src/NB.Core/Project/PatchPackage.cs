@@ -37,6 +37,9 @@ public static class PatchPackage
         public List<PatchExeMod> ExeMods { get; set; } = new();
         /// <summary>Hex XXH3 module hash for the Xenia patch file (retail executable).</summary>
         public string XeniaModuleHash { get; set; } = "";
+        /// <summary>Extra settings for tools that use the patch, e.g. NB Multiplayer co-op editions:
+        /// "mode" = "coop", "puppetBlueprint" = hex blueprint id of the puppet vehicles, "parkSpot" = "x,y,z".</summary>
+        public Dictionary<string, string> Extra { get; set; } = new();
     }
 
     public sealed class PatchFile
@@ -70,9 +73,9 @@ public static class PatchPackage
     /// Executable mods enabled in the workspace are recorded and written as a Xenia patch file when applied.
     /// </summary>
     public static PatchManifest Build(Workspace ws, string outPath, string name, string author, string description,
-        bool includeExeMods = true, IProgress<(string File, double Fraction)>? progress = null)
+        bool includeExeMods = true, IProgress<(string File, double Fraction)>? progress = null, Dictionary<string, string>? extra = null)
     {
-        var man = new PatchManifest { Name = name, Author = author, Description = description, Created = DateTime.Now };
+        var man = new PatchManifest { Name = name, Author = author, Description = description, Created = DateTime.Now, Extra = extra ?? new() };
         var files = ws.ModifiedFiles();
         if (File.Exists(outPath)) File.Delete(outPath);
         using (var zip = ZipFile.Open(outPath, ZipArchiveMode.Create))

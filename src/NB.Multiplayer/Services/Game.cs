@@ -14,6 +14,7 @@ public static class GameLauncher
 {
     public static string XeniaExe => Path.Combine(AppContext.BaseDirectory, "xenia", "xenia_canary_netplay.exe");
 
+    /// <summary>Starts the game for a room; co-op editions run single-player (NB Multiplayer syncs the players).</summary>
     public static Process Start(AppSettings s, Edition edition, string apiHostPort, string roomCode)
     {
         if (!File.Exists(XeniaExe)) throw new FileNotFoundException("The Xenia build is missing next to NB Multiplayer (xenia folder). Reinstall.", XeniaExe);
@@ -22,7 +23,13 @@ public static class GameLauncher
         var extra = Environment.GetEnvironmentVariable("NB_XENIA_EXTRA");   // testing: extra Xenia options
         if (!string.IsNullOrWhiteSpace(extra)) args.AddRange(extra.Split(' ', StringSplitOptions.RemoveEmptyEntries));
         int apiPort = int.TryParse(apiHostPort.Split(':').ElementAtOrDefault(1), out var ap) ? ap : Net.Port;
-        args.AddRange(new[]
+        if (edition.IsCoop)
+            args.AddRange(new[]
+            {
+                $"--storage_root={AppSettings.DataDir}", $"--log_file={Path.Combine(AppSettings.DataDir, "xenia.log")}",
+                "--network_mode=0", $"--nb_create_profile={s.PlayerName}", Path.Combine(edition.GameDir, "default.xex"),
+            });
+        else args.AddRange(new[]
         {
             $"--storage_root={AppSettings.DataDir}", $"--log_file={Path.Combine(AppSettings.DataDir, "xenia.log")}",
             "--network_mode=2", $"--api_address=http://{apiHostPort}/", "--nb_overlay=true", $"--nb_instance={s.Instance}",
@@ -68,7 +75,11 @@ public sealed record RoomInfo(string Name, string HostXuid, string Edition, List
 
 public static class Net
 {
-    public const int Port = 36000;
+    /// <summary>Room port (TCP; relay UDP = +1, co-op UDP = +2). NB_ROOM_PORT overrides it (tests next to a running room).</summary>
+    public static readonly int Port = int.TryParse(Environment.GetEnvironmentVariable("NB_ROOM_PORT"), out var p) ? p : 36000;
+
+    public static bool PortInUse(int port) =>
+        System.Net.NetworkInformation.IPGlobalProperties.GetIPGlobalProperties().GetActiveTcpListeners().Any(e => e.Port == port);
 
     /// <summary>IPv4 addresses of network adapters that lead somewhere (have a default gateway): the home network.
     /// Virtual adapters (Hyper-V, VirtualBox, VPN host-only) are left out unless nothing else exists.</summary>

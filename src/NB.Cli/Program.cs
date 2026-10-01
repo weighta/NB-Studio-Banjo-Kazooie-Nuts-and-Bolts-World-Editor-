@@ -2056,12 +2056,15 @@ static class Program
                 }
                 case "patch-build":
                 {
-                    // patch-build <workspace> <out.nbpatch> [--name N] [--author A] [--desc D] [--no-exe]: differential patch of every modified file
+                    // patch-build <workspace> <out.nbpatch> [--name N] [--author A] [--desc D] [--no-exe] [--extra key=value ...]: differential patch
+                    // of every modified file (--extra: settings for tools, e.g. mode=coop puppetBlueprint=00123456 for NB Multiplayer)
                     var ws = NB.Core.Project.Workspace.Open(args[1]);
                     string Opt(string k, string d) { int i = Array.IndexOf(args, k); return i >= 0 && i + 1 < args.Length ? args[i + 1] : d; }
                     var sw = System.Diagnostics.Stopwatch.StartNew();
                     var man = NB.Core.Project.PatchPackage.Build(ws, args[2], Opt("--name", Path.GetFileNameWithoutExtension(args[2])), Opt("--author", ""), Opt("--desc", ""),
-                        !args.Contains("--no-exe"), new Progress<(string F, double P)>(p => Console.WriteLine($"  [{sw.Elapsed.TotalSeconds,6:F1}s] {p.F}")));
+                        !args.Contains("--no-exe"), new Progress<(string F, double P)>(p => Console.WriteLine($"  [{sw.Elapsed.TotalSeconds,6:F1}s] {p.F}")),
+                        Enumerable.Range(0, args.Length - 1).Where(i => args[i] == "--extra" && args[i + 1].Contains('='))
+                            .Select(i => args[i + 1].Split('=', 2)).ToDictionary(kv => kv[0], kv => kv[1]));
                     foreach (var f in man.Files) Console.WriteLine($"{f.Kind,-5} {f.Path}: {f.TargetSize:N0} bytes = {f.CopiedBytes:N0} copied from the original + {f.LiteralBytes:N0} new");
                     Console.WriteLine($"exe mods: {string.Join(", ", man.ExeMods.Select(m => m.Id))}");
                     Console.WriteLine($"wrote {args[2]} ({new FileInfo(args[2]).Length:N0} bytes, {man.Files.Count} files) in {sw.Elapsed.TotalSeconds:F0}s");

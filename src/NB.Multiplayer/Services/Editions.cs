@@ -15,9 +15,23 @@ public sealed class Edition
     public string Author { get; set; } = "";
     public string Description { get; set; } = "";
     public DateTime Created { get; set; }
-    public bool IsVanilla => PatchName.Length == 0;
-    public string Subtitle => IsVanilla ? "The game as released - plays with everyone on Vanilla"
-        : $"{PatchName} {PatchVersion}" + (Author.Length > 0 ? $" by {Author}" : "");
+    /// <summary>"coop" = Showdown Town co-op edition (single-player games synced by NB Multiplayer).</summary>
+    public string Mode { get; set; } = "";
+    public string PuppetBlueprint { get; set; } = "";
+    public string ParkSpot { get; set; } = "";
+    [System.Text.Json.Serialization.JsonIgnore] public bool IsCoop => Mode == "coop";
+    [System.Text.Json.Serialization.JsonIgnore] public uint PuppetBlueprintId => uint.TryParse(PuppetBlueprint, System.Globalization.NumberStyles.HexNumber, null, out var v) ? v : 0;
+    [System.Text.Json.Serialization.JsonIgnore] public System.Numerics.Vector3 ParkVector
+    {
+        get
+        {
+            var p = ParkSpot.Split(',').Select(x => float.TryParse(x, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var f) ? f : 0f).ToArray();
+            return p.Length == 3 ? new(p[0], p[1], p[2]) : new(0, -200, 0);
+        }
+    }
+    [System.Text.Json.Serialization.JsonIgnore] public bool IsVanilla => PatchName.Length == 0;
+    [System.Text.Json.Serialization.JsonIgnore] public string Subtitle => IsVanilla ? "The game as released - plays with everyone on Vanilla"
+        : (IsCoop ? "Showdown Town co-op - " : "") + $"{PatchName} {PatchVersion}" + (Author.Length > 0 ? $" by {Author}" : "");
 }
 
 /// <summary>
@@ -91,6 +105,8 @@ public static class Editions
         {
             Name = name, GameDir = game, PatchName = name, PatchVersion = man.Version, Author = man.Author,
             Description = man.Description, Created = DateTime.Now,
+            Mode = man.Extra.GetValueOrDefault("mode", ""), PuppetBlueprint = man.Extra.GetValueOrDefault("puppetBlueprint", ""),
+            ParkSpot = man.Extra.GetValueOrDefault("parkSpot", ""),
         };
         File.WriteAllText(Path.Combine(root, "edition.json"), JsonSerializer.Serialize(e, new JsonSerializerOptions { WriteIndented = true }));
         File.Copy(patchPath, Path.Combine(root, Path.GetFileName(patchPath)), true);

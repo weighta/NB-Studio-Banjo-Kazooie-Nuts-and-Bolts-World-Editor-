@@ -21,7 +21,7 @@ namespace NB.Multiplayer.Services;
 public static class SteamNet
 {
     public const uint AppId = 480;
-    const int RoomPort = Net.Port, RelayPort = Net.Port + 1;
+    static readonly int RoomPort = Net.Port, RelayPort = Net.Port + 1;
     /// <summary>Joiner's local tunnel ports (TCP = this, UDP = this + 1); NB_TUNNEL_PORT for testing on one PC.</summary>
     public static int TunnelPort => int.TryParse(Environment.GetEnvironmentVariable("NB_TUNNEL_PORT"), out var p) ? p : Net.Port;
     static readonly IPAddress TunnelSource = IPAddress.Parse("127.0.0.2");
@@ -97,6 +97,14 @@ public static class SteamNet
         readonly CancellationTokenSource _stop = new();
         public int PeerCount => _peers.Count;
         public event Action? PeersChanged;
+        /// <summary>Co-op state packets ([6][payload]) from a joiner: (connection id, payload).</summary>
+        public event Action<uint, byte[]>? CoopReceived;
+
+        public void SendCoop(uint connection, byte[] payload)
+        {
+            var m = new byte[1 + payload.Length]; m[0] = 6; payload.CopyTo(m, 1);
+            foreach (var c in Connected) if (c.Id == connection) c.SendMessage(m, SendType.Unreliable | SendType.NoNagle);
+        }
 
         public static Host? Start()
         {
@@ -108,13 +116,17 @@ public static class SteamNet
             return h;
         }
 
+        bool _stopped;
         public void Stop()
         {
+            if (_stopped) return;
+            _stopped = true;
             _stop.Cancel();
-            foreach (var c in Connected.ToList()) c.Close();
-            foreach (var p in _peers.Values) Drop(p);
+            // tolerant: on app exit Steam may already be shutting down (Close() threw NullReferenceException in 1.0.0)
+            try { foreach (var c in Connected.ToList()) c.Close(); } catch (Exception) { }
+            foreach (var p in _peers.Values) { try { Drop(p); } catch (Exception) { } }
             _peers.Clear();
-            Close();
+            try { Close(); } catch (Exception) { }
         }
 
         public override void OnConnecting(Connection c, ConnectionInfo info) { Log($"host: {info.Identity} connecting"); c.Accept(); }
@@ -202,6 +214,9 @@ public static class SteamNet
                     try { t.GetStream().Write(bytes); } catch (Exception) { }
                     break;
                 }
+                case 6 when size > 1:
+                    CoopReceived?.Invoke(c.Id, m[1..].ToArray());
+                    break;
                 case 4 when size >= 5:
                 {
                     uint cid = (uint)(m[1] << 24 | m[2] << 16 | m[3] << 8 | m[4]);
@@ -226,20 +241,37 @@ public static class SteamNet
         public bool IsConnected => Connected;
         public bool Failed { get; private set; }
         public event Action? Lost;
+        public event Action<byte[]>? CoopReceived;
+
+        public void SendCoop(byte[] payload)
+        {
+            var m = new byte[1 + payload.Length]; m[0] = 6; payload.CopyTo(m, 1);
+            Connection.SendMessage(m, SendType.Unreliable | SendType.NoNagle);
+        }
 
         /// <summary>Connects to the host and opens the local ports. Null + <paramref name="error"/> on failure.</summary>
         public static async Task<Client?> ConnectAsync(ulong hostSteamId, TimeSpan timeout)
         {
-            Client c = DirectPort is int p
-                ? SteamNetworkingSockets.ConnectNormal<Client>(NetAddress.From("127.0.0.1", (ushort)p))
-                : SteamNetworkingSockets.ConnectRelay<Client>(hostSteamId, 0);
-            Pump(() => c.Receive(64), c._stop.Token);
             var until = DateTime.UtcNow + timeout;
-            while (!c.Connected && !c.Failed && DateTime.UtcNow < until) await Task.Delay(100);
-            if (!c.Connected) { c.Stop(); return null; }
-            try { c.OpenLocalPorts(); }
-            catch (Exception) { c.Stop(); throw new InvalidOperationException("Ports 36000/36001 on this PC are in use (is a room hosted here, or another NB Multiplayer running?)."); }
-            return c;
+            // right after start-up Steam has no relay network config / certificates yet; a connection attempted then fails
+            // with "Bad cert: CA key ... is not known" (seen in tests): wait until Steam networking is ready
+            while (SteamNetworkingUtils.Status != SteamNetworkingAvailability.Current && DateTime.UtcNow < until - TimeSpan.FromSeconds(10))
+                await Task.Delay(200);
+            Log($"client: network status {SteamNetworkingUtils.Status} before connecting");
+            for (int attempt = 1; attempt <= 3 && DateTime.UtcNow < until; attempt++)
+            {
+                Client c = DirectPort is int p
+                    ? SteamNetworkingSockets.ConnectNormal<Client>(NetAddress.From("127.0.0.1", (ushort)p))
+                    : SteamNetworkingSockets.ConnectRelay<Client>(hostSteamId, 0);
+                Pump(() => c.Receive(64), c._stop.Token);
+                var attemptEnd = DateTime.UtcNow + TimeSpan.FromSeconds(Math.Min(15, (until - DateTime.UtcNow).TotalSeconds));
+                while (!c.Connected && !c.Failed && DateTime.UtcNow < attemptEnd) await Task.Delay(100);
+                if (!c.Connected) { c.Stop(); Log($"client: attempt {attempt} failed"); await Task.Delay(1000); continue; }
+                try { c.OpenLocalPorts(); }
+                catch (Exception) { c.Stop(); throw new InvalidOperationException($"Ports {TunnelPort}/{TunnelPort + 1} on this PC are in use (is a room hosted here, or another NB Multiplayer running?)."); }
+                return c;
+            }
+            return null;
         }
 
         public override void OnConnectionChanged(ConnectionInfo info) { Log($"client: {info.State} {info.EndReason}"); base.OnConnectionChanged(info); }
@@ -318,6 +350,9 @@ public static class SteamNet
                     if (_conns.TryGetValue(cid, out var t)) try { t.GetStream().Write(m[5..]); } catch (Exception) { }
                     break;
                 }
+                case 6 when size > 1:
+                    CoopReceived?.Invoke(m[1..].ToArray());
+                    break;
                 case 4 when size >= 5:
                 {
                     uint cid = (uint)(m[1] << 24 | m[2] << 16 | m[3] << 8 | m[4]);

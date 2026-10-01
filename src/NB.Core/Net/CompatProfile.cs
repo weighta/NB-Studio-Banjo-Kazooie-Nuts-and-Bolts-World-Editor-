@@ -43,7 +43,8 @@ public sealed class CompatProfile
             var f = files[i];
             if (!File.Exists(f)) continue;
             var fi = new FileInfo(f);
-            string key = $"{fi.FullName}|{fi.Length}|{fi.LastWriteTimeUtc.Ticks}";
+            // hard links (NB Multiplayer editions link the unchanged game files) share the NTFS file id: hashed once
+            string key = (FileId(f) is { } id ? "id:" + id : fi.FullName) + $"|{fi.Length}|{fi.LastWriteTimeUtc.Ticks}";
             if (!cache.TryGetValue(key, out var h))
             {
                 progress?.Report(($"hashing {Path.GetFileName(f)}", i / (double)files.Count));
@@ -70,6 +71,23 @@ public sealed class CompatProfile
         }
         foreach (var f in Files.Keys.Where(f => !host.Files.ContainsKey(f))) res.Add(new(f, "not in the host's game", Area(f)));
         return res;
+    }
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    struct ByHandleInfo { public uint Attr; public long C, A, W; public uint Volume, SizeHigh, SizeLow, Links, IndexHigh, IndexLow; }
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool GetFileInformationByHandle(Microsoft.Win32.SafeHandles.SafeFileHandle h, out ByHandleInfo info);
+
+    /// <summary>Volume serial + file index (the same for every hard link of a file), or null.</summary>
+    static string? FileId(string path)
+    {
+        if (!OperatingSystem.IsWindows()) return null;
+        try
+        {
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            return GetFileInformationByHandle(fs.SafeFileHandle, out var i) ? $"{i.Volume:X8}:{i.IndexHigh:X8}{i.IndexLow:X8}" : null;
+        }
+        catch (Exception) { return null; }
     }
 
     public string ToJson() => JsonSerializer.Serialize(this);

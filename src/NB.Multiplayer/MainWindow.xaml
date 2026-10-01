@@ -70,7 +70,7 @@
                 <ScrollViewer x:Name="PagePlay">
                     <StackPanel Margin="36,30,36,36">
                         <TextBlock Text="Play together" Style="{StaticResource H1}"/>
-                        <TextBlock Text="Host a room for your friends, or join theirs with a room code. The game's own Xbox LIVE multiplayer does the rest."
+                        <TextBlock Text="Host a room for your friends, or join theirs with a room code. Then play Xbox LIVE matches, or Showdown Town together with the co-op edition."
                                    Style="{StaticResource SubText}" FontSize="14" Margin="0,6,0,22"/>
 
                         <!-- setup needed -->
@@ -232,17 +232,21 @@
                         </StackPanel>
                         <StackPanel x:Name="EditionList"/>
 
-                        <TextBlock Text="Coming next" Style="{StaticResource H2}" Margin="0,24,0,10"/>
-                        <Border Style="{StaticResource CardBorder}" Opacity="0.75">
+                        <Border x:Name="CoopCard" Style="{StaticResource CardBorder}" Margin="0,12,0,0" BorderBrush="{StaticResource Accent}">
                             <DockPanel>
-                                <Image Source="Assets/mumbo_accent.png" Height="56" DockPanel.Dock="Left" Margin="0,0,18,0"/>
+                                <Image Source="Assets/mumbo_accent.png" Height="64" DockPanel.Dock="Left" Margin="0,0,18,0"/>
+                                <Button x:Name="CoopAddButton" DockPanel.Dock="Right" Style="{StaticResource Primary}" Content="Add co-op edition"
+                                        VerticalAlignment="Center" Click="AddCoop_Click"/>
                                 <StackPanel>
-                                    <TextBlock Text="Showdown Town co-op" Style="{StaticResource H2}"/>
-                                    <TextBlock Style="{StaticResource SubText}" Margin="0,4,0,0"
-                                               Text="Play the single-player game together: see each other in Showdown Town, share crates and Acts, build vehicles side by side. In development; it will appear here as an edition."/>
+                                    <TextBlock Text="Showdown Town co-op (preview)" Style="{StaticResource H2}"/>
+                                    <TextBlock Style="{StaticResource SubText}" Margin="0,4,16,0"
+                                               Text="Play the single-player game together. Everyone plays their own save; NB Multiplayer drives the other players' vehicles through your Showdown Town (Banjo in a trolley), and you can bump into each other. Town vehicles break apart, and you can change or build vehicles anywhere in town."/>
+                                    <TextBlock Style="{StaticResource SubText}" Margin="0,6,16,0" FontSize="12"
+                                               Text="Preview: players on foot, their own vehicle designs, shared crates and Acts are not synced yet."/>
                                 </StackPanel>
                             </DockPanel>
                         </Border>
+                        <TextBlock Text="Coming next" Style="{StaticResource H2}" Margin="0,24,0,10"/>
                         <Border Style="{StaticResource CardBorder}" Opacity="0.75" Margin="0,12,0,0">
                             <StackPanel>
                                 <TextBlock Text="Patch depot" Style="{StaticResource H2}"/>

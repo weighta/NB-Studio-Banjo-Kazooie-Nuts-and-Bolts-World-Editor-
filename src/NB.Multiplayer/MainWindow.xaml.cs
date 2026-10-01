@@ -7,6 +7,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using NB.Core.Net;
+using NB.Core.Project;
 using NB.Multiplayer.Services;
 
 namespace NB.Multiplayer;
@@ -17,6 +18,8 @@ public partial class MainWindow : Window
     RoomServer? _server;
     SteamNet.Host? _steamHost;
     SteamNet.Client? _steamClient;
+    CoopNet? _coopNet;
+    CoopService? _coop;
     string _roomCode = "";
     (string Host, int Port)? _room;          // room being shown (own or joined)
     (string Host, int Port, string Code)? _pendingJoin;
@@ -65,9 +68,10 @@ public partial class MainWindow : Window
         {
             if (_server != null && MessageBox.Show(this, "Closing NB Multiplayer closes your room: players in it are disconnected. Close anyway?",
                     "NB Multiplayer", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) { e.Cancel = true; return; }
-            _server?.Stop();
-            _steamHost?.Stop();
-            _steamClient?.Stop();
+            try { _server?.Stop(); } catch (Exception) { }
+            try { _steamHost?.Stop(); } catch (Exception) { }
+            try { _steamClient?.Stop(); } catch (Exception) { }
+            try { StopCoop(); } catch (Exception) { }
             SteamNet.Shutdown();
         };
     }
@@ -119,6 +123,9 @@ public partial class MainWindow : Window
         }
         EditionSub.Text = CurrentEdition.Subtitle;
 
+        bool coopInstalled = all.Any(e => e.IsCoop);
+        CoopCard.Visibility = File.Exists(CoopPatch) ? Visibility.Visible : Visibility.Collapsed;
+        CoopAddButton.Visibility = coopInstalled ? Visibility.Collapsed : Visibility.Visible;
         EditionList.Children.Clear();
         foreach (var ed in all)
         {
@@ -153,21 +160,31 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>The Showdown Town co-op patch shipped with the app (patches\ShowdownTownCoop.nbpatch).</summary>
+    static string CoopPatch => Path.Combine(AppContext.BaseDirectory, "patches", "ShowdownTownCoop.nbpatch");
+
+    async void AddCoop_Click(object sender, RoutedEventArgs e) => await AddEditionAsync(CoopPatch);
+
     async void AddEdition_Click(object sender, RoutedEventArgs e)
     {
-        if (!AppSettings.IsGameDir(S.GameDir)) { MessageBox.Show(this, "Choose your game folder in Settings first.", "NB Multiplayer"); return; }
         var dlg = new Microsoft.Win32.OpenFileDialog { Filter = "NB patch (*.nbpatch)|*.nbpatch", Title = "Choose a patch" };
         if (dlg.ShowDialog(this) != true) return;
+        await AddEditionAsync(dlg.FileName);
+    }
+
+    async Task AddEditionAsync(string patch)
+    {
+        if (!AppSettings.IsGameDir(S.GameDir)) { MessageBox.Show(this, "Choose your game folder in Settings first.", "NB Multiplayer"); return; }
+        if (!File.Exists(patch)) { MessageBox.Show(this, "The patch file is missing: " + patch, "NB Multiplayer"); return; }
         EditionBusy.Visibility = Visibility.Visible;
         var prog = new Progress<(string Text, double Fraction)>(p => { EditionBusyText.Text = p.Text; EditionBusyBar.Value = p.Fraction; });
         try
         {
-            var ed = await Task.Run(() => Editions.Create(S, dlg.FileName, prog));
+            var ed = await Task.Run(() => Editions.Create(S, patch, prog));
             S.Edition = ed.Name; S.Save();
-            MessageBox.Show(this, $"Edition \"{ed.Name}\" is ready and selected.", "NB Multiplayer");
+            EditionBusyText.Text = $"\"{ed.Name}\" is ready and selected for playing.";
         }
-        catch (Exception ex) { MessageBox.Show(this, "The edition could not be built:\n" + ex.Message, "NB Multiplayer"); }
-        EditionBusy.Visibility = Visibility.Collapsed;
+        catch (Exception ex) { EditionBusyText.Text = "The edition could not be built: " + ex.Message; }
         RefreshEditions();
     }
 
@@ -224,6 +241,11 @@ public partial class MainWindow : Window
         }
         S.Save();
         var edition = CurrentEdition;
+        if (Net.PortInUse(Net.Port))
+        {
+            MessageBox.Show(this, $"Port {Net.Port} is already in use on this PC: is another NB Multiplayer (or NB Studio room server) hosting a room? Close that room first.", "NB Multiplayer");
+            return;
+        }
         HostButton.IsEnabled = false;
         HostButton.Content = "Checking your game files...";
         try
@@ -262,6 +284,7 @@ public partial class MainWindow : Window
             ReachText.Text = "Room code copied to the clipboard. Friends join through Steam: no port forwarding needed.";
         }
         else await CheckReachAsync();
+        if (edition.IsCoop) _coopNet = CoopNet.StartHost(S.Instance, S.PlayerName, _steamHost);
         LaunchGame("127.0.0.1:" + Net.Port, _roomCode);
     }
 
@@ -297,6 +320,7 @@ public partial class MainWindow : Window
         if (MessageBox.Show(this, "Close the room? Players in it are disconnected.", "NB Multiplayer", MessageBoxButton.YesNo) != MessageBoxResult.Yes) return;
         _server?.Stop(); _server = null; _room = null;
         _steamHost?.Stop(); _steamHost = null;
+        StopCoop();
         HostRunning.Visibility = Visibility.Collapsed;
         HostSetup.Visibility = Visibility.Visible;
         RoomCard.Visibility = Visibility.Collapsed;
@@ -359,6 +383,13 @@ public partial class MainWindow : Window
             if (!string.Equals(room.Edition, S.Edition, StringComparison.OrdinalIgnoreCase))
             {
                 var mine = Editions.Find(S, room.Edition);
+                if (mine == null && File.Exists(CoopPatch) && PatchPackage.ReadManifest(CoopPatch).Name == room.Edition)
+                {
+                    // the host plays the co-op edition that ships with NB Multiplayer: install it now
+                    ShowJoin($"{room.Name} plays \"{room.Edition}\". Installing it (a minute or two)...", "Sub", false);
+                    try { mine = await Task.Run(() => Editions.Create(S, CoopPatch, new Progress<(string Text, double Fraction)>(_ => { }))); }
+                    catch (Exception ex) { ShowJoin("The co-op edition could not be installed: " + ex.Message, "Bad", false); return; }
+                }
                 if (mine == null)
                 {
                     ShowJoin($"{room.Name} plays the edition \"{room.Edition}\", which you don't have. Get its .nbpatch file from the host and add it under Editions & mods.", "Bad", false);
@@ -379,7 +410,9 @@ public partial class MainWindow : Window
                     return;
                 }
             }
-            ShowJoin($"Joining {room.Name} ({room.Edition}). In the game open MULTIPLAYER, then Xbox LIVE: you join the host's party automatically.", "Good", false);
+            ShowJoin(CurrentEdition.IsCoop
+                ? $"Joined {room.Name} ({room.Edition}). In the game choose SINGLE PLAYER and load your save (or start a new game): you see each other once you are both in Showdown Town."
+                : $"Joining {room.Name} ({room.Edition}). In the game open MULTIPLAYER, then Xbox LIVE: you join the host's party automatically.", "Good", false);
             StartJoined();
         }
         finally
@@ -397,6 +430,12 @@ public partial class MainWindow : Window
         S.LastJoin = JoinBox.Text.Trim(); S.Save();
         _room = (j.Host, j.Port);
         JoinAnywayButton.Visibility = Visibility.Collapsed;
+        if (CurrentEdition.IsCoop)
+        {
+            StopCoop();
+            try { _coopNet = CoopNet.StartClient(S.Instance, S.PlayerName, _steamClient, j.Host); }
+            catch (Exception ex) { ShowJoin("Co-op could not connect: " + ex.Message, "Bad", false); return; }
+        }
         LaunchGame($"{j.Host}:{j.Port}", j.Code);
     }
 
@@ -417,8 +456,43 @@ public partial class MainWindow : Window
             MessageBox.Show(this, "The game is already running. Close it first to connect it to a different room.", "NB Multiplayer");
             return;
         }
-        try { _game = GameLauncher.Start(S, CurrentEdition, api, code); }
+        try
+        {
+            var ed = CurrentEdition;
+            _game = GameLauncher.Start(S, ed, api, code);
+            if (ed.IsCoop && _coopNet != null)
+            {
+                _coop?.Dispose();
+                _coop = new CoopService(_coopNet, _game.Id, Path.Combine(ed.GameDir, "default.xex"), ed.PuppetBlueprintId, ed.ParkVector);
+            }
+        }
         catch (Exception ex) { MessageBox.Show(this, "The game could not start:\n" + ex.Message, "NB Multiplayer"); }
+    }
+
+    void StopCoop()
+    {
+        _coop?.Dispose(); _coop = null;   // also disposes the network
+        _coopNet?.Dispose(); _coopNet = null;
+    }
+
+    /// <summary>Co-op games run single-player and never contact the room server: the room panel lists the co-op players.</summary>
+    void ShowCoopRoom()
+    {
+        RoomCard.Visibility = Visibility.Visible;
+        RoomTitle.Text = "Co-op room  -  " + CurrentEdition.Name;
+        RoomPlayers.Items.Clear();
+        var names = new List<(string Name, bool Me)> { (S.PlayerName, true) };
+        if (_coopNet != null) names.AddRange(_coopNet.Remotes.Values.Select(r => (r.Name, false)));
+        foreach (var (name, me) in names)
+        {
+            var chip = new Border { CornerRadius = new CornerRadius(16), Padding = new Thickness(14, 7, 14, 7), Margin = new Thickness(0, 0, 8, 8),
+                Background = me ? B("Accent") : B("CardHi") };
+            chip.Child = new TextBlock { Text = name + (me ? "  (you)" : ""), FontWeight = FontWeights.SemiBold, Foreground = me ? B("AccentText") : B("Text") };
+            RoomPlayers.Items.Add(chip);
+        }
+        RoomPlayers.Items.Add(new TextBlock { Text = _coop?.Status ?? "Start the game to sync.", Style = (Style)FindResource("SubText"), Margin = new Thickness(0, 8, 0, 0) });
+        RoomDot.Fill = B("Good");
+        RoomStatus.Text = $"Co-op ({names.Count} player{(names.Count == 1 ? "" : "s")})";
     }
 
     async Task TickAsync()
@@ -432,6 +506,7 @@ public partial class MainWindow : Window
             RoomDot.Fill = B("Sub"); RoomStatus.Text = "Not in a room";
             return;
         }
+        if (_coopNet != null) { ShowCoopRoom(); return; }
         _polling = true;
         try
         {
