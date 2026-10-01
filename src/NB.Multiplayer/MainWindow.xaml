@@ -260,14 +260,18 @@
                             <Border x:Name="CoopCard" Style="{StaticResource CardBorder}" Margin="0,0,0,12" BorderBrush="{StaticResource Accent}">
                                 <DockPanel>
                                     <Image Source="Assets/mumbo_accent.png" Height="64" DockPanel.Dock="Left" Margin="0,0,18,0"/>
-                                    <Button x:Name="CoopAddButton" DockPanel.Dock="Right" Style="{StaticResource Primary}" Content="Add co-op edition"
-                                            VerticalAlignment="Center" Click="AddCoop_Click"/>
+                                    <StackPanel DockPanel.Dock="Right" VerticalAlignment="Center">
+                                        <Button x:Name="CoopAddButton" Style="{StaticResource Primary}" Content="Add co-op edition" Click="AddCoop_Click"
+                                                ToolTip="Showdown Town Co-op with every vehicle part unlocked"/>
+                                        <Button x:Name="CoopUltraButton" Content="Add co-op + ULTRA Parts" Margin="0,8,0,0" Padding="14,7" FontSize="13" Click="AddCoopUltra_Click"
+                                                ToolTip="The same, plus the seven ULTRA parts in Mumbo's Motors"/>
+                                    </StackPanel>
                                     <StackPanel>
                                         <TextBlock Text="Showdown Town co-op (preview)" Style="{StaticResource H2}"/>
                                         <TextBlock Style="{StaticResource SubText}" Margin="0,4,16,0" TextWrapping="Wrap"
                                                    Text="Play the single-player game together. Everyone plays their own save; NB Multiplayer drives the other players' vehicles through your Showdown Town (Banjo in a trolley), and you can bump into each other. Town vehicles break apart, and you can change or build vehicles anywhere in town."/>
-                                        <TextBlock Style="{StaticResource SubText}" Margin="0,6,16,0" FontSize="12"
-                                                   Text="Preview: players on foot, their own vehicle designs, shared crates and Acts are not synced yet."/>
+                                        <TextBlock Style="{StaticResource SubText}" Margin="0,6,16,0" FontSize="12" TextWrapping="Wrap"
+                                                   Text="Every vehicle part is unlocked in the co-op edition, whatever your save has. Preview: players on foot, their own vehicle designs, damage between players, shared crates and Acts are not synced yet."/>
                                     </StackPanel>
                                 </DockPanel>
                             </Border>

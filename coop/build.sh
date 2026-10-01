@@ -21,7 +21,7 @@ echo "== executable mods"
 python - "$WS/workspace.json" <<'EOF'
 import json, sys
 p = sys.argv[1]; m = json.load(open(p))
-m['ExeMods'] = ['town-vehicles-normal-rules', 'change-vehicle-town', 'town-ai-restart-on-change-vehicle', 'town-npc-path-guard']
+m['ExeMods'] = ['town-vehicles-normal-rules', 'change-vehicle-town', 'town-ai-restart-on-change-vehicle', 'town-npc-path-guard', 'coop-remote-damage']
 json.dump(m, open(p, 'w'), indent=2)
 print('  ' + ', '.join(m['ExeMods']))
 EOF
@@ -30,6 +30,10 @@ echo "== puppet driver and strategy (the title screen's AI Banjo and Jogger stra
 $CLI objparams-copy $WS 757c4b actorstrategy_locococo 234cec actorstrategy_showdowntown_mrfit actorstrategy_coop_puppet
 $CLI objparams-set $WS aid_objparams_banjox_actorstrategy_coop_puppet 2AC 00000000            # cruising speed 0: puppets only move when NB Multiplayer steers them (an AI throttle fought the sync: ~10 u overshoot)
 $CLI objparams-copy $WS 757c4b actor_banjoai 234cec actor_npc_thomas
+
+echo "== puppet vehicle blueprint, kept in the town's own bundle (234cec) so the edition never touches the shared bundle"
+echo "   685374 that vehicle-part mods change: co-op then combines with them in NB Multiplayer"
+$CLI asset-copy $WS 685374 aid_vehicle_banjox_general_golfcartcomplete 234cec $PUPPET
 
 echo "== three puppet trolleys on the town's road loop (101-node AI path of the town, every 2nd node)"
 ROUTE="$(cat coop/town_route.txt)"
@@ -53,5 +57,6 @@ BP=$(python -c "import zlib; print('%08x' % ((zlib.crc32(b'banjox_coop_puppet') 
 echo "== patch (puppet blueprint id $BP)"
 mkdir -p coop/dist
 $CLI patch-build $WS ${COOP_OUT:-coop/dist/ShowdownTownCoop.nbpatch} --name "Showdown Town Co-op" --author weighta \
+     --version 1.1 --category coop --multiplayer coop --tags "Showdown Town" \
      --desc "Play the single-player game together in NB Multiplayer: other players drive through your Showdown Town. Town vehicles are destructible and can be changed in town." \
      --extra mode=coop --extra puppetBlueprint=$BP --extra parkSpot=0,0,0

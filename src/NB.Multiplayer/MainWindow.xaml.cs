@@ -50,7 +50,9 @@ public partial class MainWindow : Window
         UpdatesCheck.IsChecked = S.CheckForUpdates;
         JoinBox.Text = S.LastJoin;
         BuildAddressOptions();
-        try { if (File.Exists(CoopPatch)) ModLibrary.Add(CoopPatch); } catch (Exception) { }
+        // mods that ship with NB Multiplayer (patches\*.nbpatch) are always in the library
+        foreach (var bundled in Directory.Exists(BundledDir) ? Directory.GetFiles(BundledDir, "*.nbpatch") : Array.Empty<string>())
+            try { ModLibrary.Add(bundled); } catch (Exception) { }
         RefreshEditions();
         _ = MakeTweaksAsync();
         RefreshSetup();
@@ -128,9 +130,15 @@ public partial class MainWindow : Window
         }
         EditionSub.Text = CurrentEdition.Subtitle;
 
-        bool coopInstalled = all.Any(e => e.IsCoop);
         CoopCard.Visibility = File.Exists(CoopPatch) ? Visibility.Visible : Visibility.Collapsed;
-        CoopAddButton.Visibility = coopInstalled ? Visibility.Collapsed : Visibility.Visible;
+        // an edition built from an older bundled co-op mod is offered as an update
+        string coopSha = File.Exists(CoopPatch) ? PatchPackage.FileSha(CoopPatch) : "";
+        bool Current(string name) => all.Any(e => e.Name == name && e.Mods.Any(m => m.Sha256 == coopSha));
+        bool Old(string name) => all.Any(e => e.Name == name) && !Current(name);
+        CoopAddButton.Visibility = Current("Showdown Town Co-op") ? Visibility.Collapsed : Visibility.Visible;
+        CoopAddButton.Content = Old("Showdown Town Co-op") ? "Update co-op edition" : "Add co-op edition";
+        CoopUltraButton.Visibility = File.Exists(UltraPartsPatch) && !Current("Showdown Town Co-op + ULTRA") ? Visibility.Visible : Visibility.Collapsed;
+        CoopUltraButton.Content = Old("Showdown Town Co-op + ULTRA") ? "Update co-op + ULTRA Parts" : "Add co-op + ULTRA Parts";
         EditionList.Children.Clear();
         foreach (var ed in all)
         {
@@ -306,6 +314,7 @@ public partial class MainWindow : Window
         if (!AppSettings.IsGameDir(S.GameDir)) { MessageBox.Show(this, "Choose your game folder in Settings first.", "NB Multiplayer"); return; }
         if (_game is { HasExited: false }) { MessageBox.Show(this, "Close the game first: editions cannot change while it runs.", "NB Multiplayer"); return; }
         EditionBusy.Visibility = Visibility.Visible;
+        EditionBusyText.Text = "Preparing..."; EditionBusyBar.Value = 0;
         CombineButton.IsEnabled = false;
         var prog = new Progress<(string Text, double Fraction)>(p => { EditionBusyText.Text = p.Text; EditionBusyBar.Value = p.Fraction; });
         string name = CombineName.Text.Trim();
@@ -343,9 +352,44 @@ public partial class MainWindow : Window
     }
 
     /// <summary>The Showdown Town co-op patch shipped with the app (patches\ShowdownTownCoop.nbpatch).</summary>
-    static string CoopPatch => Path.Combine(AppContext.BaseDirectory, "patches", "ShowdownTownCoop.nbpatch");
+    static string BundledDir => Path.Combine(AppContext.BaseDirectory, "patches");
+    static string CoopPatch => Path.Combine(BundledDir, "ShowdownTownCoop.nbpatch");
+    static string UltraPartsPatch => Path.Combine(BundledDir, "UltraParts.nbpatch");
 
-    async void AddCoop_Click(object sender, RoutedEventArgs e) => await AddEditionAsync(CoopPatch);
+    /// <summary>"Add co-op edition": Showdown Town Co-op with every vehicle part unlocked (whatever each player's save has).</summary>
+    async void AddCoop_Click(object sender, RoutedEventArgs e) => await AddCoopEditionAsync(withUltra: false);
+
+    /// <summary>The same with the ULTRA Parts mod: both players build with the ULTRA parts in town.</summary>
+    async void AddCoopUltra_Click(object sender, RoutedEventArgs e) => await AddCoopEditionAsync(withUltra: true);
+
+    async Task AddCoopEditionAsync(bool withUltra)
+    {
+        if (!AppSettings.IsGameDir(S.GameDir)) { MessageBox.Show(this, "Choose your game folder in Settings first.", "NB Multiplayer"); return; }
+        EditionBusy.Visibility = Visibility.Visible;
+        EditionBusyText.Text = "Preparing..."; EditionBusyBar.Value = 0;
+        EditionsScroll.ScrollToTop();
+        var prog = new Progress<(string Text, double Fraction)>(p => { EditionBusyText.Text = p.Text; EditionBusyBar.Value = p.Fraction; });
+        string dir = S.GameDir;
+        try
+        {
+            var ed = await Task.Run(() =>
+            {
+                ModLibrary.EnsureTweaks(dir);
+                var mods = new List<NB.Core.Project.ModStack.Mod> { ModLibrary.Add(CoopPatch) };
+                if (withUltra) mods.Insert(0, ModLibrary.Add(UltraPartsPatch));
+                var allParts = ModLibrary.List().FirstOrDefault(m => m.Id == "tweak-developer-all-parts");
+                if (allParts != null) mods.Add(allParts);
+                string name = withUltra ? "Showdown Town Co-op + ULTRA" : "Showdown Town Co-op";
+                if (Editions.Find(S, name) is { } old && old.RecipeKey != NB.Core.Project.ModStack.Key(mods.Select(m => m.Sha256)))
+                    Editions.Delete(old);   // the co-op edition of an older NB Multiplayer: replaced by the current one
+                return Editions.Create(S, mods, name, prog);
+            });
+            S.Edition = ed.Name; S.Save();
+            EditionBusyText.Text = $"\"{ed.Name}\" is ready and selected for playing.";
+        }
+        catch (Exception ex) { EditionBusyText.Text = "The edition could not be built: " + ex.Message; }
+        RefreshEditions();
+    }
 
     async void AddEdition_Click(object sender, RoutedEventArgs e)
     {
@@ -359,6 +403,7 @@ public partial class MainWindow : Window
         if (!AppSettings.IsGameDir(S.GameDir)) { MessageBox.Show(this, "Choose your game folder in Settings first.", "NB Multiplayer"); return; }
         if (!File.Exists(patch)) { MessageBox.Show(this, "The patch file is missing: " + patch, "NB Multiplayer"); return; }
         EditionBusy.Visibility = Visibility.Visible;
+        EditionBusyText.Text = "Preparing..."; EditionBusyBar.Value = 0;
         var prog = new Progress<(string Text, double Fraction)>(p => { EditionBusyText.Text = p.Text; EditionBusyBar.Value = p.Fraction; });
         try
         {

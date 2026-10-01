@@ -57,6 +57,58 @@ public static class CaffEdit
     }
 
     /// <summary>
+    /// Copies asset <paramref name="symbol"/> of <paramref name="src"/> into another bundle <paramref name="dst"/> under
+    /// <paramref name="newName"/>: its parts go into the destination's sections of the same names and pointers between its
+    /// own parts are redirected to the copies. Refused when the asset points into data it does not own (shared pools, other
+    /// assets): those pointers would be meaningless in another bundle. Returns the new symbol id (1-based).
+    /// </summary>
+    public static int CopyAsset(CaffFile src, int symbol, CaffFile dst, string newName)
+    {
+        if (symbol < 1 || symbol > src.Symbols.Count) throw new ArgumentOutOfRangeException(nameof(symbol));
+        if (dst.Symbols.Any(s => AssetIds.DisplayName(s).Equals(newName, StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException($"an asset named {newName} already exists in the destination");
+        var own = src.Parts.Select((p, i) => (p, id: i + 1)).Where(x => x.p.Symbol == symbol).ToList();
+        var ownIds = own.Select(x => x.id).ToHashSet();
+        var relocs = src.Relocs.Where(r => ownIds.Contains(r.FromPart)).ToList();
+        var foreign = relocs.Where(r => !ownIds.Contains(r.ToPart)).ToList();
+        if (foreign.Count > 0) throw new InvalidDataException($"{AssetIds.DisplayName(src.Symbols[symbol - 1])} points into {foreign.Count} part(s) it does not own; it cannot be copied to another bundle");
+        int ns;
+        int msIdx = dst.Symbols.IndexOf("manifest");
+        if (msIdx >= 0 && msIdx == dst.Symbols.Count - 1)
+        {
+            dst.Symbols.Insert(msIdx, newName);
+            ns = msIdx + 1;
+            foreach (var p in dst.Parts) if (p.Symbol >= ns) p.Symbol++;
+        }
+        else { dst.Symbols.Add(newName); ns = dst.Symbols.Count; }
+        var map = new Dictionary<int, int>();
+        foreach (var (p, id) in own)
+        {
+            string sec = src.SectionOf(p).Name;
+            int di = dst.Sections.FindIndex(s => s.Name == sec);
+            if (di < 0) throw new InvalidDataException($"the destination bundle has no {sec} section");
+            dst.Parts.Add(new CaffPart { Symbol = ns, Section = di + 1, AlignLog2 = p.AlignLog2, Data = (byte[])p.Data.Clone(), Size = p.Data.Length });
+            map[id] = dst.Parts.Count;
+        }
+        foreach (var r in relocs) dst.Relocs.Add(new CaffReloc(map[r.FromPart], map[r.ToPart], (int[])r.Offsets.Clone()) { Table = r.Table });
+        string oldName = AssetIds.DisplayName(src.Symbols[symbol - 1]);
+        foreach (var (p, id) in own)
+        {
+            var np = dst.Parts[map[id] - 1];
+            if (dst.SectionOf(np).Name != ".stream") continue;
+            var oldBytes = Encoding.Latin1.GetBytes(oldName + "\0");
+            int at = IndexOfLast(np.Data, oldBytes);
+            if (at < 0 || at + oldBytes.Length < np.Data.Length - 4) continue;
+            var nb = Encoding.Latin1.GetBytes(newName + "\0");
+            var nd = new byte[at + nb.Length];
+            Buffer.BlockCopy(np.Data, 0, nd, 0, at); Buffer.BlockCopy(nb, 0, nd, at, nb.Length);
+            np.Data = nd; np.Size = nd.Length;
+        }
+        RegisterInManifest(dst, ns);
+        return ns;
+    }
+
+    /// <summary>
     /// Renames asset <paramref name="symbol"/> (its id follows the name) and a trailing debug name at the end of its
     /// .stream part. For CAFFs without a manifest (streamed single-asset CAFFs of Bundle/50); a manifest entry is updated
     /// when there is one.

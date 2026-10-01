@@ -59,12 +59,28 @@ public sealed class CoopNet : IDisposable
         return p;
     }
 
-    public void SendLocal(CoopState st)
+    /// <summary>Weapon damage the local player dealt to <paramref name="target"/> (by player id), from position <paramref name="from"/>.</summary>
+    public void SendDamage(long target, float amount, System.Numerics.Vector3 from)
     {
-        var p = Packet(MyId, st, _myName);
+        var p = new byte[32];
+        p[0] = (byte)'N'; p[1] = (byte)'B'; p[2] = (byte)'C'; p[3] = (byte)'O'; p[4] = 2;
+        BE.W64(p, 8, (ulong)target); BE.WF32(p, 16, amount); BE.WF32(p, 20, from.X); BE.WF32(p, 24, from.Y); BE.WF32(p, 28, from.Z);
+        Send(p);
+    }
+
+    /// <summary>Damage other players dealt to the local player (amount, attacker position).</summary>
+    public readonly ConcurrentQueue<(float Amount, System.Numerics.Vector3 From)> Damage = new();
+
+    void Send(byte[] p)
+    {
         if (_isHost) { foreach (var peer in _peers.Values) Try(() => peer.Send(p)); }
         else if (_steamClient != null) Try(() => _steamClient.SendCoop(p));
         else if (_udp != null && _hostUdp != null) Try(() => _udp.Send(p, p.Length, _hostUdp));
+    }
+
+    public void SendLocal(CoopState st)
+    {
+        Send(Packet(MyId, st, _myName));
     }
 
     static void Try(Action a) { try { a(); } catch (Exception) { } }
@@ -86,7 +102,19 @@ public sealed class CoopNet : IDisposable
 
     void OnPacket(byte[] p, string from, Action<byte[]>? reply)
     {
-        if (p.Length < 16 + CoopState.Size || p[0] != 'N' || p[1] != 'B' || p[2] != 'C' || p[3] != 'O') return;
+        if (p.Length < 32 || p[0] != 'N' || p[1] != 'B' || p[2] != 'C' || p[3] != 'O') return;
+        if (p[4] == 2)
+        {
+            // damage: for the local player, or forwarded by the host to the player it is for
+            if ((long)BE.U64(p, 8) == MyId) Damage.Enqueue((BE.F32(p, 16), new System.Numerics.Vector3(BE.F32(p, 20), BE.F32(p, 24), BE.F32(p, 28))));
+            if (_isHost && reply != null)
+            {
+                _peers[from] = (reply, DateTime.UtcNow);
+                foreach (var (key, peer) in _peers) if (key != from) Try(() => peer.Send(p));
+            }
+            return;
+        }
+        if (p.Length < 16 + CoopState.Size) return;
         long id = (long)BE.U64(p, 8);
         int nl = BE.U16(p, 6);
         string name = 16 + CoopState.Size + nl <= p.Length ? System.Text.Encoding.UTF8.GetString(p, 16 + CoopState.Size, nl) : "?";
@@ -150,7 +178,9 @@ public sealed class CoopService : IDisposable
                 var local = sync!.ReadLocal();
                 _net.SendLocal(local);
                 var remotes = _net.Live();
+                while (_net.Damage.TryDequeue(out var hit)) sync.QueueDamage(hit.Amount, hit.From);
                 sync.Apply(remotes);
+                foreach (var (id, dmg) in sync.TakePuppetDamage()) _net.SendDamage(id, dmg, local.Position);
                 Status = remotes.Count == 0 ? "In Showdown Town, waiting for other players..."
                     : $"Co-op: {string.Join(", ", _net.Remotes.Values.Select(r => r.Name))} - {sync.Status}";
                 Thread.Sleep(33);

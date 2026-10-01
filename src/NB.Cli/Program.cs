@@ -1333,6 +1333,23 @@ static class Program
                     Console.WriteLine($"inserted {cmd.Length}-byte command after 0x{after:X}; header {Convert.ToHexString(sc.Header)}");
                     return 0;
                 }
+                case "asset-copy":
+                {
+                    // asset-copy <workspace> <src bundle hex> <src asset> <dst bundle hex> [new name]: copy a self-contained asset (no
+                    // pointers into shared data, e.g. a vehicle blueprint) into another resident bundle
+                    var ws = NB.Core.Project.Workspace.Open(args[1]);
+                    uint sb = Convert.ToUInt32(args[2], 16), db = Convert.ToUInt32(args[4], 16);
+                    string src = args[3], nn = args.Length > 5 ? args[5] : src;
+                    var sc = ws.LoadResident(sb);
+                    int ss = sc.Symbols.FindIndex(s => NB.Core.Formats.AssetIds.DisplayName(s) == src) + 1;
+                    if (ss == 0) throw new InvalidDataException($"{src} not in {sb:x6}");
+                    var dc = ws.LoadResident(db);
+                    int ns = NB.Core.Formats.CaffEdit.CopyAsset(sc, ss, dc, nn);
+                    ws.SaveResident(db, dc, $"{nn}: copied from {src} ({sb:x6})");
+                    Console.WriteLine($"{nn} ({NB.Core.Formats.AssetIds.IdOf(nn):X8}) in {db:x6} = {src} from {sb:x6}: {dc.PartsOf(ns).Count()} part(s)");
+                    NB.Core.Project.AssetIndex.LoadOrBuild(ws, null, true);
+                    return 0;
+                }
                 case "objparams-copy":
                 {
                     // objparams-copy <workspace> <src bundle hex> <src asset> <dst bundle hex> <dst template asset> [new name]
@@ -1419,8 +1436,8 @@ static class Program
                     // vehicle blueprint (4f/685374)
                     string veh = Opt("--vehicle", "aid_vehicle_banjox_ultra_ai1");
                     var common = ws.LoadResident(0x685374);
-                    if (!common.Symbols.Any(s => NB.Core.Formats.AssetIds.DisplayName(s) == veh))
-                    {
+                    if (!common.Symbols.Any(s => NB.Core.Formats.AssetIds.DisplayName(s) == veh) && !caff.Symbols.Any(s => NB.Core.Formats.AssetIds.DisplayName(s) == veh))
+                    {   // (a vehicle already in the world bundle, e.g. from asset-copy, is used as is)
                         string vt = Opt("--vehicle-template", "aid_vehicle_banjox_test_gm_sdt1");
                         int vs = common.Symbols.FindIndex(s => NB.Core.Formats.AssetIds.DisplayName(s) == vt) + 1;
                         if (vs == 0) throw new InvalidDataException($"vehicle template {vt} not in 685374");
@@ -2057,7 +2074,7 @@ static class Program
                 case "patch-build":
                 {
                     // patch-build <workspace> <out.nbpatch> [--name N] [--author A] [--desc D] [--version V] [--id ID] [--multiplayer cosmetic|world|coop]
-                    //             [--requires id,id] [--conflicts id,id] [--no-exe] [--extra key=value ...]: differential patch of every modified file
+                    //             [--requires id,id] [--conflicts id,id] [--category map|parts|gameplay|visual|audio|tweak|coop] [--tags a,b] [--no-exe] [--extra key=value ...]: differential patch of every modified file
                     // (--extra: settings for tools, e.g. mode=coop puppetBlueprint=00123456 for NB Multiplayer)
                     var ws = NB.Core.Project.Workspace.Open(args[1]);
                     string Opt(string k, string d) { int i = Array.IndexOf(args, k); return i >= 0 && i + 1 < args.Length ? args[i + 1] : d; }
@@ -2071,6 +2088,7 @@ static class Program
                             List<string> Ids(string k) => Opt(k, "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
                             m.Version = Opt("--version", m.Version); m.Id = Opt("--id", m.Id); m.Multiplayer = Opt("--multiplayer", m.Multiplayer);
                             m.Requires = Ids("--requires"); m.Conflicts = Ids("--conflicts");
+                            m.Category = Opt("--category", m.Category); m.Tags = Ids("--tags");
                         });
                     Console.WriteLine($"mod {man.Id} {man.Version}  multiplayer: {(man.Multiplayer.Length > 0 ? man.Multiplayer : "(not stated)")}");
                     foreach (var f in man.Files) Console.WriteLine($"{f.Kind,-5} {f.Path}: {f.TargetSize:N0} bytes = {f.CopiedBytes:N0} copied from the original + {f.LiteralBytes:N0} new");

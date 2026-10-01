@@ -235,6 +235,95 @@ public static class ExePatches
             new ExeWord(0x82D09324, 0x00000000, 0x4B6D0AFC, "fail: b 0x823D9E20 (li r3,0: no result)"),
         });
 
+    public static readonly ExeMod CoopRemoteDamage = new(
+        "coop-remote-damage",
+        "Co-op: damage from other players (NB Multiplayer applies hits on your vehicle through the game's own block damage)",
+        "Showdown Town co-op runs each player's own game; the other players are puppet vehicles (blueprint 0x00EA74B4). Block " +
+        "damage reaches the health routine 0x82203D00 per contact through 0x825F17E8(vehicle, block, f1 damage, ..., r8 contact) and " +
+        "per block of an explosion through 0x826127D8 (call at 0x82612870). Both are hooked (0x82D2129C, 0x82D212CC): for a puppet " +
+        "the hit is logged by 0x82D21270 in an 8-entry ring in the unused tail of .data (0x82FBCB00 +0x40 count, +0x50 + 16 x (count " +
+        "& 7): vehicle, f32 damage, the contact's other material at +0xB0 or -1 for explosions) and nothing is damaged, so puppets " +
+        "never break; NB Multiplayer sends the damage to the puppet's player. The contact-damage pass 0x825F1AE0(vehicle) starts " +
+        "with a branch to 0x82D09230: when the mailbox (+0 request seq, +4 done seq, +8 vehicle, +0xC block, +0x10 f32 damage, " +
+        "+0x20 vec4 contact point) holds a new request for this vehicle, it is marked done and 0x825F17E8(vehicle, block, damage, " +
+        "&point, 1, 0) applies it: the game's own block damage (at zero health 0x825F1C60 breaks the block off). Code caves: " +
+        "padding after .text and after the first .embsec_ section. Assembled by coop/remote_damage_asm.py.",
+        "Static analysis 2026-10-01 (block damage path traced from the health field +0x270); in-game result: coop/TESTLOG.md.",
+        new[]
+        {
+            new ExeWord(0x825F1AE0, 0x7D8802A6, 0x48717750, "b 0x82d09230 (was mflr r12): co-op remote damage"),
+            new ExeWord(0x82D09230, 0x00000000, 0x3D6082FC, "lis r11,0x82fc"),
+            new ExeWord(0x82D09234, 0x00000000, 0x396BCB00, "addi r11,r11,-0x3500  r11 = mailbox 0x82fbcb00"),
+            new ExeWord(0x82D09238, 0x00000000, 0x818B0000, "lwz r12,0(r11)  request seq"),
+            new ExeWord(0x82D0923C, 0x00000000, 0x800B0004, "lwz r0,4(r11)  done seq"),
+            new ExeWord(0x82D09240, 0x00000000, 0x7F0C0000, "cmpw cr6,r12,r0"),
+            new ExeWord(0x82D09244, 0x00000000, 0x419A0074, "beq cr6 -> nothing pending"),
+            new ExeWord(0x82D09248, 0x00000000, 0x800B0008, "lwz r0,8(r11)  vehicle"),
+            new ExeWord(0x82D0924C, 0x00000000, 0x7F001800, "cmpw cr6,r0,r3"),
+            new ExeWord(0x82D09250, 0x00000000, 0x409A0068, "bne cr6 -> not this vehicle"),
+            new ExeWord(0x82D09254, 0x00000000, 0x918B0004, "stw r12,4(r11)  done seq = request seq"),
+            new ExeWord(0x82D09258, 0x00000000, 0x808B000C, "lwz r4,0xC(r11)  block"),
+            new ExeWord(0x82D0925C, 0x00000000, 0x81231488, "lwz r9,0x1488(r3)  block entries"),
+            new ExeWord(0x82D09260, 0x00000000, 0x8143148C, "lwz r10,0x148C(r3)  end"),
+            new ExeWord(0x82D09264, 0x00000000, 0x7F095040, "cmplw cr6,r9,r10"),
+            new ExeWord(0x82D09268, 0x00000000, 0x40980050, "bge cr6 -> block no longer on this vehicle"),
+            new ExeWord(0x82D0926C, 0x00000000, 0x80090004, "lwz r0,4(r9)  entry block"),
+            new ExeWord(0x82D09270, 0x00000000, 0x7F002040, "cmplw cr6,r0,r4"),
+            new ExeWord(0x82D09274, 0x00000000, 0x419A000C, "beq cr6 -> found"),
+            new ExeWord(0x82D09278, 0x00000000, 0x392900B0, "addi r9,r9,0xB0"),
+            new ExeWord(0x82D0927C, 0x00000000, 0x4BFFFFE8, "b loop"),
+            new ExeWord(0x82D09280, 0x00000000, 0x7D8802A6, "mflr r12"),
+            new ExeWord(0x82D09284, 0x00000000, 0x9181FFF8, "stw r12,-0x8(r1)"),
+            new ExeWord(0x82D09288, 0x00000000, 0x9421FFA0, "stwu r1,-0x60(r1)"),
+            new ExeWord(0x82D0928C, 0x00000000, 0x90610050, "stw r3,0x50(r1)  keep the vehicle for the original function"),
+            new ExeWord(0x82D09290, 0x00000000, 0xC02B0010, "lfs f1,0x10(r11)  damage"),
+            new ExeWord(0x82D09294, 0x00000000, 0x38CB0020, "addi r6,r11,0x20  contact point"),
+            new ExeWord(0x82D09298, 0x00000000, 0x38A00000, "li r5,0"),
+            new ExeWord(0x82D0929C, 0x00000000, 0x38E00001, "li r7,1"),
+            new ExeWord(0x82D092A0, 0x00000000, 0x39000000, "li r8,0  no contact record"),
+            new ExeWord(0x82D092A4, 0x00000000, 0x4B8E8545, "bl 0x825f17e8  the game's block damage (breaks the block off when its health runs out)"),
+            new ExeWord(0x82D092A8, 0x00000000, 0x80610050, "lwz r3,0x50(r1)"),
+            new ExeWord(0x82D092AC, 0x00000000, 0x38210060, "addi r1,r1,0x60"),
+            new ExeWord(0x82D092B0, 0x00000000, 0x8181FFF8, "lwz r12,-0x8(r1)"),
+            new ExeWord(0x82D092B4, 0x00000000, 0x7D8803A6, "mtlr r12"),
+            new ExeWord(0x82D092B8, 0x00000000, 0x7D8802A6, "mflr r12  (the instruction the hook replaced)"),
+            new ExeWord(0x82D092BC, 0x00000000, 0x4B8E8828, "b 0x825f1ae4  back into the contact-damage pass"),
+            new ExeWord(0x825F17E8, 0x7D8802A6, 0x4872FAB4, "b 0x82d2129c (was mflr r12): puppet hits are logged, not applied"),
+            new ExeWord(0x82612870, 0x4BBF1491, 0x4870EA5D, "bl 0x82d212cc (was bl 0x82203d00): explosion damage on puppets is logged, not applied"),
+            new ExeWord(0x82D21270, 0x00000000, 0x3D6082FC, "lis r11,0x82fc"),
+            new ExeWord(0x82D21274, 0x00000000, 0x396BCB00, "addi r11,r11,-0x3500  mailbox"),
+            new ExeWord(0x82D21278, 0x00000000, 0x812B0040, "lwz r9,0x40(r11)  hit count"),
+            new ExeWord(0x82D2127C, 0x00000000, 0x552A2676, "rlwinm r10,r9,4,25,27  (count & 7) * 16"),
+            new ExeWord(0x82D21280, 0x00000000, 0x7D4A5A14, "add r10,r10,r11"),
+            new ExeWord(0x82D21284, 0x00000000, 0x906A0050, "stw r3,0x50(r10)  puppet vehicle"),
+            new ExeWord(0x82D21288, 0x00000000, 0xD02A0054, "stfs f1,0x54(r10)  damage"),
+            new ExeWord(0x82D2128C, 0x00000000, 0x900A0058, "stw r0,0x58(r10)  other material of the contact"),
+            new ExeWord(0x82D21290, 0x00000000, 0x39290001, "addi r9,r9,1"),
+            new ExeWord(0x82D21294, 0x00000000, 0x912B0040, "stw r9,0x40(r11)"),
+            new ExeWord(0x82D21298, 0x00000000, 0x4E800020, "blr"),
+            new ExeWord(0x82D2129C, 0x00000000, 0x800318A4, "lwz r0,0x18A4(r3)  vehicle blueprint id"),
+            new ExeWord(0x82D212A0, 0x00000000, 0x3D8000EA, "lis r12,0xea"),
+            new ExeWord(0x82D212A4, 0x00000000, 0x618C74B4, "ori r12,r12,0x74b4  co-op puppet blueprint"),
+            new ExeWord(0x82D212A8, 0x00000000, 0x7F006000, "cmpw cr6,r0,r12"),
+            new ExeWord(0x82D212AC, 0x00000000, 0x409A0018, "bne cr6 -> not a puppet"),
+            new ExeWord(0x82D212B0, 0x00000000, 0x3800FFFF, "li r0,-1"),
+            new ExeWord(0x82D212B4, 0x00000000, 0x2B080000, "cmplwi cr6,r8,0  contact record?"),
+            new ExeWord(0x82D212B8, 0x00000000, 0x419AFFB8, "beq cr6 -> 0x82d21270"),
+            new ExeWord(0x82D212BC, 0x00000000, 0x800800B0, "lwz r0,0xB0(r8)  the contact's other material"),
+            new ExeWord(0x82D212C0, 0x00000000, 0x4BFFFFB0, "b 0x82d21270  puppet: log the hit (returns to the caller), no damage"),
+            new ExeWord(0x82D212C4, 0x00000000, 0x7D8802A6, "mflr r12  (the instruction the hook replaced)"),
+            new ExeWord(0x82D212C8, 0x00000000, 0x4B8D0524, "b 0x825f17ec"),
+            new ExeWord(0x82D212CC, 0x00000000, 0x801E18A4, "lwz r0,0x18A4(r30)  vehicle blueprint id"),
+            new ExeWord(0x82D212D0, 0x00000000, 0x3D8000EA, "lis r12,0xea"),
+            new ExeWord(0x82D212D4, 0x00000000, 0x618C74B4, "ori r12,r12,0x74b4  co-op puppet blueprint"),
+            new ExeWord(0x82D212D8, 0x00000000, 0x7F006000, "cmpw cr6,r0,r12"),
+            new ExeWord(0x82D212DC, 0x00000000, 0x409A0010, "bne cr6 -> not a puppet"),
+            new ExeWord(0x82D212E0, 0x00000000, 0x7FC3F378, "mr r3,r30  the puppet"),
+            new ExeWord(0x82D212E4, 0x00000000, 0x3800FFFF, "li r0,-1  explosion"),
+            new ExeWord(0x82D212E8, 0x00000000, 0x4BFFFF88, "b 0x82d21270  log the explosion damage of this block, no damage"),
+            new ExeWord(0x82D212EC, 0x00000000, 0x4B4E2A14, "b 0x82203d00  block health as before"),
+        });
+
     public static readonly ExeMod PhotoCameraUnlimited = new(
         "photo-camera-unlimited",
         "Unlimited photo camera range",
@@ -450,7 +539,7 @@ public static class ExePatches
 
     public static string FamilyOf(string id) => id.StartsWith("vehicle-part-limit") ? "vehicle-part-limit" : id.StartsWith("garage-build-area") ? "garage-build-area" : "";
 
-    public static readonly IReadOnlyList<ExeMod> All = new[] { ChangeVehicleInTown, TownVehiclesNormalRules, AiSpringTimer, TownAiRestartOnChangeVehicle, DeveloperMainMenu, DeveloperAllParts, WorldBounds2048, NoEscapeReset, TownNpcPathGuard, DrawDistanceX4, PhotoCameraUnlimited, PauseOpensPhotos, GarageBuildArea31, VehiclePartLimit400 };
+    public static readonly IReadOnlyList<ExeMod> All = new[] { ChangeVehicleInTown, TownVehiclesNormalRules, AiSpringTimer, TownAiRestartOnChangeVehicle, DeveloperMainMenu, DeveloperAllParts, WorldBounds2048, NoEscapeReset, TownNpcPathGuard, CoopRemoteDamage, DrawDistanceX4, PhotoCameraUnlimited, PauseOpensPhotos, GarageBuildArea31, VehiclePartLimit400 };
 
     /// <summary>Checks that every patched word currently holds its original value in the decrypted image.</summary>
     public static List<string> Check(byte[] image, uint imageBase, ExeMod mod)
