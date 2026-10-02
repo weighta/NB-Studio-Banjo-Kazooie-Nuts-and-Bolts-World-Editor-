@@ -16,7 +16,7 @@ public sealed partial class CoopSync
 {
     const uint FMailbox = 0x82FBF420, FSlots = 0x82FBF700, FIndicators = 0x82FBF800;
     const uint FHook = 0x8225126C, FHookWord = 0x48B11A5C, FCave = 0x82D62CC8, FCaveFirstWord = 0x3D8082FB;
-    enum FOp : uint { Eject = 1, Seat = 2 }
+    enum FOp : uint { Eject = 1, Seat = 2, Respawn = 4 }
     public const uint IndicatorVehicleEdit = 0x6E, IndicatorMumboPad = 0x79;
 
     bool? _footMod;
@@ -41,13 +41,20 @@ public sealed partial class CoopSync
         if (_fop is not { } op) return _x.U32(FMailbox) != _x.U32(FMailbox + 4);
         if (_x.U32(FMailbox + 4) != op.Seq)
         {
-            if (DateTime.UtcNow - op.At > TimeSpan.FromSeconds(2)) _fop = null;   // no local avatar update (menu, load): drop it
+            // no local avatar update (menu, load): drop it - except a RESPAWN, which would still run later (no puppet
+            // writes until it has; a town reload ends it: the mailbox is rewritten with the level)
+            if (op.Op != FOp.Respawn && DateTime.UtcNow - op.At > TimeSpan.FromSeconds(2)) _fop = null;
+            else if (op.Op == FOp.Respawn && DateTime.UtcNow - op.At > TimeSpan.FromSeconds(30)) { _fop = null; OnRespawned(false); }
             return true;
         }
-        if (!op.Done) { op.Done = true; return true; }
+        if (!op.Done) { op.Done = true; op.At = DateTime.UtcNow; return true; }
+        // a RESPAWN runs a whole despawn + spawn on the game thread after the cave marked it done: its result is read
+        // half a second later (it only refuses without a level)
+        if (op.Op == FOp.Respawn && DateTime.UtcNow - op.At < TimeSpan.FromMilliseconds(500)) return true;
         _fop = null;
         uint res = _x.U32(FMailbox + 0x14);
         FootRequests[op.Op + (res != 0 ? "" : " refused")] = FootRequests.GetValueOrDefault(op.Op + (res != 0 ? "" : " refused")) + 1;
+        if (op.Op == FOp.Respawn) { OnRespawned(true); return false; }
         if (!_walkers.TryGetValue(op.Id, out var w) || w.R != op.R) return false;
         if (op.Op == FOp.Eject) { if (res != 0) w.Out = true; else _walkers.Remove(op.Id); }
         else if (op.Op == FOp.Seat)

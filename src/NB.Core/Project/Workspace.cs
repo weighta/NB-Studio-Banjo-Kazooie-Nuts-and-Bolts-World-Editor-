@@ -136,9 +136,46 @@ public sealed class Workspace
     public BundleArchive LoadStream(uint bundle) => BundleArchive.Read(File.ReadAllBytes(Game.StreamPath(bundle)));
 
     /// <summary>Writes a modified resident bundle (uncompressed CAFF — the game accepts both) and logs the change.</summary>
+    int _batch;
+    readonly Dictionary<uint, (CaffFile Caff, List<string> Descriptions)> _deferred = new();
+
+    /// <summary>
+    /// Batches resident saves until the returned scope is disposed: a mod with thousands of world edits (character select)
+    /// loads and writes each bundle once instead of once per edit. Inside the batch every load returns the edited bundle.
+    /// </summary>
+    public IDisposable Batch() { _batch++; return new BatchScope(this); }
+
+    sealed class BatchScope : IDisposable
+    {
+        Workspace? _ws;
+        public BatchScope(Workspace ws) { _ws = ws; }
+        public void Dispose()
+        {
+            if (_ws is not { } ws) return;
+            _ws = null;
+            if (--ws._batch > 0) return;
+            var pending = ws._deferred.ToList(); ws._deferred.Clear();
+            foreach (var (b, (caff, ds)) in pending)
+                ws.WriteResident(b, caff, ds.Count == 1 ? ds[0] : $"{ds.Count} world edits: " + string.Join("; ", ds.Distinct().Take(6)) + (ds.Distinct().Count() > 6 ? " ..." : ""));
+        }
+    }
+
     public void SaveResident(uint bundle, CaffFile caff, string description)
     {
         bundle &= 0xFFFFFF;
+        if (_batch > 0)
+        {
+            _residentCache[bundle] = caff;
+            if (!_deferred.TryGetValue(bundle, out var d)) _deferred[bundle] = d = (caff, new List<string>());
+            _deferred[bundle] = (caff, d.Descriptions);
+            d.Descriptions.Add(description);
+            return;
+        }
+        WriteResident(bundle, caff, description);
+    }
+
+    void WriteResident(uint bundle, CaffFile caff, string description)
+    {
         var bytes = caff.Write();
         // sanity: the written file must parse back and keep its checksum valid
         var check = CaffFile.Read(bytes);

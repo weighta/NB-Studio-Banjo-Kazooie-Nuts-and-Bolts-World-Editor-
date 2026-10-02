@@ -62,6 +62,66 @@ public static class CaffEdit
     /// own parts are redirected to the copies. Refused when the asset points into data it does not own (shared pools, other
     /// assets): those pointers would be meaningless in another bundle. Returns the new symbol id (1-based).
     /// </summary>
+    /// <summary>
+    /// Cross-bundle copy of an asset whose only foreign pointers go to the source bundle's shared "pool" .data string table
+    /// (animations point at interned joint-name strings there): each such pointer is retargeted to the same string in the
+    /// destination pool's .data (appended when missing). Assets without foreign pointers are copied as
+    /// <see cref="CopyAsset"/>. Research: coop/research/charsel (character select copies 300 animations this way).
+    /// </summary>
+    public static int CopyAssetWithPoolStrings(CaffFile src, int symbol, CaffFile dst, string newName)
+    {
+        static int Sym(CaffFile c, string name) => c.Symbols.FindIndex(s => AssetIds.DisplayName(s) == name) + 1;
+        var own = src.Parts.Select((p, i) => (p, id: i + 1)).Where(x => x.p.Symbol == symbol).ToList();
+        var ownIds = own.Select(x => x.id).ToHashSet();
+        var foreign = src.Relocs.Where(r => ownIds.Contains(r.FromPart) && !ownIds.Contains(r.ToPart)).ToList();
+        if (foreign.Count == 0) return CopyAsset(src, symbol, dst, newName);
+        int srcPool = Sym(src, "pool"), dstPool = Sym(dst, "pool");
+        foreach (var r in foreign)
+        {
+            var tp = src.Parts[r.ToPart - 1];
+            if (tp.Symbol != srcPool || src.SectionOf(tp).Name != ".data")
+                throw new InvalidDataException($"{newName}: points into {AssetIds.DisplayName(src.Symbols[tp.Symbol - 1])} {src.SectionOf(tp).Name}; it cannot be copied to another bundle");
+        }
+        if (dstPool == 0) throw new InvalidDataException("the destination bundle has no pool");
+        int dstPoolData = dst.Parts.FindIndex(p => p.Symbol == dstPool && dst.SectionOf(p).Name == ".data") + 1;
+        if (dstPoolData == 0) throw new InvalidDataException("the destination pool has no .data part");
+        var dpd = dst.Parts[dstPoolData - 1];
+        // copy without the foreign pointers (removed from the source for the copy, then restored)
+        var saved = src.Relocs.ToList();
+        src.Relocs.RemoveAll(r => foreign.Contains(r));
+        int ns;
+        try { ns = CopyAsset(src, symbol, dst, newName); }
+        finally { src.Relocs.Clear(); src.Relocs.AddRange(saved); }
+        var newParts = dst.Parts.Select((p, i) => (p, id: i + 1)).Where(x => x.p.Symbol == ns).Select(x => x.id).ToList();
+        var map = own.Select((x, k) => (x.id, nid: newParts[k])).ToDictionary(t => t.id, t => t.nid);
+        var pool = new List<byte>(dpd.Data);
+        var index = new Dictionary<string, int>();
+        // existing strings of the destination pool (NUL-separated)
+        for (int i = 0, start = 0; i < dpd.Data.Length; i++)
+            if (dpd.Data[i] == 0) { if (i > start) index.TryAdd(System.Text.Encoding.Latin1.GetString(dpd.Data, start, i - start), start); start = i + 1; }
+        int Find(string s)
+        {
+            if (index.TryGetValue(s, out var at)) return at;
+            at = pool.Count; pool.AddRange(System.Text.Encoding.Latin1.GetBytes(s + "\0"));
+            return index[s] = at;
+        }
+        foreach (var r in foreign)
+        {
+            var sp = src.Parts[r.FromPart - 1]; var tp = src.Parts[r.ToPart - 1];
+            var np = dst.Parts[map[r.FromPart] - 1];
+            foreach (int o in r.Offsets)
+            {
+                int t = (int)NB.Core.IO.BE.U32(sp.Data, o);
+                int e = Array.IndexOf(tp.Data, (byte)0, t);
+                NB.Core.IO.BE.W32(np.Data, o, (uint)Find(System.Text.Encoding.Latin1.GetString(tp.Data, t, e - t)));
+            }
+            dst.Relocs.Add(new CaffReloc(map[r.FromPart], dstPoolData, (int[])r.Offsets.Clone()) { Table = r.Table });
+        }
+        while (pool.Count % 4 != 0) pool.Add(0);
+        dpd.Data = pool.ToArray(); dpd.Size = dpd.Data.Length;
+        return ns;
+    }
+
     public static int CopyAsset(CaffFile src, int symbol, CaffFile dst, string newName)
     {
         if (symbol < 1 || symbol > src.Symbols.Count) throw new ArgumentOutOfRangeException(nameof(symbol));

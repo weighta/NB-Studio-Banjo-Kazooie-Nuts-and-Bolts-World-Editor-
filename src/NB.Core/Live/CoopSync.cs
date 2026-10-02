@@ -24,7 +24,7 @@ public enum CoopMode : byte
 [Flags]
 public enum CoopFlags : byte { None = 0, Menu = 1, Photo = 2 }
 
-/// <summary>One player's state, as sent 30 times a second in Showdown Town co-op (protocol 4).</summary>
+/// <summary>One player's state, as sent 30 times a second in Showdown Town co-op (protocol 5).</summary>
 public struct CoopState
 {
     public CoopMode Mode;
@@ -42,6 +42,8 @@ public struct CoopState
     /// <summary>On foot: Banjo's body state id ([[avatar+0xAC8]+0x670]: walk 146, jump 79, wrench spin 150..152...;
     /// 0 = keep the last one). Rotation is then his heading (a rotation about Y).</summary>
     public ushort BodyState;
+    /// <summary>The player's character (protocol 5): <see cref="CoopCharacters"/> index, 0 = Banjo.</summary>
+    public byte Character;
 
     public bool InVehicle => Mode == CoopMode.Vehicle;
     /// <summary>In Showdown Town and visible to the others.</summary>
@@ -57,7 +59,7 @@ public struct CoopState
         foreach (var f in new[] { Position.X, Position.Y, Position.Z, Rotation.X, Rotation.Y, Rotation.Z, Rotation.W,
                                   Velocity.X, Velocity.Y, Velocity.Z, AngularVelocity.X, AngularVelocity.Y, AngularVelocity.Z })
         { BE.WF32(b, o, f); o += 4; }
-        BE.W32(b, o, Blueprint); BE.W32(b, o + 4, Seq); BE.W32(b, o + 8, Design); BE.W16(b, o + 12, BodyState);
+        BE.W32(b, o, Blueprint); BE.W32(b, o + 4, Seq); BE.W32(b, o + 8, Design); BE.W16(b, o + 12, BodyState); b[o + 14] = Character;
         return b;
     }
     public static CoopState Read(byte[] b)
@@ -69,7 +71,7 @@ public struct CoopState
             Position = new(F(0), F(1), F(2)), Rotation = new(F(3), F(4), F(5), F(6)),
             Velocity = new(F(7), F(8), F(9)), AngularVelocity = new(F(10), F(11), F(12)),
             Blueprint = BE.U32(b, 4 + 13 * 4), Seq = BE.U32(b, 4 + 14 * 4), Design = BE.U32(b, 4 + 15 * 4),
-            BodyState = BE.U16(b, 4 + 16 * 4),
+            BodyState = BE.U16(b, 4 + 16 * 4), Character = b[4 + 16 * 4 + 2],
         };
     }
 }
@@ -294,6 +296,12 @@ public sealed partial class CoopSync
     public void Apply(IReadOnlyDictionary<long, CoopRemote> remotes)
     {
         Rescan();
+        if (HasRespawn)
+        {
+            if (_respawnPending) { FootBusy(); Status = "respawning the puppets (characters)"; return; }   // no writes into puppets meanwhile
+            CharactersLevel();
+            MapRoutes();                                                   // new puppets still stand on their spawn points
+        }
         // a player who changes vehicle keeps his old vehicle standing (with the vehicle-edit icon) until the new one is here
         static bool Kept(CoopState s) => s.Shown || s.Mode == CoopMode.Building;
         foreach (var gone in _assigned.Keys.Where(k => !remotes.TryGetValue(k, out var r) || !Kept(r.State)).ToList())
@@ -310,7 +318,7 @@ public sealed partial class CoopSync
             if (!_assigned.TryGetValue(id, out var veh))
             {
                 if (_free.Count == 0) continue;
-                veh = _free[0]; _free.RemoveAt(0); _assigned[id] = veh;
+                veh = PickPuppet(r); _free.Remove(veh); _assigned[id] = veh;
                 _hidden.Remove(veh);
                 _apart.Remove(veh);
                 if (!Quiet(veh) && Alive(veh) && Finite(st)) Teleport(BodyOf(_x, veh), Apart(veh, st.Position, teleport: true) + new Vector3(0, 0.5f, 0));   // appears where the player is (beside us if that is here)
@@ -341,6 +349,7 @@ public sealed partial class CoopSync
         PumpVehicles(remotes);
         SteerPieces();
         Indicators(remotes);
+        CharactersTick(remotes);
         Status = $"{shown} player(s) shown, {PuppetCount} puppet vehicle(s) available";
     }
 

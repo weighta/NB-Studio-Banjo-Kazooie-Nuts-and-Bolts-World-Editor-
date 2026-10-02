@@ -15,6 +15,8 @@ public sealed class AppSettings
     public long Instance { get; set; }
     public string LastJoin { get; set; } = "";
     public string Edition { get; set; } = Editions.VanillaName;
+    /// <summary>Character Select: who the player plays as (NB.Core.Mods.Characters key; "banjo" = the normal game).</summary>
+    public string Character { get; set; } = "banjo";
     public bool CheckForUpdates { get; set; } = true;
     public string SkippedVersion { get; set; } = "";
     public string HostAddress { get; set; } = "";

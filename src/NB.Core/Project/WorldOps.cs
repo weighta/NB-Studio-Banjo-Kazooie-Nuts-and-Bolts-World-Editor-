@@ -18,13 +18,17 @@ namespace NB.Core.Project;
 ///   asset-copy     &lt;src bundle&gt; &lt;src asset&gt; &lt;dst bundle&gt; [new name]
 ///   ai-route       &lt;world bundle&gt; &lt;marker asset&gt; [options, see NB.Cli]
 ///   script-insert  &lt;bundle&gt; &lt;script asset&gt; &lt;after&gt; &lt;command hex words...&gt;
+///   asset-set      &lt;bundle&gt; &lt;asset&gt; &lt;offset hex&gt;=&lt;u32 hex | asset name&gt; ...   (many words of any asset's .data)
+///   model-keep-joints &lt;bundle&gt; &lt;model&gt; &lt;new model&gt; &lt;joint&gt;   (a copy showing only that joint's subtree)
 /// </code>
+/// asset-copy also copies assets that point into their bundle's shared string pool (animations): the strings are
+/// re-pointed at (or added to) the destination pool. Mods replay their ops in one batch (each bundle written once).
 /// script-insert's "after" is a hex offset, or <c>op:8D</c> = after the first command with that opcode (found by
 /// content, so it still works when another mod changed the script before it).
 /// </summary>
 public static class WorldOps
 {
-    public static readonly string[] Names = { "objparams-copy", "objparams-set", "asset-copy", "ai-route", "script-insert" };
+    public static readonly string[] Names = { "objparams-copy", "objparams-set", "asset-copy", "ai-route", "script-insert", "asset-set", "model-keep-joints" };
 
     static string Disp(string s) => AssetIds.DisplayName(s);
     static int Sym(CaffFile c, string name) => c.Symbols.FindIndex(s => Disp(s) == name) + 1;
@@ -35,7 +39,8 @@ public static class WorldOps
     public static string? Problem(IReadOnlyList<string> op)
     {
         if (op.Count == 0) return "empty op";
-        int min = op[0] switch { "objparams-copy" => 5, "objparams-set" => 4, "asset-copy" => 4, "ai-route" => 3, "script-insert" => 5, _ => -1 };
+        int min = op[0] switch { "objparams-copy" => 5, "objparams-set" => 4, "asset-copy" => 4, "ai-route" => 3, "script-insert" => 5,
+                                 "asset-set" => 4, "model-keep-joints" => 5, _ => -1 };
         if (min < 0) return $"unknown op \"{op[0]}\" (a newer NB Studio / NB Multiplayer may be needed)";
         return op.Count < min ? $"{op[0]}: {min - 1} or more arguments expected" : null;
     }
@@ -54,7 +59,87 @@ public static class WorldOps
             case "asset-copy": AssetCopy(ws, a, log); break;
             case "ai-route": AiRouteOp(ws, a, log); break;
             case "script-insert": ScriptInsert(ws, a, log); break;
+            case "asset-set": AssetSet(ws, a, log); break;
+            case "model-keep-joints": ModelKeepJoints(ws, a, log); break;
         }
+    }
+
+    /// <summary>Runs a list of ops with each touched bundle written once at the end.</summary>
+    public static void RunAll(Workspace ws, IEnumerable<IReadOnlyList<string>> ops, Action<string>? log = null, Func<AssetIndex>? index = null)
+    {
+        using (ws.Batch())
+            foreach (var op in ops) Run(ws, op, log, index);
+    }
+
+    // asset-set <bundle> <asset> <offset hex>=<u32 hex | asset name> ...: words of any asset's .data part
+    static void AssetSet(Workspace ws, string[] a, Action<string> log)
+    {
+        uint b = Hex(a[1]);
+        var caff = ws.LoadResident(b);
+        int sym = Sym(caff, a[2]);
+        if (sym == 0) throw new InvalidDataException($"{a[2]} not in {b:x6}");
+        var d = caff.PartsOf(sym).First(p => caff.SectionOf(p).Name == ".data").Data;
+        int n = 0;
+        foreach (var kv in a.Skip(3))
+        {
+            var eq = kv.IndexOf('=');
+            if (eq <= 0) throw new ArgumentException($"asset-set: '{kv}' is not offset=value");
+            int off = Convert.ToInt32(kv[..eq], 16);
+            string v = kv[(eq + 1)..];
+            uint val = v.StartsWith("aid_") ? AssetIds.IdOf(v) ?? throw new InvalidDataException($"no asset {v}") : Hex(v);
+            if (off < 0 || off + 4 > d.Length) throw new ArgumentException($"offset 0x{off:X} outside {a[2]} ({d.Length} bytes)");
+            BE.W32(d, off, val); n++;
+        }
+        ws.SaveResident(b, caff, $"{a[2]}: {n} word(s) set");
+        log($"{a[2]} in {b:x6}: {n} word(s) set");
+    }
+
+    // model-keep-joints <bundle> <model> <new model> <joint>: a copy of a skinned model that shows only the given joint's
+    // subtree (every draw whose vertices mostly follow other joints gets empty index data). Same skeleton, so the
+    // original's animations drive it (character select: Kazooie = Banjo's model with only the backpack subtree "PACK").
+    static void ModelKeepJoints(Workspace ws, string[] a, Action<string> log)
+    {
+        uint b = Hex(a[1]);
+        var c = ws.LoadResident(b);
+        int ss = Sym(c, a[2]);
+        if (ss == 0) throw new InvalidDataException($"{a[2]} not in {b:x6}");
+        if (Sym(c, a[3]) != 0) { log($"{a[3]} is already in {b:x6}"); return; }
+        int ns = CaffEdit.CloneAsset(c, ss, a[3]);
+        var data = c.PartsOf(ns).First(p => c.SectionOf(p).Name == ".data");
+        var gpu = c.PartsOf(ns).First(p => c.SectionOf(p).Name == ".gpu");
+        var joints = Models.Skeleton.Parse(data.Data) ?? throw new InvalidDataException($"{a[2]} has no skeleton");
+        int root = joints.FindIndex(j => j.Name == a[4]);
+        if (root < 0) throw new InvalidDataException($"{a[2]} has no joint {a[4]}");
+        var keep = new HashSet<int>();
+        for (int i = 0; i < joints.Count; i++)
+            for (int p = i; p >= 0; p = joints[p].Parent) if (p == root) { keep.Add(i); break; }
+        var m = Models.ModelAsset.Parse(c, ns);
+        var keepIb = new HashSet<int>(); var hideIb = new HashSet<int>();
+        foreach (var dr in m.Draws)
+        {
+            int inKeep = 0, total = 0;
+            if (dr.BlendIndices != null && dr.BlendWeights != null)
+                for (int v = 0; v < dr.Positions.Length; v++)
+                {
+                    int best = -1; float bw = -1;
+                    for (int k = 0; k < 4; k++) if (dr.BlendWeights[v * 4 + k] > bw) { bw = dr.BlendWeights[v * 4 + k]; best = dr.BlendIndices[v * 4 + k]; }
+                    total++; if (keep.Contains(best)) inKeep++;
+                }
+            (total > 0 && inKeep * 2 > total ? keepIb : hideIb).Add(dr.IbObject);
+        }
+        hideIb.ExceptWith(keepIb);
+        // index buffer table: resource header +0x54 -> entries (16 bytes: IB object, .gpu offset, byte size, format), count +0x58
+        int R = m.ResourceHeader;
+        if (R < 0) throw new InvalidDataException($"{a[2]}: resource header not found");
+        int tab = (int)BE.U32(data.Data, R + 0x54), cnt = (int)BE.U32(data.Data, R + 0x58), zeroed = 0;
+        for (int i = 0; i < cnt; i++)
+        {
+            int e = tab + 16 * i;
+            if (!hideIb.Contains((int)BE.U32(data.Data, e))) continue;
+            Array.Clear(gpu.Data, (int)BE.U32(data.Data, e + 4), (int)BE.U32(data.Data, e + 8)); zeroed++;
+        }
+        ws.SaveResident(b, c, $"{a[3]}: {a[2]} showing only the {a[4]} subtree");
+        log($"{a[3]} ({AssetIds.IdOf(a[3]):X8}) in {b:x6}: {m.Draws.Count} draws, {zeroed} index buffer(s) hidden");
     }
 
     static string Opt(string[] a, string k, string def) { int i = Array.LastIndexOf(a, k); return i > 0 && i + 1 < a.Length ? a[i + 1] : def; }   // last one wins
@@ -148,7 +233,7 @@ public static class WorldOps
         if (ss == 0) throw new InvalidDataException($"{src} not in {sb:x6}");
         var dc = ws.LoadResident(db);
         if (Sym(dc, nn) != 0) { log($"{nn} is already in {db:x6}"); return; }
-        int ns = CaffEdit.CopyAsset(sc, ss, dc, nn);
+        int ns = CaffEdit.CopyAssetWithPoolStrings(sc, ss, dc, nn);
         ws.SaveResident(db, dc, $"{nn}: copied from {src} ({sb:x6})");
         log($"{nn} ({AssetIds.IdOf(nn):X8}) in {db:x6} = {src} from {sb:x6}: {dc.PartsOf(ns).Count()} part(s)");
     }

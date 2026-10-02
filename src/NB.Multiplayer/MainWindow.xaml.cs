@@ -35,6 +35,61 @@ public partial class MainWindow : Window
 
     Brush B(string key) => (Brush)FindResource(key);
 
+    CharacterWriter _charWriter = null!;
+    /// <summary>The default.xex of the game started last (character select attaches to it).</summary>
+    string? _gameXex;
+
+    /// <summary>
+    /// The "Play as" card on the Play page: character chips with portraits, grouped by where the character can be played
+    /// (everywhere, or Showdown Town only). Choosing needs the Character Select mod in the selected edition.
+    /// </summary>
+    void RefreshCharacters()
+    {
+        var ed = CurrentEdition;
+        bool has = ed.Mods.Any(m => m.Id == NB.Core.Mods.Characters.ModId);
+        var cur = NB.Core.Mods.Characters.Get(S.Character);
+        CharacterPanel.Children.Clear();
+        var head = new DockPanel { Margin = new Thickness(0, 0, 0, 8) };
+        head.Children.Add(new TextBlock { Text = "Play as", Style = (Style)FindResource("H2"), FontSize = 16, VerticalAlignment = VerticalAlignment.Center, Width = 90 });
+        var sub = new TextBlock { Style = (Style)FindResource("SubText"), TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center };
+        head.Children.Add(sub);
+        CharacterPanel.Children.Add(head);
+        void Group(string title, IEnumerable<NB.Core.Mods.Character> chars)
+        {
+            CharacterPanel.Children.Add(new TextBlock { Text = title, Style = (Style)FindResource("SubText"), FontSize = 12, Margin = new Thickness(2, 4, 0, 6) });
+            var wrap = new WrapPanel();
+            foreach (var c in chars)
+            {
+                var content = new StackPanel { Orientation = Orientation.Horizontal };
+                var face = new System.Windows.Shapes.Ellipse { Width = 26, Height = 26, Margin = new Thickness(-8, -2, 8, -2) };
+                try { face.Fill = new ImageBrush(new System.Windows.Media.Imaging.BitmapImage(new Uri($"pack://application:,,,/Assets/Characters/{c.Key}.png"))) { Stretch = Stretch.UniformToFill }; }
+                catch (Exception) { face.Fill = B("CardHi"); }
+                content.Children.Add(face);
+                content.Children.Add(new TextBlock { Text = c.Name.Replace(" (floating backpack)", ""), VerticalAlignment = VerticalAlignment.Center });
+                var rb = new RadioButton { Style = (Style)FindResource("Chip"), GroupName = "character", Content = content, IsChecked = c.Key == cur.Key, IsEnabled = has || c.Index == 0, Tag = c };
+                if (c.Key == "kazooie") rb.ToolTip = "Banjo's backpack walking on its own: Kazooie pops out for the wrench spin";
+                rb.Checked += (_, _) => { S.Character = c.Key; S.Save(); Explain(); CoopCharacterChanged(c.Index); };
+                wrap.Children.Add(rb);
+            }
+            CharacterPanel.Children.Add(wrap);
+        }
+        void Explain()
+        {
+            var c = NB.Core.Mods.Characters.Get(S.Character);
+            sub.Text = !has
+                ? "Add the Character Select mod to this edition (Mods & editions) to play as someone else."
+                : c.Index == 0 ? "You play as Banjo."
+                : $"You play as {c.Name.Replace(" (floating backpack)", "")}" + (c.TownOnly ? " in Showdown Town (Banjo elsewhere)" : "") +
+                  ". It applies the next time you enter a level: start or continue a game, or come back from Mumbo's garage. In co-op the others see you as them too.";
+        }
+        Group("Everywhere", NB.Core.Mods.Characters.All.Where(c => !c.TownOnly));
+        Group("In Showdown Town", NB.Core.Mods.Characters.All.Where(c => c.TownOnly));
+        Explain();
+    }
+
+    /// <summary>Co-op: the other players see the new character (wired to the co-op service).</summary>
+    void CoopCharacterChanged(int index) { if (_coop != null) _coop.Character = index; }
+
     [System.Runtime.InteropServices.DllImport("dwmapi.dll")]
     static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
 
@@ -67,6 +122,10 @@ public partial class MainWindow : Window
         RefreshSetup();
         _timer.Tick += async (_, _) => await TickAsync();
         _timer.Start();
+        // character select: the chosen character goes into every game started from here (applies at the next spawn)
+        _charWriter = new CharacterWriter(() => _game, () => NB.Core.Mods.Characters.Get(S.Character),
+            () => _gameXex ?? Path.Combine(CurrentEdition.GameDir, "default.xex"));
+        Closed += (_, _) => _charWriter.Dispose();
         Loaded += async (_, _) =>
         {
             if (!S.ShortcutOffered)
@@ -133,15 +192,17 @@ public partial class MainWindow : Window
         foreach (var ed in all)
         {
             var rb = new RadioButton { Style = (Style)FindResource("Option"), GroupName = "edition", Content = ed.Name, Margin = new Thickness(0, 0, 8, 0), IsChecked = ed.Name == S.Edition, Tag = ed };
-            rb.Checked += (_, _) => { S.Edition = ed.Name; S.Save(); EditionSub.Text = ed.Subtitle; };
+            rb.Checked += (_, _) => { S.Edition = ed.Name; S.Save(); EditionSub.Text = ed.Subtitle; RefreshCharacters(); };
             EditionChips.Items.Add(rb);
         }
         EditionSub.Text = CurrentEdition.Subtitle;
+        RefreshCharacters();
 
         CoopCard.Visibility = File.Exists(CoopPatch) ? Visibility.Visible : Visibility.Collapsed;
         // an edition built from an older bundled co-op mod is offered as an update
         string coopSha = File.Exists(CoopPatch) ? PatchPackage.FileSha(CoopPatch) : "";
-        bool Current(string name) => all.Any(e => e.Name == name && e.Mods.Any(m => m.Sha256 == coopSha));
+        string charSha = File.Exists(CharselPatch) ? PatchPackage.FileSha(CharselPatch) : "";
+        bool Current(string name) => all.Any(e => e.Name == name && e.Mods.Any(m => m.Sha256 == coopSha) && (charSha == "" || e.Mods.Any(m => m.Sha256 == charSha)));
         bool Old(string name) => all.Any(e => e.Name == name) && !Current(name);
         CoopAddButton.Visibility = Current("Showdown Town Co-op") ? Visibility.Collapsed : Visibility.Visible;
         CoopAddButton.Content = Old("Showdown Town Co-op") ? "Update co-op edition" : "Add co-op edition";
@@ -359,7 +420,7 @@ public partial class MainWindow : Window
         if (_game is { HasExited: false }) { MessageBox.Show(this, "The game is already running.", "NB Multiplayer"); return; }
         var ed = CurrentEdition;
         if (_coopNet != null && _lastLaunch is { } room) { _ = StartRoomGameAsync(room.Api, room.Code); return; }   // in a co-op room: the room's game
-        try { _game = GameLauncher.StartSolo(S, ed.GameDir); }
+        try { _game = GameLauncher.StartSolo(S, ed.GameDir); _gameXex = Path.Combine(ed.GameDir, "default.xex"); }
         catch (Exception ex) { MessageBox.Show(this, "The game could not start:\n" + ex.Message, "NB Multiplayer"); }
     }
 
@@ -367,6 +428,7 @@ public partial class MainWindow : Window
     static string BundledDir => Path.Combine(AppContext.BaseDirectory, "patches");
     static string CoopPatch => Path.Combine(BundledDir, "ShowdownTownCoop.nbpatch");
     static string UltraPartsPatch => Path.Combine(BundledDir, "UltraParts.nbpatch");
+    static string CharselPatch => Path.Combine(BundledDir, "CharacterSelect.nbpatch");
 
     /// <summary>"Add co-op edition": Showdown Town Co-op with every vehicle part unlocked (whatever each player's save has).</summary>
     async void AddCoop_Click(object sender, RoutedEventArgs e) => await AddCoopEditionAsync(withUltra: false);
@@ -388,6 +450,7 @@ public partial class MainWindow : Window
             {
                 ModLibrary.EnsureTweaks(dir);
                 var mods = new List<NB.Core.Project.ModStack.Mod> { ModLibrary.Add(CoopPatch) };
+                if (File.Exists(CharselPatch)) mods.Add(ModLibrary.Add(CharselPatch));   // play as Mumbo, Thomas, ... (Play page)
                 if (withUltra) mods.Insert(0, ModLibrary.Add(UltraPartsPatch));
                 var allParts = ModLibrary.List().FirstOrDefault(m => m.Id == "tweak-developer-all-parts");
                 if (allParts != null) mods.Add(allParts);
@@ -929,10 +992,12 @@ public partial class MainWindow : Window
             bool coop = ed.IsCoop && _coopNet != null;
             // co-op: the room's all-unlocked save applies to everyone (on top of the player's own setting)
             _game = GameLauncher.Start(S, ed, api, code, coop && _coopNet!.AllUnlocked ? true : null);
+            _gameXex = Path.Combine(ed.GameDir, "default.xex");
             _lastLaunch = (api, code);
             if (_server != null) _ = RefreshRoomEditionAsync(ed);   // host: the room now carries this edition
             if (coop)
                 _coop ??= new CoopService(_coopNet!, () => _game, Path.Combine(ed.GameDir, "default.xex"), ed.PuppetBlueprintId, ed.ParkVector);
+            if (_coop != null) _coop.Character = NB.Core.Mods.Characters.Get(S.Character).Index;
         }
         catch (Exception ex) { MessageBox.Show(this, "The game could not start:\n" + ex.Message, "NB Multiplayer"); }
     }

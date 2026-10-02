@@ -15,7 +15,7 @@
     <AssemblyName>NBMultiplayer</AssemblyName>
     <RootNamespace>NB.Multiplayer</RootNamespace>
     <Product>NB Multiplayer</Product>
-    <Version>1.9.0</Version>
+    <Version>2.0.0</Version>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
   </PropertyGroup>
 
@@ -23,6 +23,7 @@
     <Using Remove="System.Windows.Forms" />
     <Using Remove="System.Drawing" />
     <Resource Include="Assets\*.png" />
+    <Resource Include="Assets\Characters\*.png" />
     <Resource Include="Assets\app.ico" />
     <!-- the Showdown Town co-op edition (built by coop/build.sh), offered on the Editions page -->
     <None Include="..\..\..\coop\dist\ShowdownTownCoop.nbpatch" Link="patches\ShowdownTownCoop.nbpatch" Condition="Exists('..\..\..\coop\dist\ShowdownTownCoop.nbpatch')"

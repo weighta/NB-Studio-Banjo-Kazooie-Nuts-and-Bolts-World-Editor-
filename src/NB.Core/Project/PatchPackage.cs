@@ -564,8 +564,7 @@ public static class PatchPackage
         var ws = Workspace.OnFolder(gameDir, p => { BeforeWrite(p); IO.FileLinks.PrepareReplace(p); });
         try
         {
-            foreach (var op in man.Ops)
-                WorldOps.Run(ws, op, t => log?.Invoke("  " + t));
+            WorldOps.RunAll(ws, man.Ops, t => log?.Invoke("  " + t));
         }
         finally { ws.DeleteCache(); }
         state.OpsDone.Add(key);

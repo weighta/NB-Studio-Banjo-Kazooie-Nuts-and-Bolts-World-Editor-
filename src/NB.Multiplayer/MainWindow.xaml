@@ -87,7 +87,7 @@
                         </Border>
 
                         <!-- edition -->
-                        <Border Style="{StaticResource CardBorder}" Margin="0,0,0,18" Padding="22,16">
+                        <Border Style="{StaticResource CardBorder}" Margin="0,0,0,12" Padding="22,16">
                             <DockPanel>
                                 <TextBlock Text="Edition" Style="{StaticResource H2}" FontSize="16" VerticalAlignment="Center" Width="90"/>
                                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
@@ -104,6 +104,11 @@
                                     <TextBlock x:Name="EditionSub" Style="{StaticResource SubText}" Margin="2,4,0,0"/>
                                 </StackPanel>
                             </DockPanel>
+                        </Border>
+
+                        <!-- character select (filled in code: depends on the edition) -->
+                        <Border x:Name="CharacterCard" Style="{StaticResource CardBorder}" Margin="0,0,0,18" Padding="22,14">
+                            <StackPanel x:Name="CharacterPanel"/>
                         </Border>
 
                         <Grid>

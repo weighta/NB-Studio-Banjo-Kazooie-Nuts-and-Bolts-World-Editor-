@@ -32,7 +32,7 @@ namespace NB.Multiplayer.Services;
 public sealed class CoopNet : IDisposable
 {
     /// <summary>State packet layout version. Players with another version are not shown (and are reported).</summary>
-    public const byte Protocol = 4;
+    public const byte Protocol = 5;
     public static readonly int UdpPort = Net.Port + 2;
     public readonly long MyId;
     readonly string _myName;
@@ -53,6 +53,7 @@ public sealed class CoopNet : IDisposable
     public volatile int TimeOfDay;
     /// <summary>The room plays with the all-unlocked save (host setting, reflected to joiners when they start the game).</summary>
     public volatile bool AllUnlocked;
+
     public static readonly string[] TimeNames = { "Random", "Morning", "Midday", "Afternoon", "Night" };
     /// <summary>Joiner: round trip to the host in milliseconds (smoothed; 0 = not measured yet, and always 0 on the host).</summary>
     public double RoundTripMs { get; private set; }
@@ -394,6 +395,11 @@ public sealed class CoopService : IDisposable
     readonly System.Numerics.Vector3 _park;
     readonly CancellationTokenSource _stop = new();
     public string Status { get; private set; } = "Waiting for the game to start...";
+    /// <summary>The local player's character (<see cref="NB.Core.Mods.Characters"/> index, 0 = Banjo), set by the UI:
+    /// sent to the others (protocol 5; 0 while the local game has no Character Select mod). The local game's mailbox is
+    /// written by the character service, not here.</summary>
+    public int Character { get => _character; set => _character = value; }
+    volatile int _character;
     /// <summary>What the local game reports (for the room panel).</summary>
     public CoopMode LocalMode => _local.Mode;
     /// <summary>The local player's last state (for the room panel).</summary>
@@ -458,6 +464,8 @@ public sealed class CoopService : IDisposable
                 {
                     _nextSend = _tick.ElapsedMilliseconds + 33;
                     _local = sync!.ReadLocal();
+                    TestCharacter(sync, x!);
+                    _local.Character = (byte)(sync.HasCharselMod && _character is > 0 and < 256 ? _character : 0);
                     _net.SendLocal(_local);
                 }
                 // the local vehicle's design (at once when it changes, again every 2 s for players who join later or lost a
@@ -540,6 +548,29 @@ public sealed class CoopService : IDisposable
 
     static bool SafeExited(Process p) { try { return p.HasExited; } catch (Exception) { return true; } }
 
+    // ---- tests only: NB_COOP_TEST_CHARACTER=<file with a character key> sets Character from that file (checked every
+    // second) and writes the local mailbox like the UI's character service would (test copies have no picker)
+    static readonly string? TestCharacterFile = Environment.GetEnvironmentVariable("NB_COOP_TEST_CHARACTER");
+    long _testCharAt;
+    void TestCharacter(CoopSync sync, XeniaLive x)
+    {
+        if (TestCharacterFile == null || _tick.ElapsedMilliseconds < _testCharAt) return;
+        _testCharAt = _tick.ElapsedMilliseconds + 1000;
+        try
+        {
+            var c = NB.Core.Mods.Characters.Get(File.Exists(TestCharacterFile) ? File.ReadAllText(TestCharacterFile).Trim() : "banjo");
+            _character = c.Index;
+            if (!sync.HasCharselMod) return;
+            var (town, any) = NB.Core.Mods.Characters.MailboxWords(c);
+            if (x.U32(NB.Core.Mods.Characters.MailboxTown) != town || x.U32(NB.Core.Mods.Characters.MailboxAny) != any)
+            {
+                var b = new byte[8]; BE.W32(b, 0, town); BE.W32(b, 4, any);
+                x.Write(NB.Core.Mods.Characters.MailboxTown, b);
+            }
+        }
+        catch (IOException) { }
+    }
+
     // ---- diagnostics (tests): NB_COOP_LOG=<file> appends a line every 2 s
     static readonly string? LogPath = Environment.GetEnvironmentVariable("NB_COOP_LOG");
     long _lastLoop, _maxGap;
@@ -558,7 +589,7 @@ public sealed class CoopService : IDisposable
         try
         {
             File.AppendAllText(LogPath, $"{DateTime.Now:HH:mm:ss.fff} gap {_maxGap}ms scan {sync.LastScanMs:F0}ms remotes {remotes.Count} " +
-                $"shots replayed {shots?.Replayed} skipped {shots?.Skipped} locked {shots?.Locked} retargeted {shots?.Retargeted} pieces {sync.PieceTicks}/{sync.PiecesPlaced} teleports {sync.Teleports} walking {sync.Walking} foot {string.Join(",", sync.FootRequests.Select(kv => kv.Key + ":" + kv.Value))} " +
+                $"shots replayed {shots?.Replayed} skipped {shots?.Skipped} locked {shots?.Locked} retargeted {shots?.Retargeted} pieces {sync.PieceTicks}/{sync.PiecesPlaced} teleports {sync.Teleports} walking {sync.Walking} chars {sync.CharacterStatus} foot {string.Join(",", sync.FootRequests.Select(kv => kv.Key + ":" + kv.Value))} " +
                 $"vreq {string.Join(",", sync.VehicleRequests.Select(kv => kv.Key + ":" + kv.Value))} sent {rate} | {sync.Assignments} | {sync.LastVehicleEvent}" + Environment.NewLine);
         }
         catch (IOException) { }

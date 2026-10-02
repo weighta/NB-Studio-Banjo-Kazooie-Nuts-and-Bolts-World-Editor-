@@ -1986,7 +1986,7 @@ static class Program
                     if (File.Exists(Path.Combine(args[1], "workspace.json")))
                     {
                         var ws = NB.Core.Project.Workspace.Open(args[1]);
-                        foreach (var op in ops) NB.Core.Project.WorldOps.Run(ws, op, Console.WriteLine, () => NB.Core.Project.AssetIndex.LoadOrBuild(ws));
+                        NB.Core.Project.WorldOps.RunAll(ws, ops, Console.WriteLine, () => NB.Core.Project.AssetIndex.LoadOrBuild(ws));
                         NB.Core.Project.AssetIndex.LoadOrBuild(ws, null, true);
                     }
                     else
