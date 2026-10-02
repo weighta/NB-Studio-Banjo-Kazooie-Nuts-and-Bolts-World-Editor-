@@ -7,6 +7,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using NB.Core.Net;
+using NB.Core.Live;
 using NB.Core.Project;
 using NB.Multiplayer.Services;
 
@@ -20,6 +21,10 @@ public partial class MainWindow : Window
     SteamNet.Client? _steamClient;
     CoopNet? _coopNet;
     CoopService? _coop;
+    /// <summary>The co-op settings of the room being joined (from the room info), applied to the joiner's game.</summary>
+    CoopRoomSettings? _roomCoop;
+    /// <summary>The room the game was last started for (api host:port, room code): "Start the game" in a co-op room.</summary>
+    (string Api, string Code)? _lastLaunch;
     string _roomCode = "";
     (string Host, int Port)? _room;          // room being shown (own or joined)
     (string Host, int Port, string Code)? _pendingJoin;
@@ -354,6 +359,7 @@ public partial class MainWindow : Window
         if (!Ready()) return;
         if (_game is { HasExited: false }) { MessageBox.Show(this, "The game is already running.", "NB Multiplayer"); return; }
         var ed = CurrentEdition;
+        if (_coopNet != null && _lastLaunch is { } room) { LaunchGame(room.Api, room.Code); return; }   // in a co-op room: the room's game
         try { _game = GameLauncher.StartSolo(S, ed.GameDir); }
         catch (Exception ex) { MessageBox.Show(this, "The game could not start:\n" + ex.Message, "NB Multiplayer"); }
     }
@@ -589,6 +595,9 @@ public partial class MainWindow : Window
         {
             _coopNet = CoopNet.StartHost(S.Instance, S.PlayerName, _steamHost);
             _coopNet.TimeOfDay = S.CoopTimeOfDay is >= 1 and <= 4 ? S.CoopTimeOfDay : Random.Shared.Next(1, 5);
+            _coopNet.AllUnlocked = S.UseAllUnlockedSave;
+            if (_server != null) _server.Coop = new CoopRoomSettings { Protocol = CoopNet.Protocol };
+            SyncRoomSettings();
         }
         LaunchGame("127.0.0.1:" + Net.Port, _roomCode);
     }
@@ -684,6 +693,7 @@ public partial class MainWindow : Window
                 ShowJoin("The room could not be reached. Check the code, and ask the host whether the room is open and the ports are forwarded.", "Bad", true);
                 return;
             }
+            _roomCoop = room.Coop;
             // play the host's edition
             var mine = await HostEditionAsync(room, host, port);
             if (mine == null) return;
@@ -700,6 +710,13 @@ public partial class MainWindow : Window
                     ShowJoin($"Your game files differ from the host's:\n{areas}\nYou may not be able to join, or the game may go out of sync.", "Warn", true);
                     return;
                 }
+            }
+            if (CurrentEdition.IsCoop && room.Coop?.Protocol != CoopNet.Protocol)
+            {
+                ShowJoin(room.Coop == null
+                    ? $"{room.Name} runs an older NB Multiplayer: Showdown Town co-op needs the same version on every PC. Ask the host to update (About & updates)."
+                    : $"{room.Name} runs a different NB Multiplayer version (co-op protocol {room.Coop.Protocol}, yours {CoopNet.Protocol}). Update both to the latest version.", "Bad", false);
+                return;
             }
             ShowJoin(CurrentEdition.IsCoop
                 ? $"Joined {room.Name} ({room.Edition}). In the game choose SINGLE PLAYER and load your save (or start a new game): you see each other once you are both in Showdown Town."
@@ -766,6 +783,9 @@ public partial class MainWindow : Window
             StopCoop();
             try { _coopNet = CoopNet.StartClient(S.Instance, S.PlayerName, _steamClient, j.Host); }
             catch (Exception ex) { ShowJoin("Co-op could not connect: " + ex.Message, "Bad", false); return; }
+            // the room's settings, before the game starts: time of day for the first town load, all-unlocked save
+            _coopNet.TimeOfDay = _roomCoop?.TimeOfDay ?? 0;
+            _coopNet.AllUnlocked = _roomCoop?.AllUnlockedSave ?? false;
         }
         LaunchGame($"{j.Host}:{j.Port}", j.Code);
     }
@@ -790,14 +810,22 @@ public partial class MainWindow : Window
         try
         {
             var ed = CurrentEdition;
-            _game = GameLauncher.Start(S, ed, api, code);
-            if (ed.IsCoop && _coopNet != null)
-            {
-                _coop?.Dispose();
-                _coop = new CoopService(_coopNet, _game.Id, Path.Combine(ed.GameDir, "default.xex"), ed.PuppetBlueprintId, ed.ParkVector);
-            }
+            bool coop = ed.IsCoop && _coopNet != null;
+            // co-op: the room's all-unlocked save applies to everyone (on top of the player's own setting)
+            _game = GameLauncher.Start(S, ed, api, code, coop && _coopNet!.AllUnlocked ? true : null);
+            _lastLaunch = (api, code);
+            if (coop)
+                _coop ??= new CoopService(_coopNet!, () => _game, Path.Combine(ed.GameDir, "default.xex"), ed.PuppetBlueprintId, ed.ParkVector);
         }
         catch (Exception ex) { MessageBox.Show(this, "The game could not start:\n" + ex.Message, "NB Multiplayer"); }
+    }
+
+    /// <summary>Host: the room's co-op settings (time of day, all-unlocked save) as joiners see them.</summary>
+    void SyncRoomSettings()
+    {
+        if (_coopNet == null || _server?.Coop is not { } c) return;
+        _coopNet.AllUnlocked = S.UseAllUnlockedSave;
+        c.TimeOfDay = _coopNet.TimeOfDay; c.AllUnlockedSave = S.UseAllUnlockedSave;
     }
 
     void StopCoop()
@@ -812,14 +840,30 @@ public partial class MainWindow : Window
         RoomCard.Visibility = Visibility.Visible;
         RoomTitle.Text = "Co-op room  -  " + CurrentEdition.Name;
         RoomPlayers.Items.Clear();
-        var names = new List<(string Name, bool Me)> { (S.PlayerName, true) };
-        if (_coopNet != null) names.AddRange(_coopNet.Remotes.Values.Select(r => (r.Name, false)));
-        foreach (var (name, me) in names)
+        static string Doing(CoopState st) => st.Mode switch
+        {
+            CoopMode.Vehicle or CoopMode.OnFoot when st.Flags.HasFlag(CoopFlags.Photo) => "taking photos",
+            CoopMode.Vehicle or CoopMode.OnFoot when st.Flags.HasFlag(CoopFlags.Menu) => "in the pause menu",
+            CoopMode.Vehicle => "in town", CoopMode.OnFoot => "on foot", CoopMode.Building => "changing vehicle",
+            CoopMode.Paused => "paused", _ => "not in town",
+        };
+        var names = new List<(string Name, bool Me, string Doing)> { (S.PlayerName, true, _game is { HasExited: false } ? Doing(_coop?.Local ?? default) : "game not running") };
+        if (_coopNet != null) names.AddRange(_coopNet.Remotes.Values.Select(r => (r.Name, false, Doing(r.State))));
+        foreach (var (name, me, doing) in names)
         {
             var chip = new Border { CornerRadius = new CornerRadius(16), Padding = new Thickness(14, 7, 14, 7), Margin = new Thickness(0, 0, 8, 8),
                 Background = me ? B("Accent") : B("CardHi") };
-            chip.Child = new TextBlock { Text = name + (me ? "  (you)" : ""), FontWeight = FontWeights.SemiBold, Foreground = me ? B("AccentText") : B("Text") };
+            chip.Child = new TextBlock { Text = name + (me ? "  (you)" : "") + "  -  " + doing, FontWeight = FontWeights.SemiBold, Foreground = me ? B("AccentText") : B("Text") };
             RoomPlayers.Items.Add(chip);
+        }
+        if (_coopNet != null && !_coopNet.OtherVersions.IsEmpty)
+            RoomPlayers.Items.Add(new TextBlock { Text = $"{string.Join(", ", _coopNet.OtherVersions.Keys)}: a different NB Multiplayer version, not shown in your game. Everyone needs the same version (About & updates).",
+                Foreground = B("Warn"), TextWrapping = TextWrapping.Wrap, MaxWidth = 700, Margin = new Thickness(0, 4, 0, 4) });
+        if (_game is not { HasExited: false } && _lastLaunch is { } again)
+        {
+            var start = new Button { Style = (Style)FindResource("Primary"), Content = "Start the game", HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 4, 0, 8) };
+            start.Click += (_, _) => { LaunchGame(again.Api, again.Code); ShowCoopRoom(); };
+            RoomPlayers.Items.Add(start);
         }
         RoomPlayers.Items.Add(new TextBlock { Text = _coop?.Status ?? "Start the game to sync.", Style = (Style)FindResource("SubText"), Margin = new Thickness(0, 8, 0, 0) });
         // Showdown Town's time of day is the same for everyone in the room (the host chooses; it applies when the town loads)
@@ -837,6 +881,7 @@ public partial class MainWindow : Window
                 {
                     S.CoopTimeOfDay = v; S.Save();
                     if (_coopNet != null) _coopNet.TimeOfDay = v > 0 ? v : Random.Shared.Next(1, 5);
+                    SyncRoomSettings();
                     ShowCoopRoom();
                 };
                 tod.Children.Add(rb);
@@ -844,6 +889,14 @@ public partial class MainWindow : Window
         }
         else tod.Children.Add(new TextBlock { Text = now > 0 ? CoopNet.TimeNames[now] + " (chosen by the host)" : "set by the host", Style = (Style)FindResource("SubText"), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 0, 8) });
         RoomPlayers.Items.Add(tod);
+        bool allUnlocked = _coopNet?.AllUnlocked ?? false;
+        RoomPlayers.Items.Add(new TextBlock
+        {
+            Text = _server != null
+                ? (allUnlocked ? "Everyone starts with the all-unlocked save (your setting in Settings)." : "Players use their own saves (turn on the all-unlocked save in Settings to give it to everyone).")
+                : (allUnlocked ? "The room plays with the all-unlocked save: your game starts with it." : "The room plays with each player's own save."),
+            Style = (Style)FindResource("SubText"), FontSize = 12, TextWrapping = TextWrapping.Wrap, MaxWidth = 700, Margin = new Thickness(0, 0, 0, 4),
+        });
         RoomPlayers.Items.Add(new TextBlock { Text = "Everyone's Showdown Town uses the room's time of day. A change applies the next time the town loads (for example after visiting a world).",
             Style = (Style)FindResource("SubText"), FontSize = 12, TextWrapping = TextWrapping.Wrap, MaxWidth = 700 });
         RoomDot.Fill = B("Good");
@@ -921,6 +974,7 @@ public partial class MainWindow : Window
     {
         if (_loadingSettings) return;
         S.UseAllUnlockedSave = AllUnlockedCheck.IsChecked == true; S.Save();
+        SyncRoomSettings();   // a co-op host's room reflects it to everyone who starts their game from now on
         if (_game is { HasExited: false }) { SaveStatus.Text = "Takes effect the next time the game starts (close the game first to switch saves now)."; return; }
         try
         {

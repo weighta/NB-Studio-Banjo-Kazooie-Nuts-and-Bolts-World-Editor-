@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
@@ -10,10 +11,20 @@ namespace NB.Multiplayer.Services;
 /// <summary>
 /// Showdown Town co-op network: every player sends its state ~30 times a second to the host, which forwards it to all
 /// other players (and uses it itself). Transport = the Steam connection (message type 6) or UDP to the host's port
-/// 36002. Packet: "NBCO", u8 version 1, u8 0, u16 name length, i64 player id, CoopState, name (UTF-8).
+/// 36002. Packets start with "NBCO" and a type byte:
+/// <list type="bullet">
+/// <item>1 state: u8 protocol (<see cref="Protocol"/>), u16 name length, i64 player id, <see cref="CoopState"/>, name (UTF-8)</item>
+/// <item>2 damage: i64 target, f32 amount, f32 x/y/z of the attacker</item>
+/// <item>3 room settings (host): u8 time of day, u8 all-unlocked save</item>
+/// <item>4 hello (joiner, before gameplay): i64 id; the host answers with the room settings</item>
+/// <item>5 ping / 6 pong: u32 token (joiner &lt;-&gt; host round trip, for the latency estimate)</item>
+/// <item>7 leave: i64 id (the player's game closed)</item>
+/// </list>
 /// </summary>
 public sealed class CoopNet : IDisposable
 {
+    /// <summary>State packet layout version. Players with another version are not shown (and are reported).</summary>
+    public const byte Protocol = 2;
     public static readonly int UdpPort = Net.Port + 2;
     public readonly long MyId;
     readonly string _myName;
@@ -25,11 +36,19 @@ public sealed class CoopNet : IDisposable
     readonly CancellationTokenSource _stop = new();
     // host: peers by key ("udp:ip:port" / "steam:<connection>") -> sender
     readonly ConcurrentDictionary<string, (Action<byte[]> Send, DateTime Seen)> _peers = new();
+    /// <summary>Remote players: latest state, when it arrived, name.</summary>
     public readonly ConcurrentDictionary<long, (CoopState State, DateTime Seen, string Name)> Remotes = new();
+    /// <summary>Names of players whose NB Multiplayer speaks another co-op protocol (they need the same version).</summary>
+    public readonly ConcurrentDictionary<string, byte> OtherVersions = new();
     /// <summary>The room's Showdown Town time of day: 0 = not known yet, 1..4 = morning, midday, afternoon, night. The host
-    /// decides it; joiners get it with the host's packets.</summary>
+    /// decides it; joiners get it with the room info and the host's packets.</summary>
     public volatile int TimeOfDay;
+    /// <summary>The room plays with the all-unlocked save (host setting, reflected to joiners when they start the game).</summary>
+    public volatile bool AllUnlocked;
     public static readonly string[] TimeNames = { "Random", "Morning", "Midday", "Afternoon", "Night" };
+    /// <summary>Joiner: round trip to the host in milliseconds (smoothed; 0 = not measured yet, and always 0 on the host).</summary>
+    public double RoundTripMs { get; private set; }
+    uint _seq;
 
     CoopNet(long myId, string myName, bool host, UdpClient? udp, IPEndPoint? hostUdp, SteamNet.Host? sh, SteamNet.Client? sc)
     {
@@ -53,11 +72,18 @@ public sealed class CoopNet : IDisposable
         return new CoopNet(myId, myName, false, new UdpClient(0), ep, null, null);
     }
 
+    static byte[] Header(byte type, int length)
+    {
+        var p = new byte[Math.Max(32, length)];
+        p[0] = (byte)'N'; p[1] = (byte)'B'; p[2] = (byte)'C'; p[3] = (byte)'O'; p[4] = type;
+        return p;
+    }
+
     byte[] Packet(long id, CoopState st, string name)
     {
         var nb = System.Text.Encoding.UTF8.GetBytes(name);
-        var p = new byte[16 + CoopState.Size + nb.Length];
-        p[0] = (byte)'N'; p[1] = (byte)'B'; p[2] = (byte)'C'; p[3] = (byte)'O'; p[4] = 1;
+        var p = Header(1, 16 + CoopState.Size + nb.Length);
+        p[5] = Protocol;
         BE.W16(p, 6, (ushort)nb.Length); BE.W64(p, 8, (ulong)id);
         st.Write().CopyTo(p, 16); nb.CopyTo(p, 16 + CoopState.Size);
         return p;
@@ -66,8 +92,7 @@ public sealed class CoopNet : IDisposable
     /// <summary>Weapon damage the local player dealt to <paramref name="target"/> (by player id), from position <paramref name="from"/>.</summary>
     public void SendDamage(long target, float amount, System.Numerics.Vector3 from)
     {
-        var p = new byte[32];
-        p[0] = (byte)'N'; p[1] = (byte)'B'; p[2] = (byte)'C'; p[3] = (byte)'O'; p[4] = 2;
+        var p = Header(2, 32);
         BE.W64(p, 8, (ulong)target); BE.WF32(p, 16, amount); BE.WF32(p, 20, from.X); BE.WF32(p, 24, from.Y); BE.WF32(p, 28, from.Z);
         Send(p);
     }
@@ -85,7 +110,7 @@ public sealed class CoopNet : IDisposable
     int _sent;
     byte[] SettingsPacket()
     {
-        var p = new byte[32]; p[0] = (byte)'N'; p[1] = (byte)'B'; p[2] = (byte)'C'; p[3] = (byte)'O'; p[4] = 3; p[8] = (byte)TimeOfDay;
+        var p = Header(3, 32); p[8] = (byte)TimeOfDay; p[9] = (byte)(AllUnlocked ? 1 : 0);
         return p;
     }
 
@@ -93,13 +118,31 @@ public sealed class CoopNet : IDisposable
     public void Hello()
     {
         if (_isHost) return;
-        var p = new byte[32]; p[0] = (byte)'N'; p[1] = (byte)'B'; p[2] = (byte)'C'; p[3] = (byte)'O'; p[4] = 4; BE.W64(p, 8, (ulong)MyId);
+        var p = Header(4, 32); BE.W64(p, 8, (ulong)MyId);
         Send(p);
     }
+
+    /// <summary>The local game closed (or the player left): the others hide this player's puppet at once.</summary>
+    public void Leave()
+    {
+        var p = Header(7, 32); BE.W64(p, 8, (ulong)MyId);
+        Send(p);
+    }
+
+    readonly Stopwatch _clock = Stopwatch.StartNew();
+
     public void SendLocal(CoopState st)
     {
+        st.Seq = ++_seq;
+        st.DelayMs = (ushort)Math.Clamp(RoundTripMs / 2, 0, 2000);
         Send(Packet(MyId, st, _myName));
-        if (_isHost && TimeOfDay > 0 && _sent++ % 15 == 0) Send(SettingsPacket());   // twice a second: the room's time of day
+        _sent++;
+        if (_isHost && TimeOfDay > 0 && _sent % 15 == 0) Send(SettingsPacket());   // twice a second: the room's settings
+        if (!_isHost && _sent % 15 == 0)                                             // twice a second: latency to the host
+        {
+            var p = Header(5, 32); BE.W32(p, 8, (uint)_clock.ElapsedMilliseconds);
+            Send(p);
+        }
     }
 
     static void Try(Action a) { try { a(); } catch (Exception) { } }
@@ -122,29 +165,61 @@ public sealed class CoopNet : IDisposable
     void OnPacket(byte[] p, string from, Action<byte[]>? reply)
     {
         if (p.Length < 32 || p[0] != 'N' || p[1] != 'B' || p[2] != 'C' || p[3] != 'O') return;
-        if (p[4] == 3) { if (!_isHost && p[8] is >= 1 and <= 4) TimeOfDay = p[8]; return; }   // room settings from the host
-        if (p[4] == 4)
+        switch (p[4])
         {
-            // a joiner's game has started: register it and answer with the room's time of day at once (before its town loads)
-            if (_isHost && reply != null) { _peers[from] = (reply, DateTime.UtcNow); if (TimeOfDay > 0) Try(() => reply(SettingsPacket())); }
-            return;
+            case 3:   // room settings from the host
+                if (!_isHost) { if (p[8] is >= 1 and <= 4) TimeOfDay = p[8]; AllUnlocked = p[9] == 1; }
+                return;
+            case 4:   // a joiner's game has started: register it and answer with the room settings at once (before its town loads)
+                if (_isHost && reply != null) { _peers[from] = (reply, DateTime.UtcNow); if (TimeOfDay > 0) Try(() => reply(SettingsPacket())); }
+                return;
+            case 5:   // ping: the host answers at once
+                if (_isHost && reply != null) { _peers[from] = (reply, DateTime.UtcNow); var q = (byte[])p.Clone(); q[4] = 6; Try(() => reply(q)); }
+                return;
+            case 6:   // pong: round trip to the host
+                if (!_isHost)
+                {
+                    double rtt = (uint)_clock.ElapsedMilliseconds - BE.U32(p, 8);
+                    if (rtt >= 0 && rtt < 5000) RoundTripMs = RoundTripMs == 0 ? rtt : RoundTripMs * 0.8 + rtt * 0.2;
+                }
+                return;
+            case 7:   // a player left
+                Remotes.TryRemove((long)BE.U64(p, 8), out _);
+                if (_isHost && reply != null) foreach (var (key, peer) in _peers) if (key != from) Try(() => peer.Send(p));
+                return;
+            case 2:
+                // damage: for the local player, or forwarded by the host to the player it is for
+                if ((long)BE.U64(p, 8) == MyId) Damage.Enqueue((BE.F32(p, 16), new System.Numerics.Vector3(BE.F32(p, 20), BE.F32(p, 24), BE.F32(p, 28))));
+                if (_isHost && reply != null)
+                {
+                    _peers[from] = (reply, DateTime.UtcNow);
+                    foreach (var (key, peer) in _peers) if (key != from) Try(() => peer.Send(p));
+                }
+                return;
+            case 1:
+                break;
+            default:
+                return;
         }
-        if (p[4] == 2)
-        {
-            // damage: for the local player, or forwarded by the host to the player it is for
-            if ((long)BE.U64(p, 8) == MyId) Damage.Enqueue((BE.F32(p, 16), new System.Numerics.Vector3(BE.F32(p, 20), BE.F32(p, 24), BE.F32(p, 28))));
-            if (_isHost && reply != null)
-            {
-                _peers[from] = (reply, DateTime.UtcNow);
-                foreach (var (key, peer) in _peers) if (key != from) Try(() => peer.Send(p));
-            }
-            return;
-        }
-        if (p.Length < 16 + CoopState.Size) return;
         long id = (long)BE.U64(p, 8);
         int nl = BE.U16(p, 6);
+        if (p[5] != Protocol || p.Length < 16 + CoopState.Size)
+        {
+            // another NB Multiplayer version: its packets mean something else (shown in the room panel instead)
+            int at = p.Length - nl;
+            string other = nl > 0 && at >= 16 ? System.Text.Encoding.UTF8.GetString(p, at, nl) : "a player";
+            OtherVersions[other] = p[5];
+            if (_isHost && reply != null) _peers[from] = (reply, DateTime.UtcNow);
+            return;
+        }
         string name = 16 + CoopState.Size + nl <= p.Length ? System.Text.Encoding.UTF8.GetString(p, 16 + CoopState.Size, nl) : "?";
-        if (id != MyId) Remotes[id] = (CoopState.Read(p[16..(16 + CoopState.Size)]), DateTime.UtcNow, name);
+        var st = CoopState.Read(p[16..(16 + CoopState.Size)]);
+        if (id != MyId)
+        {
+            // packets can arrive out of order: keep the newest (a restarted game starts counting again: accept a big step back)
+            if (!Remotes.TryGetValue(id, out var old) || st.Seq > old.State.Seq || old.State.Seq - st.Seq > 300)
+                Remotes[id] = (st, DateTime.UtcNow, name);
+        }
         if (_isHost && reply != null)
         {
             _peers[from] = (reply, DateTime.UtcNow);
@@ -152,32 +227,51 @@ public sealed class CoopNet : IDisposable
         }
     }
 
-    /// <summary>Players heard from in the last 3 seconds.</summary>
-    public Dictionary<long, CoopState> Live()
+    /// <summary>
+    /// Players heard from in the last 3 seconds, each with the age of their state: the time since it arrived plus the
+    /// network delay it took to get here (sender to host, host to this player).
+    /// </summary>
+    public Dictionary<long, CoopRemote> Live()
     {
-        var cut = DateTime.UtcNow - TimeSpan.FromSeconds(3);
+        var now = DateTime.UtcNow;
+        var cut = now - TimeSpan.FromSeconds(3);
         foreach (var k in Remotes.Where(kv => kv.Value.Seen < cut).Select(kv => kv.Key).ToList()) Remotes.TryRemove(k, out _);
         foreach (var k in _peers.Where(kv => kv.Value.Seen < cut - TimeSpan.FromSeconds(30)).Select(kv => kv.Key).ToList()) _peers.TryRemove(k, out _);
-        return Remotes.ToDictionary(kv => kv.Key, kv => kv.Value.State);
+        double own = RoundTripMs / 2;
+        return Remotes.ToDictionary(kv => kv.Key, kv => new CoopRemote(kv.Value.State,
+            (float)((now - kv.Value.Seen).TotalSeconds + (kv.Value.State.DelayMs + own) / 1000.0)));
     }
 
     public void Dispose() { _stop.Cancel(); try { _udp?.Dispose(); } catch (Exception) { } }
 }
 
-/// <summary>Runs Showdown Town co-op for the game NB Multiplayer started: attach, then 30 Hz read / send / apply.</summary>
+/// <summary>
+/// Runs Showdown Town co-op for the room's game: follows the game NB Multiplayer started (and any restart of it), then
+/// 30 Hz read / send / apply. Between games, and before the town loads, the player is reported absent.
+/// </summary>
 public sealed class CoopService : IDisposable
 {
     readonly CoopNet _net;
-    readonly int _pid;
+    readonly Func<Process?> _game;
     readonly string _xex;
     readonly uint _puppetBlueprint;
     readonly System.Numerics.Vector3 _park;
     readonly CancellationTokenSource _stop = new();
     public string Status { get; private set; } = "Waiting for the game to start...";
+    /// <summary>What the local game reports (for the room panel).</summary>
+    public CoopMode LocalMode => _local.Mode;
+    /// <summary>The local player's last state (for the room panel).</summary>
+    public CoopState Local => _local;
+    readonly Stopwatch _tick = Stopwatch.StartNew();
+    long _nextSend;
+    CoopState _local;
+    /// <summary>How often the puppets are steered (ms); NB_COOP_APPLY_MS overrides it (tests).</summary>
+    static readonly int ApplyIntervalMs = int.TryParse(Environment.GetEnvironmentVariable("NB_COOP_APPLY_MS"), out var ms) ? ms : 8;
 
-    public CoopService(CoopNet net, int gamePid, string xexPath, uint puppetBlueprint, System.Numerics.Vector3 park)
+    /// <param name="game">The game process NB Multiplayer started for this room (it may be closed and started again).</param>
+    public CoopService(CoopNet net, Func<Process?> game, string xexPath, uint puppetBlueprint, System.Numerics.Vector3 park)
     {
-        _net = net; _pid = gamePid; _xex = xexPath; _puppetBlueprint = puppetBlueprint; _park = park;
+        _net = net; _game = game; _xex = xexPath; _puppetBlueprint = puppetBlueprint; _park = park;
         new Thread(Run) { IsBackground = true, Name = "NB co-op" }.Start();
     }
 
@@ -190,35 +284,62 @@ public sealed class CoopService : IDisposable
             probe = img.AsSpan((int)(XeniaLive.TextStart - 0x82000000), 64).ToArray();
         }
         catch (Exception e) { Status = "Co-op could not read the game executable: " + e.Message; return; }
-        XeniaLive? x = null; CoopSync? sync = null;
+        XeniaLive? x = null; CoopSync? sync = null; int pid = 0;
+        void Detach() { try { x?.Dispose(); } catch (Exception) { } x = null; sync = null; pid = 0; }
         while (!_stop.IsCancellationRequested)
         {
             try
             {
-                if (x == null)
+                var game = _game();
+                bool running = game != null && !SafeExited(game);
+                if (!running || game!.Id != pid)
                 {
-                    x = XeniaLive.AttachPid(_pid, probe);
+                    if (pid != 0) _net.Leave();                     // the game closed (or a new one started): others hide us now
+                    Detach();
+                    _local = default;
+                    if (!running)
+                    {
+                        Status = "The game is not running.";
+                        _net.SendLocal(default);                    // still in the room: absent
+                        Thread.Sleep(500); continue;
+                    }
+                    pid = game!.Id;
+                    x = XeniaLive.AttachPid(pid, probe);
                     sync = new CoopSync(x, _puppetBlueprint, _park);
                 }
                 // before the town loads: every game in the room uses the room's time of day
                 if (_net.TimeOfDay > 0) sync!.SetTimeOfDay(_net.TimeOfDay);
                 else _net.Hello();
-                if (x.Player == 0) { Status = "Waiting for gameplay (load a save or start a new game)..."; Thread.Sleep(500); continue; }
-                var local = sync!.ReadLocal();
-                _net.SendLocal(local);
+                // 30 times a second: read and send the local player
+                if (_tick.ElapsedMilliseconds >= _nextSend)
+                {
+                    _nextSend = _tick.ElapsedMilliseconds + 33;
+                    _local = sync!.ReadLocal();
+                    _net.SendLocal(_local);
+                }
+                if (_local.Mode == CoopMode.Absent)
+                {
+                    Status = x!.Player == 0 ? "Waiting for gameplay (load a save or start a new game)..." : "Waiting for Showdown Town...";
+                    Thread.Sleep(100); continue;
+                }
+                // steering the puppets runs faster than the network (the game simulates at 60 Hz; between two writes the
+                // puppet's AI driver brakes it): every ~8 ms
                 var remotes = _net.Live();
-                while (_net.Damage.TryDequeue(out var hit)) sync.QueueDamage(hit.Amount, hit.From);
-                sync.Apply(remotes);
-                foreach (var (id, dmg) in sync.TakePuppetDamage()) _net.SendDamage(id, dmg, local.Position);
+                while (_net.Damage.TryDequeue(out var hit)) sync!.QueueDamage(hit.Amount, hit.From);
+                sync!.Apply(remotes);
+                foreach (var (id, dmg) in sync.TakePuppetDamage()) _net.SendDamage(id, dmg, _local.Position);
                 Status = remotes.Count == 0 ? "In Showdown Town, waiting for other players..."
                     : $"Co-op: {string.Join(", ", _net.Remotes.Values.Select(r => r.Name))} - {sync.Status}";
-                Thread.Sleep(33);
+                Thread.Sleep(ApplyIntervalMs);
             }
-            catch (ArgumentException) { Status = "The game has closed."; return; }      // process gone
-            catch (Exception e) { Status = "Co-op: " + e.Message; x?.Dispose(); x = null; Thread.Sleep(2000); }
+            catch (ArgumentException) { Status = "The game has closed."; Detach(); Thread.Sleep(500); }      // process gone: wait for a new one
+            catch (Exception e) { Status = "Co-op: " + e.Message; Detach(); Thread.Sleep(2000); }
         }
-        x?.Dispose();
+        if (pid != 0) _net.Leave();
+        Detach();
     }
 
-    public void Dispose() { _stop.Cancel(); _net.Dispose(); }
+    static bool SafeExited(Process p) { try { return p.HasExited; } catch (Exception) { return true; } }
+
+    public void Dispose() { _stop.Cancel(); try { _net.Leave(); } catch (Exception) { } _net.Dispose(); }
 }

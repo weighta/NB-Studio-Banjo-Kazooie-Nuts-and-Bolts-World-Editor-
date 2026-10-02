@@ -351,6 +351,37 @@ public static class ExePatches
             new ExeWord(0x82D2132C, 0x00000000, 0x4B6EF210, "b 0x8241053c  continue with the random pick"),
         });
 
+    public static readonly ExeMod CoopWorldRuns = new(
+        "coop-world-runs",
+        "Co-op: the world keeps running while a player is in a menu",
+        "In single player the pause menu, Change Vehicle and photo mode take the global pause counter [0x82FAC760], which puts " +
+        "the level object [0x82FAC7AC] (state +0x10) into its paused state: physics, AI and the other players' puppets freeze " +
+        "in that player's game. A LIVE game's pause menu skips it (0x825A74A0, all players local), so its world runs. This " +
+        "mod makes the single-player menus do the same: the pause menu (0x825A7538) and the Change Vehicle screen (factory " +
+        "0x825DA8F4, destructor 0x825DA9C4) no longer pause, Change Vehicle no longer takes the level action lock " +
+        "([0x82FAC7AC]+0x60, 0x825768A8 / scene+0x17C) that stops AI drivers, and Take Photo raises the UI input count " +
+        "[0x82FAC70C] instead of the pause (cave 0x82D3F2EC; released by the photo exit callback), so the pad moves only " +
+        "the photo camera. Menu input never reaches the player's vehicle ([0x82FAC70C] clears the game input devices). " +
+        "Build Vehicle is a level change (Mumbo's garage) and still leaves the town. Research: coop/research/pause/REPORT.txt.",
+        "Xenia 2026-10-02: AI trolleys and steered puppets keep moving with the pause menu, Change Vehicle and photo mode open; the player's vehicle does not react to menu input.",
+        new[]
+        {
+            new ExeWord(0x825a7538, 0x4be394e9, 0x4800000c, "b 0x825A7544 (was bl 0x823E0A20): single-player pause menu does not take the global pause [0x82FAC760] (as in a LIVE game); +0x1FC stays 0 so its close releases none"),
+            new ExeWord(0x825da8f4, 0x4be0612d, 0x60000000, "nop (was bl 0x823E0A20): Change Vehicle screen (scene 32, factory 0x825DA8A8) does not take the global pause"),
+            new ExeWord(0x825da9c4, 0x40990014, 0x48000014, "b 0x825DA9D8 (was ble cr6): ...and its destructor 0x825DA990 releases none"),
+            new ExeWord(0x82576884, 0x39600001, 0x39600000, "li r11,0 (was li r11,1): Change Vehicle opener 0x82576778 stores scene+0x17C = 0, so the scene close (0x825DAF20) releases no action lock"),
+            new ExeWord(0x825768a8, 0x4be40aa9, 0x60000000, "nop (was bl 0x823B7350): Change Vehicle does not take the level action lock [0x82FAC7AC]+0x60 (AI vehicles and NPCs keep acting)"),
+            new ExeWord(0x825aa10c, 0x4be36915, 0x487951e1, "bl 0x82d3f2ec (was bl 0x823E0A20): Take Photo raises the UI input count instead of the global pause (world runs, pad goes to the photo camera only)"),
+            new ExeWord(0x82d3f2ec, 0x00000000, 0x3d6082fb, "lis r11,0x82fb"),
+            new ExeWord(0x82d3f2f0, 0x00000000, 0x814bc70c, "lwz r10,0xc70c(r11)  [0x82FAC70C] open input-capturing UI scenes"),
+            new ExeWord(0x82d3f2f4, 0x00000000, 0x394a0001, "addi r10,r10,1"),
+            new ExeWord(0x82d3f2f8, 0x00000000, 0x914bc70c, "stw r10,0xc70c(r11)  game input devices are cleared while it is non-zero"),
+            new ExeWord(0x82d3f2fc, 0x00000000, 0x4e800020, "blr"),
+            new ExeWord(0x825aa4b8, 0x817f1728, 0x817f16d4, "lwz r11,0x16d4(r31) (was 0x1728 = [0x82FAC760]): photo exit callback 0x825AA4A0 releases the UI input count [0x82FAC70C] instead"),
+            new ExeWord(0x825aa4c8, 0x917f1728, 0x917f16d4, "stw r11,0x16d4(r31) (was 0x1728): ...count - 1 (only when > 0, ble at 0x825AA4C0 kept)"),
+            new ExeWord(0x825aa4d0, 0x4bd12641, 0x60000000, "nop (was bl 0x822BCB10 resume): nothing to resume"),
+        });
+
     public static readonly ExeMod SnowFollowsCamera = new(
         "snow-follows-camera",
         "Weather: tagged particle emitters follow the camera (falling snow everywhere)",
@@ -594,7 +625,7 @@ public static class ExePatches
 
     public static string FamilyOf(string id) => id.StartsWith("vehicle-part-limit") ? "vehicle-part-limit" : id.StartsWith("garage-build-area") ? "garage-build-area" : "";
 
-    public static readonly IReadOnlyList<ExeMod> All = new[] { ChangeVehicleInTown, TownVehiclesNormalRules, AiSpringTimer, TownAiRestartOnChangeVehicle, DeveloperMainMenu, DeveloperAllParts, WorldBounds2048, NoEscapeReset, TownNpcPathGuard, CoopRemoteDamage, CoopSharedTime, SnowFollowsCamera, DrawDistanceX4, PhotoCameraUnlimited, PauseOpensPhotos, GarageBuildArea31, VehiclePartLimit400 };
+    public static readonly IReadOnlyList<ExeMod> All = new[] { ChangeVehicleInTown, TownVehiclesNormalRules, AiSpringTimer, TownAiRestartOnChangeVehicle, DeveloperMainMenu, DeveloperAllParts, WorldBounds2048, NoEscapeReset, TownNpcPathGuard, CoopRemoteDamage, CoopSharedTime, CoopWorldRuns, SnowFollowsCamera, DrawDistanceX4, PhotoCameraUnlimited, PauseOpensPhotos, GarageBuildArea31, VehiclePartLimit400 };
 
     /// <summary>Checks that every patched word currently holds its original value in the decrypted image.</summary>
     public static List<string> Check(byte[] image, uint imageBase, ExeMod mod)

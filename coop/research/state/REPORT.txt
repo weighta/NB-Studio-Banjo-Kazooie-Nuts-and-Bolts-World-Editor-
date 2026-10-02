@@ -1,0 +1,47 @@
+Showdown Town co-op: player vehicle, game state, hiding puppets (research report, 2026-10-02)
+Verified live in Xenia instance 7 (Workspaces/coopB, co-op TEST edition, module hash 99C889C487AB83DB).
+L = current level object [0x82FAC7AC], A = Banjo avatar, V = the player's vehicle. Details: NOTES.txt.
+
+1. THE PLAYER'S CURRENT VEHICLE
+   L = [0x82FAC7AC], A = [L+0xA44] (vtable 0x82FB7EDC; 0 on the title screen; new address after every load),
+   V = [A+0xC3C] (0 on foot). [A+0xC40] = seat block of V; [A+0xCA0]/[A+0xCA4] = vehicle/seat the Y prompt offers;
+   [A+0xCBC] = 2 in a vehicle, 0 on foot. Cross-check while seated: [V+0x48] - 0x40 == A (+0x48 = first child link).
+   Verified: Y in/out (3 cycles), Change Vehicle (new object), title screen (A = 0, 8 front-end vehicles exist),
+   garage (A valid, V = 0), break-up (V keeps the original object with only the seat block; brk1.png).
+   Surprises: after a break-up the body pointer [V+0x7C0] changes (re-read every tick); broken-off parts become new
+   vehicle objects with blueprint 0. Freed vehicles (Change Vehicle) keep vtable and blueprint; +0x4C (level) becomes 0,
+   the body 0, the block list invalid: alive check = +0x4C != 0 and body pointer unchanged.
+
+2. GAME STATE WORDS
+   current level   [L+0] = running script id: 0x19757C4B title, 0x1936DC87 house menus, 0x1920ABF9 garage (Build Vehicle,
+                   Mumbo's Motors, editor); town 0x1901D1B6 morning, 0x19E00470 midday, 0x196BD4A7 afternoon,
+                   0x193F0052 night; other worlds: their act script (low 24 bits = act bundle)
+   town flag       [L+0x58] = 1 in town, 7 title screen, 0 house and garage
+   loading screen  [0x82FACBA4] = 0x005D0000 (LoadingTips) and [0x82FACAD4] = 1, else 0xFFFFFFFF / 0. L is 0 for only
+                   ~0.1 s; the old level stays current while the loading screen is up (~7 s garage -> town)
+   paused          [0x82FAC760] > 0 (counter; resume 0x822BCB10 at 0)
+   pause menu      [0x82E51BD0] != 0xFFFFFFFF (0x00180000)
+   Change Vehicle  [0x82E51BD4] != 0xFFFFFFFF (0x00200000)
+   Build Vehicle   straight to the garage level (no menu of its own)
+   photo mode      [[L+0x15B0]+0x164] == 1
+   cutscene/locked [L+0x64] = 1 and [L+0xBC4] = 3 (2 in play); [L+0x64] is also 1 with the Load Blueprint list open
+                   (check paused first). Do not use 0x82FAC70C as a pause flag (1 from Return to title until the next
+                   level loads). Grunty's non-pausing taunts have no state word (they do not take control).
+
+3. HIDING A PUPPET (no writes into block data)
+   Hide: alive check (vtable 0x82FB7F78, +0x4C != 0, blueprint 0x00EA74B4, body unchanged); [veh+0x1C0] = 1 (vehicle
+   draw 0x8224EE90 skips it); driver drv = [veh+0x48] - 0x40, only if vtable 0x82FB7EDC and [drv+0xC3C] == veh:
+   [drv+0x1C0] = 1; collision layer: body = [veh+0x7C0], [body+0x2C] = ([body+0x2C] & ~0x3F) | 9 (puppets use 7).
+   Show: both +0x1C0 back to 0, layer back to 7.
+   Layer 9 collides only with 0 (fixed body), 1 (town scenery, terrain) and 31 (group filter: layer table at filter+0x34,
+   filter at Havok world+0x70). Vehicles 7, walking characters 5, seated drivers 17. Wheels are raycasts: a puppet on any
+   layer still drives on the ground (a layer-30 test puppet kept driving and did not fall out).
+   Verified: puppet + driver + shadow gone; player drove through the hidden puppet's spot (59 u, closest 0.9 u, puppet
+   moved 0.15 u); visible again after Show; player blocked at 4.5 u again (baseline). Layer 9 alone: player went 71 u
+   through the spot without riding over it. Flags held 2 minutes while the AI drove. Change Vehicle with all 3 puppets
+   hidden: no crash; new puppets come back visible on layer 7. Recipe script: hidepuppet.py hide|show|status <veh>.
+   Risks: re-apply every tick while hidden (a break-up gives a new body on layer 7; new puppets after Change Vehicle
+   start visible); broken-off parts stay visible and colliding (blueprint-0 vehicles); projectiles/lasers against a
+   hidden puppet untested (ignore remote-damage hits on hidden puppets); a layer restored while overlapping takes effect
+   once they separate; parking somewhere hidden is not needed (town broadphase floor y ~ -116, message 22
+   EscapedBackground below it); puppet sound/particles while hidden not checked (muted).

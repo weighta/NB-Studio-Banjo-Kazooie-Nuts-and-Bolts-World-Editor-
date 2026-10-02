@@ -1,0 +1,71 @@
+Keeping the world running while a co-op player is in a menu (research report, 2026-10-02)
+
+HOW THE SINGLE-PLAYER GAME PAUSES
+- No time scale: one global pause counter [0x82FAC760] switches the level object's state machine.
+- Level object L = [0x82FAC7AC] (= [[0x82FAB0FC]+4], entry 0 of app list 0x82FAB060). State at L+0x10, queued states
+  L+0x14.. (count L+0x24), applied by 0x8229B330 -> 0x823C5A00. State 1 = running: 0x823C5BD8 full update (input,
+  actors/AI, physics, time). States 0/3 = paused: [0x82F9E240] = 0x82533F48 updates only the camera (L+0x8D0) and L+0x8CC.
+- 0x823E0A20 increments [0x82FAC760]; on 0->1 queues state 3 into every object of list 0x82FAB060. Each decrement site is
+  guarded (>0) and calls 0x822BCB10 on 1->0 (queues state 1). Level init 0x823C6260 resets the counter.
+
+PAUSE MENU (scene 24)
+- Init 0x825A6DB8 checks the multiplayer flag [0x82FAC650] at 0x825A74A0. Single player: always takes the pause
+  (bl 0x823E0A20 at 0x825A7538), sets +0x1FC=1; destructor 0x825A6BA0 releases it. Multiplayer: takes it (0x825A74EC) only
+  when all players are local ([[0x82E5EDE0]+0x2C0] lists equal), so a LIVE game's world runs. Scene handle 0x82E51BD0.
+  Assign Components (scene 29) and the photo album are child scenes and only inherit its pause.
+
+CHANGE VEHICLE (scene 32, frontend_loadvehicle)
+- Opener 0x82576778 (pause item 1, called at 0x825A8F44) closes the pause menu with 0x82577C20(player,1) (HUD stays
+  hidden). Scene factory 0x825DA8A8 takes the pause (0x825DA8F4); destructor 0x825DA990 releases it.
+- The opener also takes a level-wide action lock 0x823B7350([0x82FAC7AC]+0x60, 0xFFFF, 0) at 0x825768A8 (counters
+  L+0x64..0x70); scene close 0x825DAF20 unlocks it when scene+0x17C is set. The lock stops AI drivers and NPCs; their
+  Havok islands go inactive (hkpEntity+0xB8 not in world +0x28) and velocity writes do nothing. Scene handle 0x82E51BD4.
+
+BUILD VEHICLE: a level change to Mumbo's garage (0x82564690); the town is unloaded (bodies freed, Havok time stops,
+L+0x58 1 -> 0). Cannot keep the town running: treat the player as gone.
+
+PHOTO MODE: Take Photo 0x825A9FA8 enters photo mode with 0x82535A58 (exit callback 0x825AA4A0), closes the pause with
+0x82577C20(player,0), then takes the pause at 0x825AA10C; the callback releases it. Photo camera 0x8229A8D0 reads the pad.
+
+PLAYER INPUT: in the running update, 0x823C5DE0 clears the game input devices (0x8229DDF0) whenever [0x82FAC70C] != 0
+(open input-capturing UI scenes; ++ at 0x823EC930, -- at 0x823ECA58). Verified: [0x82FAC70C]=1 stops RT driving; the
+photo camera still moves.
+
+PATCH (14 words, coop/research/pause/world_runs_asm.py; NO_PHOTO=1 leaves out photo mode)
+  0x825A7538 4BE394E9 -> 4800000C  pause menu does not take the global pause (as in a LIVE game)
+  0x825DA8F4 4BE0612D -> 60000000  Change Vehicle screen does not take the global pause
+  0x825DA9C4 40990014 -> 48000014  ...its destructor releases none
+  0x82576884 39600001 -> 39600000  scene+0x17C = 0: the close releases no action lock
+  0x825768A8 4BE40AA9 -> 60000000  Change Vehicle does not take the level action lock (AI and NPCs keep acting)
+  0x825AA10C 4BE36915 -> 487951E1  Take Photo raises the UI input count (cave 0x82D3F2EC) instead of the pause
+  0x82D3F2EC..0x82D3F2FC cave: [0x82FAC70C] += 1; blr
+  0x825AA4B8 817F1728 -> 817F16D4  photo exit releases the UI input count instead of the pause
+  0x825AA4C8 917F1728 -> 917F16D4
+  0x825AA4D0 4BD12641 -> 60000000  nothing to resume
+
+VERIFIED IN XENIA (instance 5, Workspaces/coopA = co-op TEST edition; push.py writes 6 u/s into a puppet 30x/s)
+  pause menu:     stock AI trolley 0.00 / puppet 0.00   patched ~9 u per 0.5 s / puppet 8.2, 7.2 u
+  photo mode:     stock frozen                         patched keeps driving, puppet 8.0/8.2 u, camera moves with LS/RS
+  Change Vehicle: stock frozen (lock 1)                patched keeps driving (lock 0), puppet 8.15 u, islands active
+  player vehicle with RT/LY held in all three menus: 0.00 (menu input never drives the vehicle)
+  A vehicle swap in Change Vehicle with the world running works (v2_sel1.png, v2_drive.png). All counters back to 0
+  after closing every menu. Screenshots: s_*.png (stock), v4_*.png (patched), t1_bv.png (garage).
+
+MENU STATE WORDS (read-only, for NB Multiplayer)
+  [0x82E51BD0] != 0xFFFFFFFF          pause menu open (any tab, incl. Assign Components, photo album)
+  [0x82E51BD4] != 0xFFFFFFFF          Change Vehicle (load blueprint) open
+  [[0x82FAC7AC]+0x15B0] + 0x164 == 1  photo mode
+  [0x82FAC70C] > 0                    some input-capturing UI open (with the patch: also photo mode)
+  [0x82FAC7AC]+0x58 == 1              in the level (0 in the garage: catches Build Vehicle)
+  [0x82FAC760] > 0                    world frozen anyway;  [0x82FAC7AC]+0x64 > 0  action lock (dialogs, cutscenes)
+
+RISKS / LIMITS
+- Build Vehicle cannot keep the town running. Open Cinema (0x825B4B38), challenge select, MP during-challenge and the app
+  notification handler 0x82515424 (probably the Xbox Guide) still pause.
+- HUD (minimap, gauges) stays visible in Change Vehicle and photo mode (stock hides them).
+- With the world running: NPC speech and tutorial dialogs can appear while a menu is open; the player's vehicle coasts
+  and can be hit; tutorial dialogs take the action lock (stock), which freezes AI.
+- Velocity writes do not wake a Havok body whose island is inactive: anything taking the L+0x60 lock (dialogs,
+  cutscenes) can stop puppets.
+- Word 1 only changes the single-player path; the Change Vehicle words apply wherever that screen opens (0x82577DA8
+  normally keeps it out of multiplayer). Tested on the co-op TEST edition (module hash 99C889C487AB83DB).

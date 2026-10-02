@@ -22,7 +22,7 @@ echo "== executable mods"
 python - "$WS/workspace.json" <<'EOF'
 import json, sys
 p = sys.argv[1]; m = json.load(open(p))
-m['ExeMods'] = ['town-vehicles-normal-rules', 'change-vehicle-town', 'town-ai-restart-on-change-vehicle', 'town-npc-path-guard', 'coop-remote-damage', 'coop-shared-time']
+m['ExeMods'] = ['town-vehicles-normal-rules', 'change-vehicle-town', 'town-ai-restart-on-change-vehicle', 'town-npc-path-guard', 'coop-remote-damage', 'coop-shared-time', 'coop-world-runs']
 json.dump(m, open(p, 'w'), indent=2)
 print('  ' + ', '.join(m['ExeMods']))
 EOF
@@ -63,6 +63,6 @@ BP=$(python -c "import zlib; print('%08x' % ((zlib.crc32(b'banjox_coop_puppet') 
 echo "== patch (puppet blueprint id $BP)"
 mkdir -p coop/dist
 $CLI patch-build $WS ${COOP_OUT:-coop/dist/ShowdownTownCoop.nbpatch} --name "Showdown Town Co-op" --author weighta \
-     --version 1.2 --category coop --ops coop/ops.json --multiplayer coop --tags "Showdown Town" \
+     --version 1.3 --category coop --ops coop/ops.json --multiplayer coop --tags "Showdown Town" \
      --desc "Play the single-player game together in NB Multiplayer: other players drive through your Showdown Town. Town vehicles are destructible and can be changed in town." \
      --extra mode=coop --extra puppetBlueprint=$BP --extra parkSpot=0,0,0

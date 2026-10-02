@@ -104,9 +104,20 @@ public static class Saves
     /// Before a launch: installs into existing profiles. A brand-new profile only appears once Xenia has started, so the
     /// folder is watched for a minute and the save installed as soon as it exists (well before the title menu).
     /// </summary>
-    public static void PrepareLaunch(AppSettings s)
+    /// <param name="useAllUnlocked">Install the all-unlocked save for this launch. A co-op room can ask for it although the
+    /// player's own setting is off: then it is installed for that game only, and the player's own save comes back at the
+    /// next launch without it (data\save_backup\room.txt marks such an install).</param>
+    public static void PrepareLaunch(bool useAllUnlocked, bool forRoom = false)
     {
-        if (!s.UseAllUnlockedSave || !Available) return;
+        var marker = Path.Combine(AppSettings.DataDir, "save_backup", "room.txt");
+        if (!useAllUnlocked)
+        {
+            if (File.Exists(marker)) { try { Restore(); File.Delete(marker); } catch (Exception) { } }
+            return;
+        }
+        if (!Available) return;
+        if (forRoom) { Directory.CreateDirectory(Path.GetDirectoryName(marker)!); File.WriteAllText(marker, "installed for a co-op room"); }
+        else if (File.Exists(marker)) File.Delete(marker);
         var before = Profiles().Select(Path.GetFileName).ToHashSet();
         try { Install(); } catch (Exception) { }
         _ = Task.Run(async () =>

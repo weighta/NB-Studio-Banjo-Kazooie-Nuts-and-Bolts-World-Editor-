@@ -15,7 +15,7 @@
     <AssemblyName>NBMultiplayer</AssemblyName>
     <RootNamespace>NB.Multiplayer</RootNamespace>
     <Product>NB Multiplayer</Product>
-    <Version>1.6.0</Version>
+    <Version>1.7.0</Version>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
   </PropertyGroup>
 

@@ -69,6 +69,8 @@ public sealed class RoomServer : IDisposable
     public List<NB.Core.Project.RecipeMod>? Recipe { get; set; }
     /// <summary>The host's .nbpatch file for a SHA-256 of the recipe (null = not available).</summary>
     public Func<string, string?>? ModFile { get; set; }
+    /// <summary>Showdown Town co-op rooms: the settings every player's game uses (null = not a co-op room).</summary>
+    public CoopRoomSettings? Coop { get; set; }
 
     /// <summary>The UDP relay of the overlay (port + 1), null when not running.</summary>
     public RoomRelay? Relay => _relay;
@@ -322,6 +324,7 @@ public sealed class RoomServer : IDisposable
                 players = _players.Values.Select(p => new { xuid = p.Xuid, gamertag = p.Gamertag, address = p.HostAddress, session = p.SessionId }).ToList(),
                 fingerprint = HostCompat?.Fingerprint ?? "", files = HostCompat?.Files ?? new Dictionary<string, string>(),
                 recipe = Recipe?.Select(m => new { id = m.Id, name = m.Name, version = m.Version, sha256 = m.Sha256, size = m.Size }).ToList(),
+                coop = Coop == null ? null : new { protocol = Coop.Protocol, timeOfDay = Coop.TimeOfDay, allUnlocked = Coop.AllUnlockedSave },
             };
         return Json(c, 200, dto);
     }
@@ -1018,4 +1021,15 @@ public sealed class RoomServer : IDisposable
             if (IsEnabled(logLevel)) owner.Emit($"[{logLevel}] {formatter(state, exception)}{(exception != null ? " " + exception.Message : "")}");
         }
     }
+}
+
+/// <summary>A co-op room's settings, reflected to every player who joins (GET /nb/room "coop").</summary>
+public sealed class CoopRoomSettings
+{
+    /// <summary>Co-op packet protocol: joiners with another one cannot see each other (they need the same NB Multiplayer).</summary>
+    public int Protocol { get; set; }
+    /// <summary>Showdown Town time of day, 1..4 = morning, midday, afternoon, night.</summary>
+    public int TimeOfDay { get; set; }
+    /// <summary>Everyone starts with the all-unlocked save (no intro, everything unlocked).</summary>
+    public bool AllUnlockedSave { get; set; }
 }

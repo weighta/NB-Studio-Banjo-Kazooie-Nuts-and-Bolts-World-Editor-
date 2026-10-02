@@ -15,12 +15,14 @@ public static class GameLauncher
     public static string XeniaExe => Path.Combine(AppContext.BaseDirectory, "xenia", "xenia_canary_netplay.exe");
 
     /// <summary>Starts the game for a room; co-op editions run single-player (NB Multiplayer syncs the players).</summary>
-    public static Process Start(AppSettings s, Edition edition, string apiHostPort, string roomCode)
+    /// <param name="allUnlocked">Co-op rooms: use the all-unlocked save for this game (the room's setting), whatever the
+    /// player's own setting says; null = the player's setting.</param>
+    public static Process Start(AppSettings s, Edition edition, string apiHostPort, string roomCode, bool? allUnlocked = null)
     {
         if (!File.Exists(XeniaExe)) throw new FileNotFoundException("The Xenia build is missing next to NB Multiplayer (xenia folder). Reinstall.", XeniaExe);
         Directory.CreateDirectory(AppSettings.DataDir);
         SetProjectTweaks(null, null);   // editions carry their tweaks in their own default.xex
-        Saves.PrepareLaunch(s);
+        Saves.PrepareLaunch(allUnlocked ?? s.UseAllUnlockedSave, forRoom: allUnlocked == true && !s.UseAllUnlockedSave);
         var args = new List<string>();
         var extra = Environment.GetEnvironmentVariable("NB_XENIA_EXTRA");   // testing: extra Xenia options
         if (!string.IsNullOrWhiteSpace(extra)) args.AddRange(extra.Split(' ', StringSplitOptions.RemoveEmptyEntries));
@@ -51,7 +53,7 @@ public static class GameLauncher
         Directory.CreateDirectory(AppSettings.DataDir);
         var xex = Path.Combine(gameDir, "default.xex");
         SetProjectTweaks(xex, projectExeMods);
-        Saves.PrepareLaunch(s);
+        Saves.PrepareLaunch(s.UseAllUnlockedSave);
         var args = new List<string>();
         var extra = Environment.GetEnvironmentVariable("NB_XENIA_EXTRA");
         if (!string.IsNullOrWhiteSpace(extra)) args.AddRange(extra.Split(' ', StringSplitOptions.RemoveEmptyEntries));
@@ -121,8 +123,9 @@ public static class GameLauncher
 
 /// <summary>What a room server reports (GET /nb/room).</summary>
 /// <param name="Recipe">The mods of the host's edition (empty = Vanilla); null from hosts older than NB Multiplayer 1.2.</param>
+/// <param name="Coop">Co-op room settings (null: not a co-op room, or a host older than NB Multiplayer 1.7).</param>
 public sealed record RoomInfo(string Name, string HostXuid, string Edition, List<(string Xuid, string Name)> Players, CompatProfile? Compat,
-    List<NB.Core.Project.RecipeMod>? Recipe = null);
+    List<NB.Core.Project.RecipeMod>? Recipe = null, CoopRoomSettings? Coop = null);
 
 public static class Net
 {
@@ -191,8 +194,12 @@ public static class Net
             if (j["recipe"] is JsonArray ra)
                 recipe = ra.Select(m => new NB.Core.Project.RecipeMod(m?["id"]?.GetValue<string>() ?? "", m?["name"]?.GetValue<string>() ?? "",
                     m?["version"]?.GetValue<string>() ?? "", (m?["sha256"]?.GetValue<string>() ?? "").ToLowerInvariant(), m?["size"]?.GetValue<long>() ?? 0)).ToList();
+            CoopRoomSettings? coop = null;
+            if (j["coop"] is JsonObject co)
+                coop = new CoopRoomSettings { Protocol = co["protocol"]?.GetValue<int>() ?? 0, TimeOfDay = co["timeOfDay"]?.GetValue<int>() ?? 0,
+                                              AllUnlockedSave = co["allUnlocked"]?.GetValue<bool>() ?? false };
             return new RoomInfo(j["name"]?.GetValue<string>() ?? "", j["host"]?.GetValue<string>() ?? "",
-                j["edition"]?.GetValue<string>() ?? Editions.VanillaName, players, compat, recipe);
+                j["edition"]?.GetValue<string>() ?? Editions.VanillaName, players, compat, recipe, coop);
         }
         catch (Exception) { return null; }
     }

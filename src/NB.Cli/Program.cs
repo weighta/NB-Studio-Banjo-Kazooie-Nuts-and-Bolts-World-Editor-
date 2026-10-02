@@ -191,6 +191,41 @@ static class Program
                     foreach (var l in scene.Log.Take(15)) Console.WriteLine("  " + l);
                     return 0;
                 }
+                case "world-stats":
+                {
+                    // world-stats <workspace> <bundle hex> <background model>: vertex and triangle counts of a whole world scene
+                    // (terrain + every placed scenery instance and the models nested in it), counted per unique vertex buffer
+                    var ws = NB.Core.Project.Workspace.Open(args[1]);
+                    var scene = new NB.Core.World.WorldScene(ws, Convert.ToUInt32(args[2], 16), args[3]);
+                    static (long V, long T, int Vb) Count(NB.Core.Models.ModelAsset? m)
+                    {
+                        if (m == null) return (0, 0, 0);
+                        var vbs = m.Draws.GroupBy(d => d.VbRecord).Select(g => (long)g.Max(d => d.Positions.Length)).ToList();
+                        long tris = m.Draws.Sum(d => d.Primitive == 5 ? Math.Max(0, d.IndexCount - 2) : d.IndexCount / 3);   // 4 list, 5 strip
+                        return (vbs.Sum(), tris, vbs.Count);
+                    }
+                    var models = new Dictionary<NB.Core.Models.ModelAsset, (long V, long T, int Vb)>(ReferenceEqualityComparer.Instance);
+                    (long V, long T, int Vb) C(NB.Core.Models.ModelAsset? m) { if (m == null) return (0, 0, 0); if (!models.TryGetValue(m, out var c)) models[m] = c = Count(m); return c; }
+                    long placedV = 0, placedT = 0, terrainV = 0, terrainT = 0, sceneryV = 0, sceneryT = 0; int objs = 0, children = 0;
+                    foreach (var o in scene.Objects.Where(o => o.Model != null))
+                    {
+                        var c = C(o.Model);
+                        long v = c.V, t = c.T;
+                        foreach (var (cm, _) in o.Children) { var cc = C(cm); v += cc.V; t += cc.T; children++; }
+                        placedV += v; placedT += t; objs++;
+                        if (o.Kind.ToString().Contains("Terrain")) { terrainV += v; terrainT += t; } else { sceneryV += v; sceneryT += t; }
+                    }
+                    var bg = C(scene.Background);
+                    Console.WriteLine($"objects with geometry {objs} (nested models {children}), unique models {models.Count}");
+                    Console.WriteLine($"PLACED (as the scene is laid out, every instance counted): {placedV:N0} vertices, {placedT:N0} triangles");
+                    Console.WriteLine($"  terrain/background draws: {terrainV:N0} vertices, {terrainT:N0} triangles");
+                    Console.WriteLine($"  scenery instances:        {sceneryV:N0} vertices, {sceneryT:N0} triangles");
+                    Console.WriteLine($"UNIQUE (geometry stored once per model): {models.Values.Sum(c => c.V):N0} vertices, {models.Values.Sum(c => c.T):N0} triangles in {models.Values.Sum(c => c.Vb):N0} vertex buffers");
+                    Console.WriteLine($"background model alone: {bg.V:N0} vertices, {bg.T:N0} triangles");
+                    foreach (var (m, c) in models.OrderByDescending(kv => kv.Value.V).Take(10))
+                        Console.WriteLine($"  {c.V,10:N0} v  {c.T,10:N0} t  {NB.Core.Formats.AssetIds.DisplayName(m.View.Name)}");
+                    return 0;
+                }
                 case "tex-batch":
                 {
                     // tex-batch <workspace> <bundle hex> <dir>: replace every texture of ONE bundle (resident + its streamed top level)
