@@ -34,7 +34,8 @@ public sealed class TourOverlay : IDisposable
         };
         _dim.Paint += (_, e) =>
         {
-            // a glowing frame around the spotlight
+            // a frame just outside the spotlight (the hole itself is exactly the target, so the dimming never cuts
+            // part-way into a neighbouring bar)
             if (Spot() is not { } s) return;
             var local = _dim.RectangleToClient(s); local.Inflate(3, 3);
             using var pen = new Pen(Color.FromArgb(255, 170, 70), 3f);
@@ -85,6 +86,7 @@ public sealed class TourOverlay : IDisposable
     }
 
     public void Start() { _dim.Show(_owner); _card.Show(_owner); Go(0); }
+    public void GoTo(int i) => Go(i);
 
     /// <summary>The first-start question: "Would you like a quick tour?" Returns true for yes.</summary>
     public static bool AskWelcome(IWin32Window owner)
@@ -148,7 +150,7 @@ public sealed class TourOverlay : IDisposable
         _dim.Bounds = area;
         var spot = Spot();
         var region = new Region(new Rectangle(0, 0, area.Width, area.Height));
-        if (spot is { } s) { var local = _dim.RectangleToClient(s); local.Inflate(6, 6); region.Exclude(local); }
+        if (spot is { } s) { var local = _dim.RectangleToClient(s); region.Exclude(local); }
         var old = _dim.Region; _dim.Region = region; old?.Dispose();
         _dim.Invalidate();
         // the card: beside the spotlight (right, else left, else below), or centred

@@ -49,11 +49,17 @@ public sealed class MeshDraw
     public float[]? BlendWeights;
     public int[] Indices = Array.Empty<int>();
     public int VertexShaderPoolOffset = -1;
+    /// <summary>Pool part holding the vertex shader microcode (with <see cref="VertexShaderPoolOffset"/>), or -1.</summary>
+    public int VertexShaderPoolPart = -1;
     /// <summary>Pixel-shader constants in effect at this draw (stream op 0x06, kind 0): register → value.
     /// Layered materials use c5 as the overlay (paint) colour — Mumbo's Motors' yellow is (1, 1, 0).</summary>
     public Dictionary<int, Vector4> PixelConstants = new();
-    /// <summary>Index values are vertex * 4 + instance (see ParseDraws). Importing into such draws is not supported.</summary>
+    /// <summary>Index values are vertex * <see cref="InstanceStride"/> + instance (see ParseDraws); <see cref="Indices"/>
+    /// hold the vertex numbers. Importing into such draws is not supported.</summary>
     public bool Instanced;
+    /// <summary>Instanced draws: the number of instance slots packed into each index (4 for Showdown Town's windows and
+    /// doors, 32 for vehicle body blocks such as body_heavy_cube: 24 vertices, raw indices up to 767). 1 otherwise.</summary>
+    public int InstanceStride = 1;
     /// <summary>Rendergraph node of the draw (draw op 0x30 +16; -1 for op 0x01). LOD levels select nodes.</summary>
     public int Node = -1;
     /// <summary>Draw block (stream op 0x17 = {u32 block, u32 end offset}) the draw belongs to; -1 outside any block.
@@ -69,6 +75,49 @@ public sealed class MeshDraw
     /// <summary>Per pass of the 3-way pass switch (op 0x16): the state each pass binds before this draw. Pass 1 is the
     /// depth-only pass (no pixel shader, op 0x2A); passes 0 and 2 are colour passes. Empty when the stream has no switch.</summary>
     public DrawPass[] Passes = Array.Empty<DrawPass>();
+    /// <summary>Pixel shader in effect for draws outside a pass switch (models without op 0x16).</summary>
+    public (int Part, int Offset)? PixelShader;
+    public int PixelShaderObject = -1;
+    /// <summary>The model this draw belongs to (microcode and shader headers are read through its asset view).</summary>
+    public ModelAsset? Owner;
+    /// <summary>The draw's colour-pass pixel shader decoded (cached; null when there is none or it could not be read).</summary>
+    public XenosShader? ColourShader
+    {
+        get
+        {
+            if (_psDone) return _ps;
+            _psDone = true;
+            try
+            {
+                var pass = Passes.Length > 0 ? Passes[0] : null;
+                var loc = pass != null ? pass.PixelShader : PixelShader;
+                int obj = pass != null ? pass.PixelShaderObject : PixelShaderObject;
+                if (loc is { } l && Owner != null)
+                    _ps = XenosShader.Load(Owner.View.Part(l.Part).Data, l.Offset, obj >= 0 ? Owner.View.Data(".data") : null, obj);
+            }
+            catch { _ps = null; }
+            return _ps;
+        }
+    }
+    XenosShader? _ps; bool _psDone;
+
+    /// <summary>The colour pass's vertex shader decoded (cached; null when unknown).</summary>
+    public XenosShader? ColourVertexShader
+    {
+        get
+        {
+            if (_vsDone) return _vs;
+            _vsDone = true;
+            try
+            {
+                if (Passes.Length > 0 && Passes[0].VertexShader is { } l && Owner != null)
+                    _vs = XenosShader.Load(Owner.View.Part(l.Part).Data, l.Offset, null, -1);
+            }
+            catch { _vs = null; }
+            return _vs;
+        }
+    }
+    XenosShader? _vs; bool _vsDone;
 }
 
 /// <summary>Render state of one pass at a draw (see <see cref="MeshDraw.Passes"/>).</summary>
@@ -76,13 +125,20 @@ public sealed class DrawPass
 {
     /// <summary>Pixel shader microcode (pool part, offset), when its patch location is known.</summary>
     public (int Part, int Offset)? PixelShader;
+    /// <summary>.data offset of the pass's D3D pixel shader object (stream op 0x02 +4); its 0x102A1100 header lists the
+    /// shader's literal constant ranges (see <see cref="XenosShader"/>). -1 when unknown.</summary>
+    public int PixelShaderObject = -1;
+    /// <summary>Vertex shader microcode bound by this pass (op 0x2E +0x14, patched from the pool), and the vertex shader
+    /// constants the stream set (op 0x06 with +4 = 1).</summary>
+    public (int Part, int Offset)? VertexShader;
+    public Dictionary<int, Vector4> VsConstants = new();
     public bool NullPixelShader;
     public List<(int Slot, string Texture)> Textures = new();
     public Dictionary<int, Vector4> Constants = new();
     /// <summary>Render-state op 0x0C (register, value): 0x48/0x4C/0x50 = src blend / dest blend / blend op (Xenos
     /// enums: 6 = SRC_ALPHA, 7 = ONE_MINUS_SRC_ALPHA), 0x44 = blend factor (alpha in the top byte).</summary>
     public Dictionary<int, uint> States = new();
-    public DrawPass Clone() => new() { PixelShader = PixelShader, NullPixelShader = NullPixelShader, Textures = Textures, Constants = new(Constants), States = new(States) };
+    public DrawPass Clone() => new() { PixelShader = PixelShader, PixelShaderObject = PixelShaderObject, VertexShader = VertexShader, VsConstants = new(VsConstants), NullPixelShader = NullPixelShader, Textures = Textures, Constants = new(Constants), States = new(States) };
 }
 
 /// <summary>
@@ -98,6 +154,10 @@ public sealed class ModelAsset
     public List<SceneInstance> Instances = new();
     public List<int> ReferenceIds = new();
     public List<string> TextureTable = new();
+    /// <summary>.data offsets of the named texture-table entries (parallel to <see cref="TextureTable"/>).</summary>
+    public List<int> TextureTableOffsets = new();
+    /// <summary>Texture-table entries by the index the command stream uses (op 0x43), unnamed entries left out.</summary>
+    public Dictionary<int, string> TextureByIndex = new();
     public List<MeshDraw> Draws = new();
     public List<string> Warnings = new();
     public int ResourceHeader = -1;
@@ -185,6 +245,24 @@ public sealed class ModelAsset
     /// The engine picks the highest level whose distance &lt;= view depth / instance scale (docs/research/151b).</summary>
     public List<List<(float Distance, HashSet<int> Nodes)>> LodLevels = new();
 
+    /// <summary>View depth (divided by the instance scale) beyond which the game draws nothing of this model: every LOD
+    /// group ends with an empty "cull" level (Showdown Town props cull at 83–800 units, docs/research/151b). Infinity when
+    /// some group never culls or the model has no LOD table (terrain, hinterlands, skydomes).</summary>
+    public float CullDistance
+    {
+        get
+        {
+            if (LodLevels.Count == 0) return float.PositiveInfinity;
+            float d = 0;
+            foreach (var g in LodLevels)
+            {
+                if (g.Count == 0 || g[^1].Nodes.Count > 0) return float.PositiveInfinity;
+                d = MathF.Max(d, g[^1].Distance);
+            }
+            return d > 0 ? d : float.PositiveInfinity;
+        }
+    }
+
     void ParseLodNodes()
     {
         if (!Chunks.TryGetValue(30, out int c30)) return;
@@ -228,6 +306,21 @@ public sealed class ModelAsset
         catch (Exception e) { Warnings.Add("LOD nodes: " + e.Message); }
     }
 
+    /// <summary>Start of the model's constant block in .data: the ".data" descriptor (name, size, alignment 0x20, pointer)
+    /// that every model carries; stream op 0x05 offsets index into it. -1 when not found.</summary>
+    int FindConstantBlock()
+    {
+        var d = D;
+        for (int o = 0; o + 24 <= d.Length; o++)
+        {
+            if (d[o] != 0x2E || d[o + 1] != (byte)'d' || d[o + 2] != (byte)'a' || d[o + 3] != (byte)'t' || d[o + 4] != (byte)'a' || d[o + 5] != 0) continue;
+            int q = (o + 6 + 3) & ~3;
+            for (int k = q; k < q + 12 && k + 12 <= d.Length; k += 4)
+                if (BE.S32(d, k + 4) == 0x20 && View.PtrAt(".data", k + 8) is { } p && View.SectionOfPart(p.Part) == ".data") return p.Offset;
+        }
+        return -1;
+    }
+
     void ParseTextureTable()
     {
         // 24-byte entries whose last field points at an "aid_texture_…" string in .data.
@@ -246,6 +339,32 @@ public sealed class ModelAsset
         // 12- or 60-byte gap (reference models in Showdown Town / Banjoland: 328 + 139 models); stopping at the first
         // gap left the second half unnamed ("#20/21"), so those draws rendered untextured.
         foreach (var name in entries.Values) TextureTable.Add(name);
+        TextureTableOffsets.AddRange(entries.Keys);
+        // Indices count every 24-byte entry, including entries without a texture name (engine-supplied textures such as
+        // the environment cube map of Banjoland's floor: two unnamed entries shift every later index by 2). A gap that is
+        // not a whole number of entries (12 / 36 / 60 bytes) starts a new run whose indices continue after the named and
+        // unnamed whole entries of the gap.
+        string rule = Environment.GetEnvironmentVariable("NB_TEXIDX_RULE") ?? "field";
+        if (rule == "field")
+        {
+            // each 24-byte entry carries its own index at +8 (unnamed entries = engine textures keep their index; models
+            // hold up to three tables, one per LOD, with the same numbering: the first entry for an index wins)
+            foreach (var (off, name) in entries)
+            {
+                int ix = BE.S32(d, off + 8);
+                if (ix >= 0 && ix < 4096) TextureByIndex.TryAdd(ix, name);
+            }
+        }
+        else if (rule != "concat" && entries.Count > 0)
+        {
+            int real = 0, prev = int.MinValue;
+            foreach (var (off, name) in entries)
+            {
+                if (prev != int.MinValue) real += rule == "slots2" ? Math.Max(1, (off - prev + 12) / 24) : Math.Max(1, (off - prev) / 24);
+                TextureByIndex[real] = name;
+                prev = off;
+            }
+        }
         if (TextureTable.Count > 0) return;
         // Models converted from other sources (Banjoland's N64 exhibits) have no named entries: the table is an array of
         // pointers straight to texture assets stored beside the model (symbols like "_0x09DDDCA5.rgb.bin" and "…(1)",
@@ -327,7 +446,9 @@ public sealed class ModelAsset
         // jumps (op 0x19) to the join point. State is simulated per pass: common commands apply to all three.
         var passes = new[] { new DrawPass(), new DrawPass(), new DrawPass() };
         int[]? swStart = null; int swJoin = -1; bool anySwitch = false;
-        uint curFlags = 0;
+        uint curFlags = 0; bool sawSection = false;
+        int constBlock = FindConstantBlock();
+        (int, int)? curPs = null; int curPsObj = -1;
         while (pos + 4 <= s.Length)
         {
             uint w = BE.U32(s, pos);
@@ -352,11 +473,16 @@ public sealed class ModelAsset
                 case 0x19 when variant >= 0 && swJoin < 0:
                     swJoin = View.PtrAt(".stream", pos + 4)?.Offset ?? -1;
                     break;
-                case 0x15: curFlags = size >= 12 ? BE.U32(s, pos + 8) : 0; break;
+                case 0x15: curFlags = size >= 12 ? BE.U32(s, pos + 8) : 0; sawSection = true; break;
+                // model-level material flags: they apply to draws of models without 0x15 sections (Jiggoseum's light-shaft
+                // dome: 0x104500 = glow, additive)
+                case 0x1A when size >= 8 && !sawSection: curFlags = BE.U32(s, pos + 4); break;
                 case 0x02:
                 {
                     (int, int)? ps = psPatch.TryGetValue(pos + 4, out var pp) ? pp : null;
-                    foreach (var p in Targets()) { p.PixelShader = ps; p.NullPixelShader = false; }
+                    int psObj = View.PtrAt(".stream", pos + 4) is { } po && View.SectionOfPart(po.Part) == ".data" ? po.Offset : -1;
+                    foreach (var p in Targets()) { p.PixelShader = ps; p.PixelShaderObject = psObj; p.NullPixelShader = false; }
+                    if (variant <= 0) { curPs = ps; curPsObj = psObj; }
                     break;
                 }
                 case 0x2A: foreach (var p in Targets()) { p.PixelShader = null; p.NullPixelShader = true; } break;
@@ -369,9 +495,11 @@ public sealed class ModelAsset
                 case 0x17: // draw block: +4 block index, +8 stream offset of the block's end (skipped when culled)
                     curBlock = BE.S32(s, pos + 4);
                     break;
-                case 0x2E:
+                case 0x2E:   // bind vertex buffer: +8 VB record, +0x14 vertex shader (patched from the pool)
+                case 0x2F when size >= 0x28:   // skinned bind: +4 / +0x10 joint data, +8 VB record, +0x24 vertex shader
                     curVb = View.PtrAt(".stream", pos + 8)?.Offset ?? -1;
-                    curVsLoc = pos + 0x14;
+                    curVsLoc = pos + (op == 0x2E ? 0x14 : 0x24);
+                    if (vsPatch.TryGetValue(curVsLoc, out var vsl)) foreach (var p in Targets()) p.VertexShader = vsl;
                     if (curVb >= 0 && vsPatch.ContainsKey(curVsLoc))
                     {
                         if (!vbShaders.TryGetValue(curVb, out var set)) vbShaders[curVb] = set = new();
@@ -386,15 +514,41 @@ public sealed class ModelAsset
                     {
                         int mip = BE.S32(s, pos + 12 + 12 * k), top = BE.S32(s, pos + 16 + 12 * k);
                         int slot = (int)(BE.U32(s, pos + 20 + 12 * k) >> 16);
-                        string name = top >= 0 && top < TextureTable.Count ? TextureTable[top] : mip >= 0 && mip < TextureTable.Count ? TextureTable[mip] : $"#{mip}/{top}";
+                        string name = TextureByIndex.Count > 0
+                            ? (TextureByIndex.TryGetValue(top, out var tn) ? tn : TextureByIndex.TryGetValue(mip, out var mn) ? mn : $"#{mip}/{top}")
+                            : top >= 0 && top < TextureTable.Count ? TextureTable[top] : mip >= 0 && mip < TextureTable.Count ? TextureTable[mip] : $"#{mip}/{top}";
                         list.Add((slot, name));
                     }
                     curTex = list;
                     foreach (var p in Targets()) p.Textures = list;
                     break;
                 }
+                case 0x05 when size >= 12 && constBlock >= 0:
+                {
+                    // vertex shader constants from the model's constant block (+4 byte offset, +8 first register << 16 | count):
+                    // texture-coordinate transforms (Spiral Mountain's rock detail: (4,0,0,0), (0,4,0,-3))
+                    int off = BE.S32(s, pos + 4); uint rc = BE.U32(s, pos + 8); int reg = (int)(rc >> 16), cnt = (int)(rc & 0xFFFF);
+                    for (int k = 0; k < cnt && constBlock + off + 16 * k + 16 <= d.Length; k++)
+                    {
+                        int q = constBlock + off + 16 * k;
+                        var cv = new Vector4(BE.F32(d, q), BE.F32(d, q + 4), BE.F32(d, q + 8), BE.F32(d, q + 12));
+                        foreach (var p in Targets()) p.VsConstants[reg + k] = cv;
+                    }
+                    break;
+                }
                 case 0x06: // set shader constants: +4 kind (0 = pixel), +8 (first register << 16 | count), then float4s
                 {
+                    if (BE.U32(s, pos + 4) == 1)
+                    {
+                        uint vrc = BE.U32(s, pos + 8); int vreg = (int)(vrc >> 16), vcnt = (int)(vrc & 0xFFFF);
+                        for (int k = 0; k < vcnt && pos + 12 + 16 * k + 16 <= pos + size; k++)
+                        {
+                            int q = pos + 12 + 16 * k;
+                            var cv = new Vector4(BE.F32(s, q), BE.F32(s, q + 4), BE.F32(s, q + 8), BE.F32(s, q + 12));
+                            foreach (var p in Targets()) p.VsConstants[vreg + k] = cv;
+                        }
+                        break;
+                    }
                     if (BE.U32(s, pos + 4) != 0) break;
                     uint rc = BE.U32(s, pos + 8); int reg = (int)(rc >> 16), cnt = (int)(rc & 0xFFFF);
                     for (int k = 0; k < cnt && pos + 12 + 16 * k + 16 <= pos + size; k++)
@@ -414,7 +568,8 @@ public sealed class ModelAsset
                     int node = op == 0x30 ? BE.S32(s, pos + 16) : -1;   // rendergraph node (LOD levels list nodes)
                     if (curVb >= 0 && ib >= 0 && seen.Add((curVb, ib)))
                         Draws.Add(new MeshDraw { VbRecord = curVb, IbObject = ib, IndexCount = count, Primitive = prim, Textures = curTex ?? new(), PixelConstants = new(psConst), Node = node, Block = curBlock,
-                                                 SectionFlags = curFlags, Passes = anySwitch ? passes.Select(p => p.Clone()).ToArray() : Array.Empty<DrawPass>() });
+                                                 SectionFlags = curFlags, Passes = anySwitch ? passes.Select(p => p.Clone()).ToArray() : Array.Empty<DrawPass>(),
+                                                 PixelShader = curPs, PixelShaderObject = curPsObj, Owner = this });
                     break;
                 }
             }
@@ -440,7 +595,7 @@ public sealed class ModelAsset
                     {
                         var (part, off) = vsPatch[loc];
                         var layout = VFetch.Scan(View.Part(part).Data, off, 0x1000, stride / 4);
-                        if (layout.Count > best.Count) { best = layout; dr.VertexShaderPoolOffset = off; }
+                        if (layout.Count > best.Count) { best = layout; dr.VertexShaderPoolOffset = off; dr.VertexShaderPoolPart = part; }
                     }
                 if (best.Count == 0) best = VFetch.Guess(stride);
                 dr.Layout = best;
@@ -450,13 +605,15 @@ public sealed class ModelAsset
                 int nIdx = Math.Min(dr.IndexCount, ibi.Size / 2);
                 var idx = new int[nIdx];
                 for (int i = 0; i < nIdx; i++) idx[i] = BE.U16(g, ibi.Gpu + 2 * i);
-                // Instanced draws: index = vertex * 4 + instance (0..3); the vertex shader picks one of 4 transforms held in
-                // shader constants (Showdown Town: 1,624 draws, e.g. dockwalkway beams). Decode the vertex; the instance
-                // transforms are not applied (the editor shows the base mesh once).
-                if (idx.Length > 0 && nv > 0 && idx.Max() >= nv && idx.Max() < 4 * nv)
+                // Instanced draws: index = vertex * K + instance (0..K-1); the vertex shader picks one of K transforms held in
+                // shader constants. K = 4 in the worlds (Showdown Town: 1,624 draws, e.g. dockwalkway beams), 32 for vehicle
+                // body blocks. Decode the vertex; the instance transforms come from the placements (the editor draws the
+                // base mesh once per placed instance).
+                int k = InstanceFactor(idx, dr.Primitive, nv);
+                if (k > 1)
                 {
-                    dr.Instanced = true;
-                    for (int i = 0; i < idx.Length; i++) idx[i] >>= 2;
+                    dr.Instanced = true; dr.InstanceStride = k;
+                    for (int i = 0; i < idx.Length; i++) if (idx[i] != 0xFFFF || dr.Primitive != 5) idx[i] /= k;
                 }
                 dr.Indices = dr.Primitive switch { 4 => idx, 5 => StripToList(idx), _ => idx };
                 if (dr.Primitive != 4 && dr.Primitive != 5) Warnings.Add($"draw prim {dr.Primitive} treated as triangle list");
@@ -469,12 +626,44 @@ public sealed class ModelAsset
         foreach (var grp in Draws.Where(x => x.Indices != null).GroupBy(x => x.VbRecord))
         {
             if (!grp.Any(x => x.Instanced)) continue;
+            int k = grp.Where(x => x.Instanced).GroupBy(x => x.InstanceStride).OrderByDescending(g => g.Count()).First().Key;
             foreach (var dr in grp.Where(x => !x.Instanced))
             {
-                dr.Instanced = true;
-                for (int i = 0; i < dr.Indices.Length; i++) dr.Indices[i] >>= 2;
+                dr.Instanced = true; dr.InstanceStride = k;
+                for (int i = 0; i < dr.Indices.Length; i++) dr.Indices[i] /= k;
             }
         }
+    }
+
+    /// <summary>
+    /// Instance slots packed into a draw's raw indices (vertex * K + instance), or 1. Only draws whose indices run past the
+    /// vertex buffer are instanced here (others inherit it from their buffer). K is the largest power of two (2..64) for
+    /// which the three corners of every triangle (consecutive indices of a strip) fall in the same instance slot, provided
+    /// the vertex numbers then fit the buffer; else the smallest K that makes them fit (the old 4-slot rule).
+    /// </summary>
+    static int InstanceFactor(int[] idx, int prim, int nv)
+    {
+        if (idx.Length == 0 || nv <= 0) return 1;
+        int max = 0;
+        foreach (int i in idx) if ((prim != 5 || i != 0xFFFF) && i > max) max = i;
+        if (max < nv) return 1;
+        bool Consistent(int k)
+        {
+            if (prim == 5)
+            {
+                for (int i = 1; i < idx.Length; i++)
+                    if (idx[i] != 0xFFFF && idx[i - 1] != 0xFFFF && idx[i] % k != idx[i - 1] % k) return false;
+                return true;
+            }
+            for (int i = 0; i + 2 < idx.Length; i += 3)
+                if (idx[i] % k != idx[i + 1] % k || idx[i] % k != idx[i + 2] % k) return false;
+            return true;
+        }
+        for (int k = 64; k >= 2; k /= 2)
+            if (max < k * nv && Consistent(k)) return k;
+        for (int k = 2; k <= 64; k *= 2)
+            if (max < k * nv) return k;
+        return 1;
     }
 
     static int[] StripToList(int[] s)

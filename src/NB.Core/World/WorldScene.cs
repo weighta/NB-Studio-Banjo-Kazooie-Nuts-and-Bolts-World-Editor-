@@ -27,6 +27,15 @@ public sealed class SceneObject
     /// <summary>Models placed inside this object's reference model (composite buildings), flattened, with transforms
     /// relative to this object. Drawn and picked together with it; they move with it.</summary>
     public List<(ModelAsset Model, Matrix4x4 Local)> Children = new();
+    /// <summary>Where <see cref="Model"/> comes from when it is not a reference model of the world bundle: for markers, the
+    /// objparams that names it (props such as L.O.G.'s palace, characters, collectables); for scenery, another bundle of
+    /// the world's load set. Empty for ordinary scenery.</summary>
+    public string ModelSource = "";
+    /// <summary>Bundle the drawn model was read from (the world bundle for ordinary scenery).</summary>
+    public uint ModelBundle;
+    /// <summary>View depth / scale beyond which the game draws nothing of this object (its model and nested models all
+    /// end their LOD tables with a cull level); infinity when it is always drawn. See <see cref="ModelAsset.CullDistance"/>.</summary>
+    public float CullDistance = float.PositiveInfinity;
     public bool Dirty => Transform != OriginalTransform || (Marker is { Type: 22 } m && m.Link != m.SavedLink);
 }
 
@@ -49,56 +58,91 @@ public sealed class WorldScene
     /// <summary>Act bundles whose markers were loaded in addition to the world bundle's own.</summary>
     public readonly List<uint> MarkerBundles = new();
 
-    public WorldScene(Workspace ws, uint bundle, string backgroundModel, IProgress<(string, double)>? progress = null, IEnumerable<uint>? actBundles = null)
+    /// <summary>What was loaded, skipped or failed while building the scene (Studio log, <c>NB.Cli world-audit</c>).</summary>
+    public readonly WorldAudit Audit = new();
+
+    /// <summary>Bundles searched for assets the world refers to, in the order the game has them loaded: the world bundle,
+    /// the act bundle and its stream dependencies, the world's own dependencies and (without an act) the bundles every
+    /// act of the world loads (Terrarium's cracked panel door is in ea08c0, Nutty Acres' shipping signs in fa4b2d), then
+    /// the common bundle.</summary>
+    public readonly List<uint> LoadSet = new();
+
+    readonly AssetIndex? _index;
+    readonly Dictionary<CaffFile, Dictionary<int, List<(int, int)>>> _relocByCaff = new(ReferenceEqualityComparer.Instance);
+    readonly Dictionary<CaffFile, Dictionary<uint, int>> _idsByCaff = new(ReferenceEqualityComparer.Instance);
+    readonly Dictionary<uint, CaffFile?> _caffs = new();
+
+    /// <param name="index">Asset index of the workspace: finds the world's acts (for the load set) and, as a last resort,
+    /// any resident bundle holding a referenced asset. When null, the workspace's cached index is used if it exists.</param>
+    public WorldScene(Workspace ws, uint bundle, string backgroundModel, IProgress<(string, double)>? progress = null, IEnumerable<uint>? actBundles = null, AssetIndex? index = null)
     {
         Workspace = ws; Bundle = bundle;
         progress?.Report(("loading bundle", 0));
         Caff = ws.LoadResident(bundle);
+        _caffs[bundle & 0xFFFFFF] = Caff;
         _relocs = AssetView.BuildRelocIndex(Caff);
+        _relocByCaff[Caff] = _relocs;
+        _index = index;
+        if (_index == null && File.Exists(AssetIndex.PathFor(ws)))
+            try { _index = AssetIndex.LoadOrBuild(ws); } catch (Exception e) { Log.Add("asset index: " + e.Message); }
         int bgSym = Caff.Symbols.IndexOf(backgroundModel) + 1;
         if (bgSym == 0) throw new InvalidDataException($"{backgroundModel} not in bundle {bundle:x6}");
         progress?.Report(("parsing terrain", 0.05));
         Background = ModelAsset.Parse(Caff, bgSym, _relocs);
         foreach (var w in Background.Warnings.Take(20)) Log.Add("terrain: " + w);
 
+        var acts = (actBundles ?? Enumerable.Empty<uint>()).Select(a => a & 0xFFFFFF).ToList();
+        BuildLoadSet(bundle & 0xFFFFFF, acts);
+
         int id = 0;
-        var terrain = new SceneObject { Id = id++, Kind = SceneObjectKind.Terrain, Name = "Terrain (" + backgroundModel + ")", ModelName = backgroundModel, Model = Background };
+        var terrain = new SceneObject { Id = id++, Kind = SceneObjectKind.Terrain, Name = "Terrain (" + backgroundModel + ")", ModelName = backgroundModel, Model = Background, ModelBundle = bundle & 0xFFFFFF };
         ComputeBounds(terrain);
         Objects.Add(terrain);
-
-        // reference models by asset id (type 0x04)
-        var modelById = new Dictionary<uint, int>();
-        for (int s = 1; s <= Caff.Symbols.Count; s++)
-            if (Caff.Symbols[s - 1].StartsWith("aid_model_") && AssetIds.IdOf(Caff.Symbols[s - 1]) is uint mid) modelById[mid] = s;
 
         int n = 0;
         foreach (var inst in Background.Instances)
         {
-            if (n++ % 25 == 0) progress?.Report(($"scenery {n}/{Background.Instances.Count}", 0.1 + 0.9 * n / Math.Max(1, Background.Instances.Count)));
+            if (n++ % 25 == 0) progress?.Report(($"scenery {n}/{Background.Instances.Count}", 0.1 + 0.8 * n / Math.Max(1, Background.Instances.Count)));
             var obj = new SceneObject
             {
                 Id = id++, Kind = SceneObjectKind.Scenery, Name = ModelAsset.CleanInstanceName(inst.Name), Instance = inst,
                 Transform = inst.World, OriginalTransform = inst.World,
             };
             uint refId = inst.RefModel >= 0 && inst.RefModel < Background.ReferenceIds.Count ? (uint)Background.ReferenceIds[inst.RefModel] : 0;
-            if (modelById.TryGetValue(refId, out int msym))
+            Audit.Scenery++;
+            var loc = FindAsset(refId, Caff);
+            if (loc != null && GetModel(loc.Value.Caff, loc.Value.Sym) is { } model)
             {
-                obj.ModelName = Caff.Symbols[msym - 1];
-                obj.Model = GetModel(msym);
-                obj.Children = NestedModels(obj.Model, modelById);
+                obj.ModelName = loc.Value.Caff.Symbols[loc.Value.Sym - 1];
+                obj.Model = model;
+                obj.ModelBundle = loc.Value.Bundle;
+                if (loc.Value.Bundle != (bundle & 0xFFFFFF))
+                {
+                    obj.ModelSource = $"bundle {loc.Value.Bundle:x6}";
+                    Audit.SceneryOtherBundle++;
+                    Audit.Note("scenery models from another bundle", $"{AssetIds.DisplayName(obj.ModelName)} ({loc.Value.Bundle:x6}{(LoadSet.Contains(loc.Value.Bundle) ? "" : ", outside the load set")})");
+                }
+                obj.Children = NestedModels(obj.Model, loc.Value.Caff);
+                if (obj.Model.Draws.Count == 0 && obj.Children.Count == 0) Audit.Note("scenery models without geometry", AssetIds.DisplayName(obj.ModelName));
             }
-            else Log.Add($"{obj.Name}: reference model id {refId:X8} not found in this bundle (drawn as a marker)");
+            else
+            {
+                Audit.SceneryMissing++;
+                Audit.Note(loc != null ? "scenery models that failed to parse" : "scenery models not found", $"{obj.Name} ({refId:X8})");
+                Log.Add($"{obj.Name}: reference model id {refId:X8} {(loc != null ? "failed to parse" : "not found in the workspace")} (drawn as a marker)");
+            }
             ComputeBounds(obj);
             Objects.Add(obj);
         }
-        // markers (actors, pickups, spawn points, paths...) from every marker asset in this bundle and the act bundles
+        // markers (actors, props, pickups, spawn points, paths...) from every marker asset in this bundle and the act bundles
         var markerSources = new List<(uint Bundle, CaffFile Caff)> { (bundle, Caff) };
-        foreach (var ab in actBundles ?? Enumerable.Empty<uint>())
-            try { markerSources.Add((ab, ws.LoadResident(ab))); MarkerBundles.Add(ab); }
-            catch (Exception e) { Log.Add($"act bundle {ab:x6}: {e.Message}"); }
+        foreach (var ab in acts)
+            if (LoadBundle(ab) is { } ac) { markerSources.Add((ab, ac)); MarkerBundles.Add(ab); }
+            else Log.Add($"act bundle {ab:x6}: could not be loaded");
         foreach (var (_, mc) in markerSources)
             for (int s = 1; s <= mc.Symbols.Count; s++)
                 if (AssetIds.IdOf(mc.Symbols[s - 1]) is uint aid) NameById.TryAdd(aid, AssetIds.DisplayName(mc.Symbols[s - 1]));
+        progress?.Report(("markers", 0.9));
         foreach (var (mb, mc) in markerSources)
         for (int s = 1; s <= mc.Symbols.Count; s++)
         {
@@ -112,18 +156,251 @@ public sealed class WorldScene
                 foreach (var r in ma.Records)
                 {
                     var m = r.Matrix;
-                    Objects.Add(new SceneObject
+                    var obj = new SceneObject
                     {
                         Id = id++, Kind = SceneObjectKind.Marker, MarkerSet = ma, Marker = r, Transform = m, OriginalTransform = m,
                         Name = $"{MarkerRecord.TypeName(r.Type)} #{r.Index}" + (r.AssetNames.FirstOrDefault(n => n.StartsWith("aid_objparams_")) is string op ? " " + op.Replace("aid_objparams_banjox_", "") : r.Strings.Count > 0 ? " " + r.Strings[0] : ""),
                         ModelName = AssetIds.DisplayName(ma.Name),
                         BoundsMin = new Vector3(-1), BoundsMax = new Vector3(1),
-                    });
+                    };
+                    Audit.Markers++;
+                    AttachMarkerModel(obj, mc);
+                    ComputeBounds(obj);
+                    Objects.Add(obj);
                 }
             }
-            catch (Exception e) { Log.Add($"{mc.Symbols[s - 1]}: {e.Message}"); }
+            catch (Exception e) { Log.Add($"{mc.Symbols[s - 1]}: {e.Message}"); Audit.Note("marker assets that failed to parse", $"{AssetIds.DisplayName(mc.Symbols[s - 1])}: {e.Message}"); }
         }
+        // grass layers (background chunk 17: u32 count, 0xC4-byte records: +0 grass model id, +4 density texture id, box,
+        // spacing…): scattered by the game at run time, not drawn here
+        if (Background.Chunks.TryGetValue(17, out int c17))
+            try
+            {
+                var bd = Background.View.Data(".data");
+                int ng = NB.Core.IO.BE.S32(bd, c17);
+                var grass = Enumerable.Range(0, Math.Clamp(ng, 0, 4096)).Select(i => NB.Core.IO.BE.U32(bd, c17 + 4 + 0xC4 * i))
+                    .Select(gid => FindAsset(gid, Caff) is { } g ? AssetIds.DisplayName(g.Caff.Symbols[g.Sym - 1]).Replace("aid_model_banjox_background_", "") : $"{gid:X8}")
+                    .GroupBy(x => x).Select(g => $"{g.Key} ×{g.Count()}");
+                Audit.GrassLayers = ng;
+                Audit.Note("grass layers (chunk 17, scattered by the game at run time; not drawn)", $"{ng} layers: {string.Join(", ", grass)}");
+            }
+            catch (Exception e) { Log.Add("grass layers: " + e.Message); }
+        Audit.Models = Models.Count;
+        Audit.Bundles = _caffs.Where(kv => kv.Value != null).Select(kv => kv.Key).ToList();
+        foreach (var (cat, items) in Audit.Notes.OrderBy(kv => kv.Key))
+            Log.Add($"{cat}: {items.Count} — " + string.Join(", ", items.Take(6)) + (items.Count > 6 ? ", …" : ""));
         progress?.Report(("done", 1));
+    }
+
+    // ------------------------------------------------------------------ load set and cross-bundle lookups
+
+    void BuildLoadSet(uint world, List<uint> acts)
+    {
+        void Add(uint b) { b &= 0xFFFFFF; if (b != 0 && !LoadSet.Contains(b) && File.Exists(Workspace.Game.ResidentPath(b))) LoadSet.Add(b); }
+        List<uint> Deps(uint b)
+        {
+            try { return File.Exists(Workspace.Game.StreamPath(b)) ? ActCatalog.Dependencies(Workspace.Game.StreamPath(b)).Select(d => d & 0xFFFFFF).ToList() : new(); }
+            catch (Exception) { return new(); }
+        }
+        Add(world);
+        foreach (var a in acts) { Add(a); foreach (var d in Deps(a)) Add(d); }
+        foreach (var d in Deps(world)) Add(d);
+        if (acts.Count == 0 && _index != null)
+        {
+            // no act chosen: the bundles that every act of this world loads (companions such as ea08c0 / fa4b2d / ee8a91)
+            try
+            {
+                var worldActs = ActCatalog.Build(Workspace, _index).Where(a => a.WorldBundle == world).ToList();
+                if (worldActs.Count > 0)
+                {
+                    var shared = Deps(worldActs[0].ActBundle);
+                    foreach (var a in worldActs.Skip(1)) { var d = Deps(a.ActBundle).ToHashSet(); shared = shared.Where(d.Contains).ToList(); }
+                    foreach (var d in shared) Add(d);
+                }
+            }
+            catch (Exception e) { Log.Add("acts of this world: " + e.Message); }
+        }
+        Add(CommonBundle);
+    }
+
+    const uint CommonBundle = 0x685374;
+
+    CaffFile? LoadBundle(uint b)
+    {
+        b &= 0xFFFFFF;
+        if (_caffs.TryGetValue(b, out var c)) return c;
+        try { c = Workspace.LoadResident(b); }
+        catch (Exception e) { Log.Add($"bundle {b:x6}: {e.Message}"); c = null; }
+        return _caffs[b] = c;
+    }
+
+    Dictionary<uint, int> IdsOf(CaffFile c)
+    {
+        if (_idsByCaff.TryGetValue(c, out var d)) return d;
+        d = new();
+        for (int s = 1; s <= c.Symbols.Count; s++) if (AssetIds.IdOf(c.Symbols[s - 1]) is uint id) d.TryAdd(id, s);
+        return _idsByCaff[c] = d;
+    }
+
+    uint BundleOf(CaffFile c) => _caffs.FirstOrDefault(kv => ReferenceEquals(kv.Value, c)).Key;
+
+    /// <summary>Finds a resident asset by id: first in <paramref name="prefer"/> (the bundle that refers to it), then in
+    /// the load set in order, then in any resident bundle of the workspace. With an asset index only the bundles that hold
+    /// the id are opened (bundles already open are searched as well, in case the index predates an edit).</summary>
+    (CaffFile Caff, int Sym, uint Bundle)? FindAsset(uint id, CaffFile? prefer = null)
+    {
+        if (id == 0) return null;
+        if (prefer != null && IdsOf(prefer).TryGetValue(id, out int ps)) return (prefer, ps, BundleOf(prefer));
+        if (_index == null)
+        {
+            foreach (var b in LoadSet)
+                if (LoadBundle(b) is { } c && IdsOf(c).TryGetValue(id, out int s)) return (c, s, b);
+            return null;
+        }
+        if (_byId == null)
+        {
+            _byId = new();
+            foreach (var e in _index.Entries)
+                if (!e.Streamed && e.Id != 0 && e.Symbol > 0) { if (!_byId.TryGetValue(e.Id, out var l)) _byId[e.Id] = l = new(); l.Add(e.Bundle & 0xFFFFFF); }
+        }
+        var holders = _byId.GetValueOrDefault(id);
+        foreach (var b in LoadSet)
+            if ((holders != null && holders.Contains(b)) || _caffs.ContainsKey(b))
+                if (LoadBundle(b) is { } c && IdsOf(c).TryGetValue(id, out int s)) return (c, s, b);
+        if (holders != null)
+            foreach (var b in holders.OrderBy(b => _caffs.ContainsKey(b) ? 0 : 1))
+                if (LoadBundle(b) is { } c && IdsOf(c).TryGetValue(id, out int s)) return (c, s, b);
+        return null;
+    }
+    Dictionary<uint, List<uint>>? _byId;
+
+    /// <summary>
+    /// The parts of a vehicle blueprint (aid_vehicle_*) as (model, transform relative to the vehicle). Each block sits in
+    /// a one-unit garage cell (part models are authored around their origin cell, multi-cell parts extend over the
+    /// footprint cells of their avatarhavokdata), rotated by its Euler angles (X, then Y, then Z, like markers). The
+    /// vehicle is centred on its cells horizontally with its lowest point at the marker (approximate: the game spawns the
+    /// vehicle body there and lets it settle).
+    /// </summary>
+    List<(ModelAsset Model, Matrix4x4 Local)> BuildVehicle(CaffFile caff, int sym, out int missing)
+    {
+        missing = 0;
+        var list = new List<(ModelAsset, Matrix4x4)>();
+        var d = caff.PartsOf(sym).FirstOrDefault(p => caff.SectionOf(p).Name == ".data")?.Data;
+        var v = d == null ? null : NB.Core.Tags.VehicleAsset.TryParse(d);
+        if (v == null || v.Blocks.Count == 0) return list;
+        foreach (var b in v.Blocks)
+        {
+            ModelAsset? model = null;
+            if (FindAsset(b.Part, caff) is { } op && op.Caff.PartsOf(op.Sym).FirstOrDefault(p => op.Caff.SectionOf(p).Name == ".data")?.Data is { Length: > 0x128 } od)
+            {
+                uint mid = NB.Core.IO.BE.U32(od, 0x124);
+                if (mid >> 24 == 0x04 && FindAsset(mid, op.Caff) is { } ml) model = GetModel(ml.Caff, ml.Sym);
+            }
+            if (model == null) { missing++; continue; }
+            var rot = Matrix4x4.CreateRotationX(b.Rotation.X) * Matrix4x4.CreateRotationY(b.Rotation.Y) * Matrix4x4.CreateRotationZ(b.Rotation.Z);
+            list.Add((model, rot * Matrix4x4.CreateTranslation(b.X, b.Y, b.Z)));
+        }
+        if (list.Count == 0) return list;
+        // centre horizontally on the occupied cells, lowest drawn point at y = 0
+        var mn = new Vector3(float.MaxValue); var mx = new Vector3(float.MinValue);
+        foreach (var (m, l) in list)
+            foreach (var dr in m.Draws)
+            {
+                if (m.LodOnlyNodes.Contains(dr.Node)) continue;
+                foreach (int i in dr.Indices) if (i < dr.Positions.Length) { var q = Vector3.Transform(dr.Positions[i], l); mn = Vector3.Min(mn, q); mx = Vector3.Max(mx, q); }
+            }
+        if (mn.X > mx.X) return list;
+        var shift = Matrix4x4.CreateTranslation(-(mn.X + mx.X) / 2, -mn.Y, -(mn.Z + mx.Z) / 2);
+        return list.Select(x => (x.Item1, x.Item2 * shift)).ToList();
+    }
+
+    /// <summary>objparams fields that hold the object's own model: +0xC0 for every actor / avatar / prop class (115 props,
+    /// 192 characters, all entityAvatar* classes), +0x124 for vehicle blocks lying in the world, +0x248 for the small
+    /// dock cranes (entityAvatarShowDownTownCraneSmall). Other model references in objparams are alternates (damaged /
+    /// lit states, counter digits) or extra parts.</summary>
+    static readonly int[] ObjModelFields = { 0xC0, 0x124, 0x248 };
+
+    /// <summary>Gives a marker the model of the object it places: a model id in the record itself, or the main model
+    /// of its objparams (L.O.G.'s palace in Showdown Town is the prop marker props_showdowntown_logspalace).</summary>
+    void AttachMarkerModel(SceneObject obj, CaffFile markerCaff)
+    {
+        var r = obj.Marker!;
+        string? source = null; (CaffFile Caff, int Sym, uint Bundle)? loc = null;
+        foreach (var a in r.AssetIds.Where(a => a >> 24 == 0x04))
+            if (FindAsset(a, markerCaff) is { } l && l.Caff.Symbols[l.Sym - 1].StartsWith("aid_model_")) { loc = l; source = "marker record"; break; }
+        string? cls = null; bool sawObj = false;
+        if (loc == null)
+            foreach (var a in r.AssetIds.Where(a => a >> 24 == 0x1F))
+            {
+                if (FindAsset(a, markerCaff) is not { } op) { Audit.Note("objparams not found", $"{a:X8} ({MarkerRecord.TypeName(r.Type)})"); continue; }
+                var d = op.Caff.PartsOf(op.Sym).FirstOrDefault(p => op.Caff.SectionOf(p).Name == ".data")?.Data;
+                if (d == null || d.Length < 0x80) continue;
+                sawObj = true;
+                cls ??= NB.Core.IO.BE.CStr(d, 0x42, 62);
+                foreach (int f in ObjModelFields)
+                {
+                    if (f + 4 > d.Length) continue;
+                    uint mid = NB.Core.IO.BE.U32(d, f);
+                    if (mid >> 24 != 0x04 || (mid & 0xFFFFFF) == 0) continue;
+                    if (FindAsset(mid, op.Caff) is { } ml && ml.Caff.Symbols[ml.Sym - 1].StartsWith("aid_model_"))
+                    {
+                        loc = ml; cls = NB.Core.IO.BE.CStr(d, 0x42, 62);
+                        source = $"{AssetIds.DisplayName(op.Caff.Symbols[op.Sym - 1]).Replace("aid_objparams_banjox_", "objparams ")} +0x{f:X}";
+                        break;
+                    }
+                    Audit.Note("object models not found", $"{AssetIds.DisplayName(op.Caff.Symbols[op.Sym - 1])} +0x{f:X} → {mid:X8}");
+                }
+                if (loc != null) break;
+            }
+        if (loc == null)
+        {
+            var vehicles = r.AssetIds.Where(a => a >> 24 == 0x00).Select(a => FindAsset(a, markerCaff))
+                .Where(v => v != null && v.Value.Caff.Symbols[v.Value.Sym - 1].StartsWith("aid_vehicle_")).Select(v => v!.Value).ToList();
+            if (vehicles.Count > 0)
+            {
+                // a vehicle placed by the marker (AI racers, Jinjo taxis, act vehicles): its blueprint's parts
+                var v = vehicles[0];
+                string vname = AssetIds.DisplayName(v.Caff.Symbols[v.Sym - 1]).Replace("aid_vehicle_banjox_", "");
+                var parts = BuildVehicle(v.Caff, v.Sym, out int missing);
+                if (parts.Count > 0)
+                {
+                    obj.Model = new ModelAsset();   // empty root: the parts are children (one per block)
+                    obj.Children = parts;
+                    obj.ModelBundle = v.Bundle;
+                    obj.ModelSource = $"vehicle {vname} ({parts.Count} parts{(missing > 0 ? $", {missing} missing" : "")})";
+                    Audit.MarkerVehiclesDrawn++;
+                    Audit.Count("vehicles drawn at markers", vname);
+                    if (missing > 0) Audit.Note("vehicle parts not found", $"{vname}: {missing}");
+                }
+                else
+                {
+                    Audit.MarkerVehicles++;
+                    Audit.Count("vehicles placed by markers (not drawn)", vname);
+                }
+            }
+            else if (sawObj) { Audit.MarkerObjectsWithoutModel++; Audit.Count("objects without a model of their own", (cls ?? "?").Replace("objDefId_", "")); }
+            return;
+        }
+        var model = GetModel(loc.Value.Caff, loc.Value.Sym);
+        if (model == null) { Audit.MarkerModelsFailed++; return; }
+        obj.Model = model;
+        obj.ModelBundle = loc.Value.Bundle;
+        obj.ModelSource = source + (loc.Value.Bundle != (Bundle & 0xFFFFFF) ? $" (model in {loc.Value.Bundle:x6})" : "");
+        obj.Children = NestedModels(model, loc.Value.Caff);
+        if (cls == "objDefId_entityAvatarBall")
+        {
+            // physics balls (Jiggoseum bowling balls): the marker is the point they rest on; the game's physics pushes the
+            // ball (origin = centre) out of the floor / pedestal, so it shows standing on its lowest point (compared in Xenia)
+            float minY = float.MaxValue;
+            foreach (var d in model.Draws) if (!model.LodOnlyNodes.Contains(d.Node)) foreach (int i in d.Indices) if (i < d.Positions.Length) minY = MathF.Min(minY, d.Positions[i].Y);
+            if (minY < 0 && minY > -100)
+            {
+                obj.Children = obj.Children.Prepend((model, Matrix4x4.Identity)).Select(c => (c.Item1, c.Item2 * Matrix4x4.CreateTranslation(0, -minY, 0))).ToList();
+                obj.Model = new ModelAsset();   // empty root; the lifted ball is a child
+            }
+        }
+        Audit.MarkerModels++;
+        Audit.Count("objects drawn at markers", (cls ?? "marker record").Replace("objDefId_", ""));
     }
 
     /// <summary>Collision per model name (aid_model_X ↔ aid_havok_X), in model space. Filled by <see cref="LoadCollision"/>.</summary>
@@ -137,7 +414,7 @@ public sealed class WorldScene
         var notes = new List<string>();
         var bySym = new Dictionary<string, int>();
         for (int s = 1; s <= Caff.Symbols.Count; s++) bySym[AssetIds.DisplayName(Caff.Symbols[s - 1])] = s;
-        foreach (var model in Objects.Where(o => o.Model != null).Select(o => o.ModelName).Distinct())
+        foreach (var model in Objects.Where(o => o.Model != null && o.Kind != SceneObjectKind.Marker && o.ModelName.StartsWith("aid_model_")).Select(o => o.ModelName).Distinct())
         {
             var hk = "aid_havok_" + AssetIds.DisplayName(model)["aid_model_".Length..];
             if (!bySym.TryGetValue(hk, out int sym)) continue;
@@ -162,8 +439,9 @@ public sealed class WorldScene
     readonly Dictionary<ModelAsset, List<(ModelAsset, Matrix4x4)>> _nested = new();
 
     /// <summary>Flattens the reference-model instances inside <paramref name="m"/> (recursively, up to 6 levels) into
-    /// (model, transform relative to m). Instance matrices inside a reference model are in that model's space.</summary>
-    List<(ModelAsset Model, Matrix4x4 Local)> NestedModels(ModelAsset m, Dictionary<uint, int> modelById, int depth = 0)
+    /// (model, transform relative to m). Instance matrices inside a reference model are in that model's space. Nested
+    /// models are looked up in the parent's bundle first, then in the world's load set.</summary>
+    List<(ModelAsset Model, Matrix4x4 Local)> NestedModels(ModelAsset m, CaffFile caff, int depth = 0)
     {
         if (_nested.TryGetValue(m, out var hit)) return hit;
         var list = new List<(ModelAsset, Matrix4x4)>();
@@ -172,28 +450,49 @@ public sealed class WorldScene
             foreach (var inst in m.Instances)
             {
                 uint rid = inst.RefModel >= 0 && inst.RefModel < m.ReferenceIds.Count ? (uint)m.ReferenceIds[inst.RefModel] : 0;
-                if (!modelById.TryGetValue(rid, out int cs)) { Log.Add($"{AssetIds.DisplayName(m.View.Name)}: nested model {rid:X8} not in this bundle"); continue; }
-                var child = GetModel(cs);
+                Audit.Nested++;
+                var loc = FindAsset(rid, caff);
+                var child = loc != null ? GetModel(loc.Value.Caff, loc.Value.Sym) : null;
+                if (child == null)
+                {
+                    Audit.NestedMissing++;
+                    Audit.Note("nested models not found", $"{AssetIds.DisplayName(m.View.Name)} → {rid:X8}");
+                    Log.Add($"{AssetIds.DisplayName(m.View.Name)}: nested model {rid:X8} not found in the workspace");
+                    continue;
+                }
                 if (child == m) continue;
+                if (!ReferenceEquals(loc!.Value.Caff, caff)) Audit.Note("nested models from another bundle", $"{AssetIds.DisplayName(child.View.Name)} ({loc.Value.Bundle:x6})");
                 list.Add((child, inst.World));
-                foreach (var (gm, gl) in NestedModels(child, modelById, depth + 1)) list.Add((gm, gl * inst.World));
+                foreach (var (gm, gl) in NestedModels(child, loc.Value.Caff, depth + 1)) list.Add((gm, gl * inst.World));
             }
         return list;
     }
 
-    ModelAsset GetModel(int sym)
+    /// <summary>Parses (once) the model at <paramref name="sym"/> of <paramref name="caff"/>; null when it fails to parse.</summary>
+    ModelAsset? GetModel(CaffFile caff, int sym)
     {
-        var name = Caff.Symbols[sym - 1];
+        var name = caff.Symbols[sym - 1];
         if (Models.TryGetValue(name, out var m)) return m;
-        m = ModelAsset.Parse(Caff, sym, _relocs);
+        if (_failed.Contains(name)) return null;
+        if (!_relocByCaff.TryGetValue(caff, out var rel)) _relocByCaff[caff] = rel = AssetView.BuildRelocIndex(caff);
+        try { m = ModelAsset.Parse(caff, sym, rel); }
+        catch (Exception e)
+        {
+            _failed.Add(name); Audit.ModelsFailed++;
+            Audit.Note("models that failed to parse", $"{AssetIds.DisplayName(name)}: {e.Message}");
+            Log.Add($"{AssetIds.DisplayName(name)}: parse failed: {e.Message}");
+            return null;
+        }
         foreach (var w in m.Warnings.Take(5)) Log.Add($"{AssetIds.DisplayName(name)}: {w}");
+        if (m.Warnings.Count > 0) Audit.Note("models with parse warnings", $"{AssetIds.DisplayName(name)}: {m.Warnings[0]}");
         Models[name] = m;
         return m;
     }
+    readonly HashSet<string> _failed = new();
 
     static void ComputeBounds(SceneObject o)
     {
-        if (o.Kind == SceneObjectKind.Marker) return;
+        if (o.Kind == SceneObjectKind.Marker && o.Model == null) return;
         var mn = new Vector3(float.MaxValue); var mx = new Vector3(float.MinValue);
         void Add(ModelAsset m, Matrix4x4 xf)
         {
@@ -203,6 +502,8 @@ public sealed class WorldScene
         }
         if (o.Model != null) Add(o.Model, Matrix4x4.Identity);
         foreach (var (cm, cl) in o.Children) Add(cm, cl);
+        o.CullDistance = o.Model == null ? float.PositiveInfinity
+            : o.Children.Select(c => c.Model).Prepend(o.Model).Distinct().Select(m => m.CullDistance).DefaultIfEmpty(float.PositiveInfinity).Max();
         if (mn.X > mx.X) { mn = new Vector3(-1); mx = new Vector3(1); }
         o.BoundsMin = mn; o.BoundsMax = mx;
     }

@@ -770,6 +770,42 @@ static class Program
                     }
                     return 0;
                 }
+                case "world-audit":
+                {
+                    // world-audit <workspace> [world bundle hex | all] [--act <act bundle hex>] [--acts] [--items N]: what a world scene
+                    // draws, takes from other bundles, skips or fails to load (scenery, nested models, objects placed by markers).
+                    // --acts audits every act with its world (act markers + the act's load set).
+                    var ws = NB.Core.Project.Workspace.Open(args[1]);
+                    var idx = NB.Core.Project.AssetIndex.LoadOrBuild(ws);
+                    var worlds = NB.Core.Project.WorldCatalog.FromIndex(idx).ToList();
+                    string sel = args.Length > 2 && !args[2].StartsWith("--") ? args[2] : "all";
+                    int ai = Array.IndexOf(args, "--act"), ii = Array.IndexOf(args, "--items");
+                    int items = ii > 0 ? int.Parse(args[ii + 1]) : 12;
+                    var jobs = new List<(NB.Core.Project.WorldEntry W, uint? Act, string Label)>();
+                    if (args.Contains("--acts"))
+                        foreach (var a in NB.Core.Project.ActCatalog.Build(ws, idx))
+                        {
+                            var w = worlds.FirstOrDefault(x => x.Bundle == a.WorldBundle);
+                            if (w != null && (sel == "all" || Convert.ToUInt32(sel, 16) == w.Bundle)) jobs.Add((w, a.ActBundle, a.Display));
+                        }
+                    else
+                        foreach (var w in worlds.Where(x => sel == "all" || x.Bundle == Convert.ToUInt32(sel, 16)))
+                            jobs.Add((w, ai > 0 ? Convert.ToUInt32(args[ai + 1], 16) : null, w.Display + (ai > 0 ? " + act " + args[ai + 1] : "")));
+                    foreach (var (w, act, label) in jobs)
+                    {
+                        var sw = Stopwatch.StartNew();
+                        try
+                        {
+                            var sc = new NB.Core.World.WorldScene(ws, w.Bundle, w.BackgroundModel, null, act != null ? new[] { act.Value } : null, idx);
+                            Console.WriteLine($"== {label} [{w.Bundle:x6}] {sc.Objects.Count} objects in {sw.Elapsed.TotalSeconds:F1}s; load set {string.Join(" ", sc.LoadSet.Select(b => b.ToString("x6")))}; read {string.Join(" ", sc.Audit.Bundles.Select(b => b.ToString("x6")))}");
+                            foreach (var l in sc.Audit.Report(items)) Console.WriteLine("  " + l);
+                        }
+                        catch (Exception e) { Console.WriteLine($"== {label} [{w.Bundle:x6}] FAILED: {e.Message}"); }
+                        ws.ForgetCache(w.Bundle);
+                        if (act != null) ws.ForgetCache(act.Value);
+                    }
+                    return 0;
+                }
                 case "world-nested":
                 {
                     // world-nested <workspace> <world bundle hex> [min extent]: scenery objects with nested reference models; lists large children

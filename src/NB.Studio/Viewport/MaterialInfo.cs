@@ -45,9 +45,19 @@ public sealed class MaterialInfo
     public bool AoUv2;
     /// <summary>Layer-blend mask / separate alpha mask on the second UV set (plaza blend maps, pavement-edge strips).</summary>
     public bool MaskUv2, AlphaUv2;
+    /// <summary>An alpha-tested section whose render states also blend (SRC_ALPHA / ONE_MINUS_SRC_ALPHA).</summary>
+    public bool CutoutBlends;
     public bool Untextured => Base == null;
+    /// <summary>The draw's colour shader translated from its Xenos microcode (null: not translatable, the roles above are used).</summary>
+    public ShaderTranslation? Shader;
+    /// <summary>Texture bound to each sampler the translated shader fetches.</summary>
+    public readonly Dictionary<int, string> SamplerTextures = new();
 
-    public string Key => string.Join("|", Base, Overlay, Mask, Normal, Spec, Reflect, Ao, AlphaTex, OverTint, Tint, Opacity, SpecColour, SpecPower, ReflectStrength, ReflectColour, Blend, VertexColour, AoUv2, MaskUv2, AlphaUv2);
+    public string Key => string.Join("|", Base, Overlay, Mask, Normal, Spec, Reflect, Ao, AlphaTex, OverTint, Tint, Opacity, SpecColour, SpecPower, ReflectStrength, ReflectColour, Blend, VertexColour, AoUv2, MaskUv2, AlphaUv2)
+        + (Shader == null ? "" : "|" + Shader.Key + "|" + Shader.NormalSet + Shader.NormalRows + "|" + string.Join(",", Shader.ConstValues) + "|" + string.Join(",", SamplerTextures.OrderBy(k => k.Key).Select(k => k.Key + ":" + k.Value)));
+
+    /// <summary>Set false to draw every material with the name-based roles (comparison runs).</summary>
+    public static bool UseShaderTranslation = Environment.GetEnvironmentVariable("NB_NO_SHADER_XLATE") != "1";
 
     static string Stem(string t) => ObjExporter.TextureFileStem(t);
     static string Short(string t)
@@ -86,7 +96,8 @@ public sealed class MaterialInfo
         var m = new MaterialInfo();
         // the lit colour pass (0); models without a pass switch only have the running state
         var pass = d.Passes.Length > 0 ? d.Passes[0] : null;
-        var tex = (pass != null && pass.Textures.Count > 0 ? pass.Textures : d.Textures).OrderBy(t => t.Slot).Select(t => t.Texture).ToList();
+        var tex0 = (pass != null && pass.Textures.Count > 0 ? pass.Textures : d.Textures).GroupBy(t => t.Slot).Select(g => g.Last()).OrderBy(t => t.Slot).ToList();
+        var tex = tex0.Select(t => t.Texture).ToList();
         var consts = pass?.Constants ?? d.PixelConstants;
 
         var colours = new List<string>();
@@ -155,7 +166,7 @@ public sealed class MaterialInfo
             m.Blend = aoOnly ? BlendKind.Multiply : BlendKind.Blend;
             m.Opacity = tint.W > 0.01f && tint.W < 0.999f ? tint.W : 1;
         }
-        else if (mode == 0 && d.SectionFlags != 0) m.Blend = BlendKind.Cutout;
+        else if (mode == 0 && d.SectionFlags != 0) { m.Blend = BlendKind.Cutout; m.CutoutBlends = blendStates; }
         else
         {
             // opaque sections ignore masks as alpha (the sky dome's sun-glow mask on the second UV set cut holes in the sky)
@@ -173,6 +184,28 @@ public sealed class MaterialInfo
         m.VertexColour = d.Colors != null;
         m.AoUv2 = m.Ao != null && d.UVs2 != null;
         m.MaskUv2 = m.Mask != null && d.UVs2 != null;
+        // glow sections (torch beams, holograms) keep the faint additive look: their shaders output full-strength colour
+        // that the game scales at run time
+        if (UseShaderTranslation && m.Blend != BlendKind.Additive && d.ColourShader is { } sh)
+        {
+            // texture-coordinate transforms of the vertex shader (per-texture tiling)
+            Dictionary<int, XenosShader.UvSource>? uvs = null;
+            try { if (d.ColourVertexShader is { } vs && pass != null) uvs = XenosShader.InterpolatorUvs(vs, pass.VsConstants, d.Layout); } catch { uvs = null; }
+            var tr = XenosTranslator.Translate(sh, consts, d.Colors != null, d.UVs2 != null, uvs);
+            if (tr.Fail == null)
+            {
+                var byslot = tex0.ToDictionary(x => x.Slot, x => x.Texture);
+                bool ok = true;
+                // the normal-map guess of the dataflow analysis is dropped when the bound texture is plainly something else
+                // (a tree's specular map, a roof's second colour layer)
+                if (tr.NormalSampler >= 0 && byslot.TryGetValue(tr.NormalSampler, out var nt) && !nt.StartsWith('#') && RoleOf(nt) is Role.Colour or Role.Spec)
+                    tr.NormalSampler = -1;
+                // a slot without a named texture (#mip/top) is an engine texture (environment cube): left unbound (black)
+                foreach (var k in tr.Samplers.Append(tr.NormalSampler).Where(k => k >= 0))
+                    if (byslot.TryGetValue(k, out var tn)) { if (!tn.StartsWith('#')) m.SamplerTextures[k] = tn; } else ok = false;
+                if (ok) m.Shader = tr;
+            }
+        }
         // a mask of another material (pavement edge over flagstones) runs along the second UV set; a texture's own transparency map (grille) does not
         m.AlphaUv2 = m.AlphaTex != null && d.UVs2 != null && m.AlphaTex != m.Base && (m.Base == null || !SameMaterial(m.Base, m.AlphaTex));
         return m;

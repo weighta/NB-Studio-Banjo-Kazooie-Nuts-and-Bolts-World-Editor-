@@ -86,6 +86,7 @@ public sealed class StartPage : Control
 
     /// <summary>Text under the cards while a workspace opens.</summary>
     public void SetStatus(string s) { _status = s; Invalidate(); }
+    public void SetAutoOpen(bool on) { _autoOpen = on; Invalidate(); }
 
     /// <summary>The background scaled to cover the page (cached per size: scaling a photo on every paint is slow).</summary>
     Bitmap? Background(Size size)

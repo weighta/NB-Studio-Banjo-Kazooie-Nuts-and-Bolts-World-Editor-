@@ -85,6 +85,7 @@ public sealed class TransformPanel : UserControl
                 ? $"Marker type {_obj.Marker!.Type} ({NB.Core.World.MarkerRecord.TypeName(_obj.Marker.Type)}) #{_obj.Marker.Index} in {_obj.ModelName} at 0x{_obj.Marker.Offset:X}\n" +
                   $"References: {string.Join(", ", _obj.Marker.AssetIds.Zip(_obj.Marker.AssetNames).Take(6).Select(p => p.Second == "?" ? p.First.ToString("X8") : p.Second))}\n" +
                   $"Strings: {string.Join(", ", _obj.Marker.Strings.Take(4))}\n" +
+                  (_obj.ModelSource != "" ? $"Drawn with: {(_obj.Model?.View != null ? AssetIds.DisplayName(_obj.Model.View.Name) + " from " : "")}{_obj.ModelSource}\n" : "") +
                   (_obj.Marker.Type == 22 ? $"Path: next node #{_obj.Marker.Link}" + (_obj.Marker.Link == _obj.Marker.Index ? " (end of path)" : "") + "; a node linking to itself ends the path\n" : "") +
                   (_obj.Dirty ? "Modified (not yet saved)" : "Unmodified") + "\nRotation is stored as X/Y/Z angles; the engine's order is assumed X-Y-Z."
                 : $"Instance #{_obj.Instance?.Index}, reference model #{_obj.Instance?.RefModel}\n" +

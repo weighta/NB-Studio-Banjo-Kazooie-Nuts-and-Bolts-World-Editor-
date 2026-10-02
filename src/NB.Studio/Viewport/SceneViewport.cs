@@ -34,6 +34,33 @@ public sealed partial class SceneViewport : UserControl
     public SceneObject? Selected { get; private set; }
     public GizmoMode Mode = GizmoMode.Move;
     public bool ShowTerrain = true, ShowScenery = true, ShowMarkers = true;
+
+    /// <summary>Objects placed by markers drawn with their own model (props such as L.O.G.'s palace, the Jiggy bank and
+    /// world doors, characters, collectables — <see cref="SceneObject.ModelSource"/>). Off: they are marker boxes.</summary>
+    public bool ShowObjects { get => _showObjects; set { if (_showObjects != value) { _showObjects = value; _linesVersion++; _gl.Invalidate(); } } }
+    bool _showObjects = true;
+
+    /// <summary>Distance culling as in the game: an object whose models all end their LOD tables with an empty level is not
+    /// drawn when its view depth divided by its scale exceeds that distance (<see cref="SceneObject.CullDistance"/>). The
+    /// selection is always drawn. Off with --no-cull.</summary>
+    public bool LodCulling = true;
+
+    bool BeyondCullDistance(SceneObject o, Vector3 centre)
+    {
+        if (!LodCulling || float.IsPositiveInfinity(o.CullDistance) || o == Selected) return false;
+        var t = o.Transform;
+        float scale = MathF.Max(new Vector3(t.M11, t.M12, t.M13).Length(), 1e-3f);
+        return Vector3.Dot(centre - _camPos, Forward()) / scale > o.CullDistance;
+    }
+
+    /// <summary>Whether an object is drawn with its model this frame (terrain / scenery / marker objects toggles, scenery
+    /// hidden by the tool unless selected).</summary>
+    bool DrawsModel(SceneObject o, bool keepSelected = true) => o.Visible && o.Model != null && o.Kind switch
+    {
+        SceneObjectKind.Terrain => ShowTerrain,
+        SceneObjectKind.Scenery => ShowScenery && ((keepSelected && o == Selected) || !IsHidden(o)),
+        _ => _showObjects,
+    };
     /// <summary>Draw Havok collision wireframes (terrain: cyan, scenery: yellow). The scene's collision must be loaded.</summary>
     public bool ShowCollision;
     /// <summary>Draw path-node links (marker type 22: record +8 = next node index).</summary>
@@ -54,6 +81,15 @@ public sealed partial class SceneViewport : UserControl
     float _fov = 60f;
     readonly HashSet<Keys> _keys = new();
     Point _lastMouse, _mouse; bool _looking, _panning, _dragMoved, _suppressRightUp;
+    /// <summary>S scales the selection (Blender). Off: S always flies backwards (Settings).</summary>
+    public bool SScales = true;
+    /// <summary>The S key held now was pressed while flying, so it keeps flying backwards until released.</summary>
+    bool _sFlies;
+    /// <summary>When the camera last flew (keys) or looked around (right button): G / R / S right after that are
+    /// still part of flying, not the start of a transform.</summary>
+    DateTime _lastFly = DateTime.MinValue;
+    static readonly Keys[] FlyKeys = { Keys.W, Keys.A, Keys.D, Keys.Q, Keys.E, Keys.Up, Keys.Down, Keys.Left, Keys.Right, Keys.PageUp, Keys.PageDown };
+    bool Flying => _looking || FlyKeys.Any(_keys.Contains) || (DateTime.UtcNow - _lastFly).TotalMilliseconds < 600;
 
     public SceneViewport()
     {
@@ -65,8 +101,8 @@ public sealed partial class SceneViewport : UserControl
         _gl.Resize += (_, _) => _gl.Invalidate();
         _gl.MouseDown += OnMouseDown; _gl.MouseUp += OnMouseUp; _gl.MouseMove += OnMouseMove; _gl.MouseWheel += OnWheel;
         _gl.MouseLeave += (_, _) => { if (_hoverBar != -1 || _hoverHandle != -1) { _hoverBar = -1; _hoverHandle = -1; _gl.Invalidate(); } };
-        _gl.KeyDown += (_, e) => { _keys.Add(e.KeyCode); OnKey(e); };
-        _gl.KeyUp += (_, e) => { _keys.Remove(e.KeyCode); if (_xf != XfKind.None && _xfDrag) UpdateTransform(); };
+        _gl.KeyDown += (_, e) => { bool fresh = _keys.Add(e.KeyCode); OnKey(e, fresh); };
+        _gl.KeyUp += (_, e) => { _keys.Remove(e.KeyCode); if (e.KeyCode == Keys.S) _sFlies = false; if (_xf != XfKind.None && _xfDrag) UpdateTransform(); };
         _gl.PreviewKeyDown += (_, e) => e.IsInputKey = true;
         _gl.LostFocus += (_, _) => _keys.Clear();
         _timer.Tick += (_, _) => Tick();
@@ -127,25 +163,50 @@ public sealed partial class SceneViewport : UserControl
     int _lightIndex;
     ModelAsset? _sky;
     readonly List<(string Name, ModelAsset? Model)> _skies = new();
+    /// <summary>The level scripts' light setups and sky domes (see <see cref="WorldLooks"/>), parallel to <see cref="_lights"/>
+    /// (null entries: a light setup found only by name).</summary>
+    List<WorldLook?> _looks = new();
     public string LightingName => _lights is { Count: > 0 } ? _lights[_lightIndex].Name : "default";
+    /// <summary>Name of the sky dome drawn (null: none).</summary>
+    public string? SkyName { get; private set; }
+    bool _skyFollows = true;
 
     void EnsureLighting()
     {
         if (_lights != null || Scene == null) return;
-        _lights = new();
+        _lights = new(); _looks = new();
+        // 1. the level scripts: light setup + skydome per act / time of day (domes may live in other bundles or Bundle/50)
+        try
+        {
+            var idx = NB.Core.Project.AssetIndex.LoadOrBuild(Scene.Workspace);
+            foreach (var look in WorldLooks.Find(Scene.Workspace, idx, Scene, m => Scene.Log.Add(m)))
+            {
+                if (look.Light == null && look.Dome == null) continue;
+                _lights.Add(look.Light ?? new LevelLighting { Name = look.Script.Replace("aid_script_banjox_", ""), Ambient = new Vector3(0.35f), Sun = Vector3.One, Elevation = 0.8f, Azimuth = -2f, Intensity = 1.1f });
+                _looks.Add(look);
+                if (look.Dome != null && !_skies.Any(k => k.Model == look.Dome)) _skies.Add((look.DomeName ?? "sky", look.Dome));
+            }
+        }
+        catch (Exception e) { Scene.Log.Add("lighting: " + e.Message); }
+        // 2. light setups and *skydome* models stored in the world / act bundles (worlds without level scripts)
         var caffs = new List<NB.Core.Formats.CaffFile> { Scene.Caff };
         foreach (var b in Scene.MarkerBundles) try { caffs.Add(Scene.Workspace.LoadResident(b)); } catch { }
         foreach (var c in caffs)
         {
-            try { _lights.AddRange(LevelLighting.All(c).Where(l => !_lights.Any(x => x.Name == l.Name))); } catch { }
+            try
+            {
+                foreach (var l in LevelLighting.All(c).Where(l => !_lights.Any(x => x.Name == l.Name))) { _lights.Add(l); _looks.Add(null); }
+            }
+            catch { }
             for (int s = 1; s <= c.Symbols.Count; s++)
             {
                 var n = c.Symbols[s - 1];
                 if (!n.StartsWith("aid_model_") || !n.Contains("skydome")) continue;
-                try { var m = ModelAsset.Parse(c, s); if (m.Draws.Count > 0) _skies.Add((NB.Core.Formats.AssetIds.DisplayName(n), m)); } catch { }
+                var dn = NB.Core.Formats.AssetIds.DisplayName(n);
+                if (_skies.Any(k => k.Name == dn)) continue;
+                try { var m = ModelAsset.Parse(c, s); if (m.Draws.Count > 0) _skies.Add((dn, m)); } catch { }
             }
         }
-        _lights = _lights.OrderBy(l => l.Name.EndsWith("_main") ? 0 : 1).ToList();
         _lightIndex = 0;
         ApplyLight();
     }
@@ -156,17 +217,27 @@ public sealed partial class SceneViewport : UserControl
         {
             var l = _lights[_lightIndex];
             _r.Lighting = SceneLighting.From(l);
-            // sky dome of the phase: midday ("main") uses the afternoon dome model in Showdown Town
-            string phase = l.Name[(l.Name.LastIndexOf('_') + 1)..];
-            string[] prefs = phase switch
+            var look = _lightIndex < _looks.Count ? _looks[_lightIndex] : null;
+            _skyFollows = look?.DomeFollowsCamera ?? true;
+            if (look?.Dome != null) { _sky = look.Dome; SkyName = look.DomeName; }
+            else if (look != null && look.DomeId == 0 && look.Script.Length > 0 && _skies.Count == 0) { _sky = null; SkyName = null; }
+            else
             {
-                "main" => new[] { "afternoon", "day", "bluesky", "blue", "sunrise", "morning" },
-                "afternoon" => new[] { "evening", "sunset", "afternoon" },
-                _ => new[] { phase },
-            };
-            _sky = prefs.Select(p => _skies.FirstOrDefault(s => s.Name.Contains(p)).Model).FirstOrDefault(m => m != null) ?? _skies.FirstOrDefault().Model;
+                // light setups found by name only: the dome of the phase by name (midday uses the afternoon dome model in Showdown Town)
+                string phase = l.Name[(l.Name.LastIndexOf('_') + 1)..];
+                string[] prefs = phase switch
+                {
+                    "main" => new[] { "afternoon", "day", "bluesky", "blue", "sunrise", "morning" },
+                    "afternoon" => new[] { "evening", "sunset", "afternoon" },
+                    _ => new[] { phase },
+                };
+                var pick = prefs.Select(p => _skies.FirstOrDefault(s => s.Name.Contains(p))).FirstOrDefault(s => s.Model != null);
+                if (pick.Model == null) pick = _skies.FirstOrDefault();
+                _sky = pick.Model; SkyName = pick.Model != null ? pick.Name : null;
+            }
         }
-        else { _r.Lighting = new SceneLighting(); _sky = _skies.FirstOrDefault().Model; }
+        else { _r.Lighting = new SceneLighting(); var pick = _skies.FirstOrDefault(); _sky = pick.Model; SkyName = pick.Model != null ? pick.Name : null; }
+        _r.InvalidateShadow();
         _gl.Invalidate();
     }
 
@@ -193,7 +264,7 @@ public sealed partial class SceneViewport : UserControl
             var regions = WaterEditor.Read(scene.Caff, scene.Background.View.Symbol);
             if (regions.Count == 0) return null;
             var model = new ModelAsset();
-            string? skyTex = _skies.Select(sk => sk.Model?.Draws.SelectMany(d => d.Textures).Select(t => t.Texture).FirstOrDefault()).FirstOrDefault(t => t != null);
+            string? skyTex = (_sky != null ? new[] { _sky } : _skies.Select(sk => sk.Model)).Select(m => m?.Draws.SelectMany(d => d.Textures).Select(t => t.Texture).FirstOrDefault(t => !t.StartsWith('#'))).FirstOrDefault(t => t != null);
             foreach (var r in regions)
             {
                 if (r.Triangles.Count < 3) continue;
@@ -220,7 +291,7 @@ public sealed partial class SceneViewport : UserControl
 
     // ------------------------------------------------------------------ scene
 
-    public void SetScene(WorldScene? scene)
+    public void SetScene(WorldScene? scene, bool keepCamera = false)
     {
         CancelTransform();
         if (_ready) { _gl.MakeCurrent(); _r.Clear(); foreach (var b in _collision.Values) _r.DeleteLineBatch(b); }
@@ -239,7 +310,7 @@ public sealed partial class SceneViewport : UserControl
             // underground and showed an empty viewport (Seattle).
             var sc = scene.Objects.Where(o => o.Kind == SceneObjectKind.Scenery && !IsHidden(o)).Select(o => o.Transform.Translation).ToList();
             if (sc.Count > 0) c = new Vector3(sc.Average(v => v.X), sc.Average(v => v.Y), sc.Average(v => v.Z));
-            _camPos = c + new Vector3(0, 120, -250); _yaw = 0; _pitch = -0.4f;
+            if (!keepCamera) { _camPos = c + new Vector3(0, 120, -250); _yaw = 0; _pitch = -0.4f; }
             EnsureLighting();
             _water = BuildWater(scene);
         }
@@ -354,13 +425,17 @@ public sealed partial class SceneViewport : UserControl
         if (Scene != null)
         {
             if (_viewMode == ViewMode.Rendered && _r.Shadows) RenderShadowMap(W, H);
-            _r.Begin(vp, _camPos);
-            if (_viewMode == ViewMode.Rendered && _sky != null)
+            _r.Begin(vp, _camPos, Right(), Vector3.Normalize(Vector3.Cross(Right(), Forward())));
+            if (_viewMode is ViewMode.Rendered or ViewMode.Textured && _sky != null)
             {
-                // sky dome around the camera: unlit, behind everything
-                GL.DepthMask(false); GL.Disable(EnableCap.DepthTest);
-                _r.DrawModel(_sky, Matrix4x4.CreateTranslation(_camPos), Vector4.Zero, null, unlit: true);
-                GL.Enable(EnableCap.DepthTest); GL.DepthMask(true);
+                if (_skyFollows)
+                {
+                    // sky dome around the camera: unlit, behind everything
+                    GL.DepthMask(false); GL.Disable(EnableCap.DepthTest);
+                    _r.DrawModel(_sky, Matrix4x4.CreateTranslation(_camPos), Vector4.Zero, null, unlit: true);
+                    GL.Enable(EnableCap.DepthTest); GL.DepthMask(true);
+                }
+                else _r.DrawModel(_sky, Matrix4x4.Identity, Vector4.Zero, null, unlit: true);   // a world-size dome: depth-tested, hides what lies beyond it
             }
             // culling: whole objects and model pieces outside the view, or smaller than ~a pixel; scenery the tool hid
             // (sunk below the level / shrunk to nothing) is skipped unless selected
@@ -368,10 +443,8 @@ public sealed partial class SceneViewport : UserControl
             var fr = new Renderer.Frustum(vp, _camPos, NoCull ? 0 : minSize);
             foreach (var o in Scene.Objects)
             {
-                if (!o.Visible || o.Model == null) continue;
-                if (o.Kind == SceneObjectKind.Terrain && !ShowTerrain) continue;
-                if (o.Kind == SceneObjectKind.Scenery && (!ShowScenery || (o != Selected && IsHidden(o)))) continue;
-                if (!NoCull && o.Kind != SceneObjectKind.Terrain) { var (wc, wr) = WorldBounds(o); if (!fr.Visible(wc, wr)) continue; }
+                if (!DrawsModel(o)) continue;
+                if (!NoCull && o.Kind != SceneObjectKind.Terrain) { var (wc, wr) = WorldBounds(o); if (!fr.Visible(wc, wr) || BeyondCullDistance(o, wc)) continue; }
                 var tint = o == Selected ? new Vector4(1f, 0.55f, 0.1f, _viewMode == ViewMode.Wireframe ? 1f : 0.35f) : o.Dirty ? new Vector4(0.2f, 0.9f, 0.3f, 0.15f) : Vector4.Zero;
                 _r.DrawModel(o.Model, o.Transform, tint, NoCull ? null : fr);
                 foreach (var (cm, cl) in o.Children) _r.DrawModel(cm, cl * o.Transform, tint, NoCull ? null : fr);
@@ -431,20 +504,26 @@ public sealed partial class SceneViewport : UserControl
         float texel = 2 * R / Renderer.ShadowSize;
         var c = Vector3.Transform(centre, lv);
         lv.M41 -= c.X - MathF.Round(c.X / texel) * texel; lv.M42 -= c.Y - MathF.Round(c.Y / texel) * texel;
-        var lvp = lv * Matrix4x4.CreateOrthographic(2 * R, 2 * R, 1, 3500);
+        // casters further than ShadowReach towards the sun from the view's ground level are clipped
+        var lvp = lv * Matrix4x4.CreateOrthographic(2 * R, 2 * R, Math.Max(1, 1500 - ShadowReach), 3500);
         var fr = new Renderer.Frustum(lvp, eye, 0);
         _r.BeginShadow(lvp);
         foreach (var o in Scene!.Objects)
         {
-            if (!o.Visible || o.Model == null) continue;
-            if (o.Kind == SceneObjectKind.Terrain && !ShowTerrain) continue;
-            if (o.Kind == SceneObjectKind.Scenery && (!ShowScenery || IsHidden(o))) continue;
-            if (o.Kind != SceneObjectKind.Terrain) { var (wc, wr) = WorldBounds(o); if (!fr.Visible(wc, wr)) continue; }
+            if (!DrawsModel(o, keepSelected: false)) continue;
+            if (o.Kind != SceneObjectKind.Terrain) { var (wc, wr) = WorldBounds(o); if (!fr.Visible(wc, wr) || (!NoCull && BeyondCullDistance(o, wc))) continue; }
+            if (ShadowCasters == 1 && o.Kind == SceneObjectKind.Terrain || ShadowCasters == 2 && o.Kind != SceneObjectKind.Terrain) continue;
             _r.DrawShadow(o.Model, o.Transform, fr);
             foreach (var (cm, cl) in o.Children) _r.DrawShadow(cm, cl * o.Transform, fr);
         }
         _r.EndShadow(W, H);
     }
+
+    /// <summary>Debug: 0 every object casts, 1 scenery only, 2 terrain only.</summary>
+    public int ShadowCasters;
+    /// <summary>How far towards the sun (from the view's ground level) shadow casters are taken: the game's cascades do not
+    /// include high geometry (Nutty Acres' cloud rings 250+ units up cast no shadow in the game).</summary>
+    public float ShadowReach = 250;
 
     Renderer.LineBatch? _staticLines;
     (int, bool, bool) _staticKey;
@@ -457,7 +536,7 @@ public sealed partial class SceneViewport : UserControl
         var lines = new List<(Vector3, Vector3, Vector3)>();
         if (Scene == null) return lines;
         {
-            foreach (var o in Scene.Objects.Where(o => o.Visible && o.Model == null && (o.Kind != SceneObjectKind.Marker || ShowMarkers)))
+            foreach (var o in Scene.Objects.Where(o => o.Visible && (o.Model == null || (o.Kind == SceneObjectKind.Marker && !_showObjects)) && (o.Kind != SceneObjectKind.Marker || ShowMarkers)))
             {
                 if (o.Kind == SceneObjectKind.Marker) AddBox(lines, o, MarkerColor(o.Marker!.Type));
                 else AddCross(lines, o.Transform.Translation, 2, new Vector3(1, 0, 1));
@@ -625,6 +704,11 @@ public sealed partial class SceneViewport : UserControl
         }
     }
 
+    // NB Studio's own look (the start page and tour): charcoal panels, orange accent, nut-and-bolt shapes
+    static readonly Color BarBg = Color.FromArgb(232, 28, 30, 38), BarEdge = Color.FromArgb(255, 74, 78, 92),
+        BarHover = Color.FromArgb(255, 50, 53, 66), Accent = Color.FromArgb(255, 242, 140, 40), AccentHi = Color.FromArgb(255, 255, 186, 102),
+        BarText = Color.FromArgb(255, 222, 224, 232), AccentText = Color.FromArgb(255, 28, 20, 12);
+
     Bitmap DrawBar(bool showLight)
     {
         int h = showLight ? BarH + 4 + LightH : BarH;
@@ -633,62 +717,98 @@ public sealed partial class SceneViewport : UserControl
         g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
         g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
         g.Clear(Color.Transparent);
-        using var bg = new SolidBrush(Color.FromArgb(215, 32, 34, 38));
-        using var path = Rounded(new Rectangle(0, 0, BarSeg * 4 - 1, BarH - 1), 6);
-        g.FillPath(bg, path);
-        using var font = new Font("Segoe UI", 8.5f, FontStyle.Bold);
+        using var bg = new SolidBrush(BarBg);
+        using var edge = new Pen(BarEdge, 1f);
+        using var path = Rounded(new Rectangle(0, 0, BarSeg * 4 - 1, BarH - 1), 4);
+        g.FillPath(bg, path); g.DrawPath(edge, path);
+        using var font = new Font("Segoe UI Semibold", 8.5f);
+        using var sep = new Pen(Color.FromArgb(255, 56, 59, 72), 1f);
         for (int i = 0; i < 4; i++)
         {
-            var r = new Rectangle(i * BarSeg + 2, 2, BarSeg - 4, BarH - 5);
+            var r = new Rectangle(i * BarSeg + 3, 3, BarSeg - 6, BarH - 7);
             bool on = (int)_viewMode == i, hover = _hoverBar == i;
-            if (on) { using var p2 = Rounded(r, 5); using var b2 = new SolidBrush(Color.FromArgb(255, 66, 118, 205)); g.FillPath(b2, p2); }
-            else if (hover) { using var p2 = Rounded(r, 5); using var b2 = new SolidBrush(Color.FromArgb(255, 62, 64, 70)); g.FillPath(b2, p2); }
-            DrawModeIcon(g, i, new Rectangle(r.X + 5, r.Y + 3, 15, 15), on);
-            using var tb = new SolidBrush(on ? Color.White : Color.FromArgb(220, 222, 226));
-            g.DrawString(ModeLabels[i], font, tb, r.X + 22, r.Y + 3);
+            if (i > 0 && !on && (int)_viewMode != i - 1) g.DrawLine(sep, i * BarSeg, 6, i * BarSeg, BarH - 7);
+            if (on)
+            {
+                using var p2 = Rounded(r, 3);
+                using var b2 = new System.Drawing.Drawing2D.LinearGradientBrush(r, AccentHi, Accent, 90f);
+                g.FillPath(b2, p2);
+            }
+            else if (hover) { using var p2 = Rounded(r, 3); using var b2 = new SolidBrush(BarHover); g.FillPath(b2, p2); }
+            DrawModeIcon(g, i, new RectangleF(r.X + 5, r.Y + 2.5f, 15, 15), on);
+            using var tb = new SolidBrush(on ? AccentText : BarText);
+            g.DrawString(ModeLabels[i], font, tb, r.X + 23, r.Y + 2);
         }
         if (showLight)
         {
             var lr = new Rectangle(0, BarH + 4, BarSeg * 4 - 1, LightH - 1);
-            using var lp = Rounded(lr, 6); g.FillPath(bg, lp);
+            using var lp = Rounded(lr, 4); g.FillPath(bg, lp); g.DrawPath(edge, lp);
             using var f2 = new Font("Segoe UI", 8f);
-            using var tb = new SolidBrush(Color.FromArgb(235, 236, 240));
-            string text = $"☀ Light: {LightingName}" + (_lights is { Count: > 1 } ? "   ▸ click for next" : "");
-            g.DrawString(text, f2, tb, 8, BarH + 7);
+            using var ab = new SolidBrush(Accent);
+            using var tb = new SolidBrush(BarText);
+            g.DrawString("☀", f2, ab, 7, BarH + 7);
+            string text = $"Light: {LightingName}" + (_lights is { Count: > 1 } ? "   ›  click for next" : "");
+            g.DrawString(text, f2, tb, 22, BarH + 7);
         }
         return bmp;
     }
 
-    static void DrawModeIcon(Graphics g, int mode, Rectangle r, bool on)
+    /// <summary>The view-mode icons: a wire cube, a shaded cube, a picture, and a sun.</summary>
+    static void DrawModeIcon(Graphics g, int mode, RectangleF r, bool on)
     {
-        var fg = on ? Color.White : Color.FromArgb(205, 208, 214);
-        using var pen = new Pen(fg, 1.3f);
+        var fg = on ? AccentText : Color.FromArgb(255, 214, 217, 226);
+        float cx = r.X + r.Width / 2, cy = r.Y + r.Height / 2, s = r.Width / 2;
+        // an isometric cube: top, left and right faces around the centre corner
+        PointF P(float x, float y) => new(cx + x * s, cy + y * s);
+        PointF top = P(0, -1), tl = P(-0.87f, -0.5f), tr = P(0.87f, -0.5f), mid = P(0, 0), bl = P(-0.87f, 0.5f), br = P(0.87f, 0.5f), bot = P(0, 1);
         switch (mode)
         {
             case 0:
-                g.DrawEllipse(pen, r); g.DrawEllipse(pen, r.X + r.Width / 4f, r.Y, r.Width / 2f, r.Height);
-                g.DrawLine(pen, r.X, r.Y + r.Height / 2f, r.Right, r.Y + r.Height / 2f); break;
+            {
+                using var pen = new Pen(fg, 1.25f) { LineJoin = System.Drawing.Drawing2D.LineJoin.Round };
+                g.DrawPolygon(pen, new[] { top, tr, br, bot, bl, tl });
+                g.DrawLine(pen, tl, mid); g.DrawLine(pen, tr, mid); g.DrawLine(pen, mid, bot);
+                using var dash = new Pen(Color.FromArgb(150, fg), 1f) { DashStyle = System.Drawing.Drawing2D.DashStyle.Dot };
+                // the hidden corner sits behind the front one: its three edges dotted
+                g.DrawLine(dash, mid, bl); g.DrawLine(dash, mid, br); g.DrawLine(dash, mid, top); break;
+            }
             case 1:
             {
-                using var br = new System.Drawing.Drawing2D.LinearGradientBrush(r, Color.FromArgb(240, 240, 240), Color.FromArgb(110, 112, 118), 45f);
-                g.FillEllipse(br, r); break;
+                using var t = new SolidBrush(on ? Color.FromArgb(255, 250, 238, 222) : Color.FromArgb(255, 226, 228, 234));
+                using var lft = new SolidBrush(on ? Color.FromArgb(255, 150, 96, 48) : Color.FromArgb(255, 150, 154, 166));
+                using var rgt = new SolidBrush(on ? Color.FromArgb(255, 96, 58, 26) : Color.FromArgb(255, 100, 104, 118));
+                g.FillPolygon(t, new[] { top, tr, mid, tl });
+                g.FillPolygon(lft, new[] { tl, mid, bot, bl });
+                g.FillPolygon(rgt, new[] { mid, tr, br, bot });
+                break;
             }
             case 2:
             {
-                using var clip = new System.Drawing.Drawing2D.GraphicsPath(); clip.AddEllipse(r);
-                var old = g.Clip; g.SetClip(clip);
-                for (int y = 0; y < 4; y++) for (int x = 0; x < 4; x++)
-                {
-                    using var b = new SolidBrush((x + y) % 2 == 0 ? Color.FromArgb(230, 180, 90) : Color.FromArgb(120, 80, 50));
-                    g.FillRectangle(b, r.X + x * r.Width / 4f, r.Y + y * r.Height / 4f, r.Width / 4f + 1, r.Height / 4f + 1);
-                }
-                g.Clip = old; g.DrawEllipse(pen, r); break;
+                // a picture: frame, a sun and two hills
+                var fr = new RectangleF(r.X + 0.5f, r.Y + 2, r.Width - 1, r.Height - 4);
+                using var sky = new SolidBrush(on ? Color.FromArgb(255, 255, 236, 200) : Color.FromArgb(255, 92, 140, 196));
+                using (var p = Rounded(Rectangle.Round(fr), 2)) g.FillPath(sky, p);
+                using var hill = new SolidBrush(on ? Color.FromArgb(255, 120, 70, 28) : Color.FromArgb(255, 108, 168, 82));
+                g.FillPolygon(hill, new[] { new PointF(fr.X, fr.Bottom), new PointF(fr.X + fr.Width * 0.38f, fr.Y + fr.Height * 0.42f), new PointF(fr.X + fr.Width * 0.62f, fr.Y + fr.Height * 0.72f),
+                    new PointF(fr.X + fr.Width * 0.78f, fr.Y + fr.Height * 0.55f), new PointF(fr.Right, fr.Y + fr.Height * 0.8f), new PointF(fr.Right, fr.Bottom) });
+                using var sun = new SolidBrush(on ? Color.FromArgb(255, 200, 90, 20) : Color.FromArgb(255, 255, 214, 110));
+                g.FillEllipse(sun, fr.Right - 5.5f, fr.Y + 1.5f, 3.5f, 3.5f);
+                using var pen = new Pen(fg, 1.1f);
+                using (var p = Rounded(Rectangle.Round(fr), 2)) g.DrawPath(pen, p);
+                break;
             }
             default:
             {
-                using var br = new System.Drawing.Drawing2D.PathGradientBrush(new[] { new PointF(r.X, r.Y), new PointF(r.Right, r.Y), new PointF(r.Right, r.Bottom), new PointF(r.X, r.Bottom) })
-                { CenterPoint = new PointF(r.X + r.Width * 0.35f, r.Y + r.Height * 0.3f), CenterColor = Color.FromArgb(255, 250, 200), SurroundColors = new[] { Color.FromArgb(200, 120, 40) } };
-                g.FillEllipse(br, r); break;
+                // a sun: disc and rays
+                using var pen = new Pen(on ? AccentText : Color.FromArgb(255, 255, 196, 92), 1.4f) { StartCap = System.Drawing.Drawing2D.LineCap.Round, EndCap = System.Drawing.Drawing2D.LineCap.Round };
+                for (int k = 0; k < 8; k++)
+                {
+                    double a = k * Math.PI / 4;
+                    g.DrawLine(pen, cx + (float)Math.Cos(a) * s * 0.62f, cy + (float)Math.Sin(a) * s * 0.62f, cx + (float)Math.Cos(a) * s * 0.98f, cy + (float)Math.Sin(a) * s * 0.98f);
+                }
+                using var disc = new SolidBrush(on ? AccentText : Color.FromArgb(255, 255, 176, 64));
+                g.FillEllipse(disc, cx - s * 0.42f, cy - s * 0.42f, s * 0.84f, s * 0.84f);
+                break;
             }
         }
     }
@@ -923,24 +1043,27 @@ public sealed partial class SceneViewport : UserControl
 
     // ------------------------------------------------------------------ input
 
-    void Tick()
+    void Tick() { if (_gl.Focused) TickCore(); }
+
+    void TickCore()
     {
-        if (!_gl.Focused || _keys.Count == 0 || _xf != XfKind.None) return;
+        if (_keys.Count == 0 || _xf != XfKind.None) return;
         float speed = (_keys.Contains(Keys.ShiftKey) ? 4f : 1f) * 1.2f;
         if (_keys.Contains(Keys.ControlKey)) return;
         var f = Forward(); var r = Right(); var d = Vector3.Zero;
-        // S is Scale while something is selected (Blender); fly backwards with S while looking (right button) or with Down
-        bool sFlies = _looking || Selected == null || Selected.Kind == SceneObjectKind.Terrain;
+        // S is Scale while something is selected (Blender), but while flying (right button held, other fly keys held,
+        // or flying a moment ago) S flies backwards
+        bool sFlies = _sFlies || !SScales || _looking || Selected == null || Selected.Kind == SceneObjectKind.Terrain;
         if (_keys.Contains(Keys.W) || _keys.Contains(Keys.Up)) d += f;
         if ((_keys.Contains(Keys.S) && sFlies) || _keys.Contains(Keys.Down)) d -= f;
         if (_keys.Contains(Keys.D) || _keys.Contains(Keys.Right)) d += r;
         if (_keys.Contains(Keys.A) || _keys.Contains(Keys.Left)) d -= r;
         if (_keys.Contains(Keys.E) || _keys.Contains(Keys.PageUp)) d += Vector3.UnitY;
         if (_keys.Contains(Keys.Q) || _keys.Contains(Keys.PageDown)) d -= Vector3.UnitY;
-        if (d != Vector3.Zero) { _camPos += d * speed; _gl.Invalidate(); }
+        if (d != Vector3.Zero) { _camPos += d * speed; _lastFly = DateTime.UtcNow; _gl.Invalidate(); }
     }
 
-    void OnKey(KeyEventArgs e)
+    void OnKey(KeyEventArgs e, bool fresh = true)
     {
         if (_xf != XfKind.None)
         {
@@ -965,7 +1088,11 @@ public sealed partial class SceneViewport : UserControl
             return;
         }
         if (e.Control || e.Alt) return;
-        bool canEdit = Selected != null && Selected.Kind != SceneObjectKind.Terrain && !_looking;
+        // G / R / S start a transform only on a fresh key press (not key repeat) and never while flying, so holding S to
+        // fly back and letting go of the right button can't turn into a scale
+        bool flying = Flying;
+        if (e.KeyCode == Keys.S && fresh && (flying || !SScales)) _sFlies = true;
+        bool canEdit = Selected != null && Selected.Kind != SceneObjectKind.Terrain && fresh && !flying && !_sFlies;
         switch (e.KeyCode)
         {
             case Keys.F when Selected != null: Focus(Selected); break;
@@ -1031,6 +1158,7 @@ public sealed partial class SceneViewport : UserControl
         if (e.Button == MouseButtons.Right)
         {
             _looking = false;
+            if (_dragMoved) _lastFly = DateTime.UtcNow;
             if (_suppressRightUp) { _suppressRightUp = false; return; }
             if (!_dragMoved) { var hit = Pick(e.Location); if (hit.Obj != null) Select(hit.Obj); ContextMenuRequested?.Invoke(hit.Obj ?? Selected, e.Location); }
         }
@@ -1099,13 +1227,15 @@ public sealed partial class SceneViewport : UserControl
             if (!o.Visible) continue;
             if (o.Kind == SceneObjectKind.Terrain && !ShowTerrain) continue;
             if (o.Kind == SceneObjectKind.Scenery && !ShowScenery) continue;
-            if (o.Kind == SceneObjectKind.Marker && !ShowMarkers) continue;
+            bool asModel = o.Model != null && (o.Kind != SceneObjectKind.Marker || _showObjects);   // marker objects: their mesh
+            if (o.Kind == SceneObjectKind.Marker && !asModel && !ShowMarkers) continue;
             if (!Matrix4x4.Invert(o.Transform, out var inv)) continue;
             var lo = Vector3.Transform(ro, inv); var ld = Vector3.TransformNormal(rd, inv);
             if (!RayBox(lo, ld, o.BoundsMin, o.BoundsMax, out float tb) || tb > bestT) continue;
-            float t = o.Model == null ? tb : RayMesh(lo, ld, o.Model, bestT);
-            foreach (var (cm, cl) in o.Children)
-                if (Matrix4x4.Invert(cl, out var ci)) t = MathF.Min(t, RayMesh(Vector3.Transform(lo, ci), Vector3.TransformNormal(ld, ci), cm, bestT));
+            float t = !asModel ? tb : RayMesh(lo, ld, o.Model!, bestT);
+            if (asModel)
+                foreach (var (cm, cl) in o.Children)
+                    if (Matrix4x4.Invert(cl, out var ci)) t = MathF.Min(t, RayMesh(Vector3.Transform(lo, ci), Vector3.TransformNormal(ld, ci), cm, bestT));
             if (t < bestT) { bestT = t; best = o; }
         }
         return (best, bestT);

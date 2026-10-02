@@ -43,7 +43,8 @@ Space Needle of the Seattle mod). First time? NB Studio offers a 2-minute tour t
 
 | Area | What you can do |
 |---|---|
-| **Worlds** | Open every world and Act (Showdown Town, Nutty Acres, LOGBOX 720, Banjoland, Terrarium of Terror, Spiral Mountain, World of Sports, the test track...) with terrain, scenery, markers, AI paths and collision. Select, move, rotate, scale, duplicate and delete objects with undo/redo. |
+| **Worlds** | Open every world and Act (Showdown Town, Nutty Acres, LOGBOX 720, Banjoland, Terrarium of Terror, Spiral Mountain, World of Sports, the test track...) with terrain, scenery, markers, AI paths and collision, and every object the game places with a marker drawn with its real model: L.O.G.'s palace, the Jiggy bank, Jig-o-vends, cranes, doors, crates, notes, characters and act vehicles (*View > Objects at Markers*). Select, move, rotate, scale, duplicate and delete objects. |
+| **Undo** | **Ctrl+Z / Ctrl+Y** undo and redo any change: moving, rotating and scaling, path links, and everything that writes the game files (model import, duplicate, delete, collision import, tag, atmosphere and texture saves). The Edit menu names the step. *File > Settings* sets how many steps are kept. |
 | **Models** | Preview any model in 3D, export to OBJ or FBX (with skeleton and skin for characters), import OBJ/FBX geometry to replace scenery, build new scenery from imported models. |
 | **Textures** | Decode all 14,049 textures (DXT1/3/5, DXN, CTX1, ARGB, cube and volume maps), browse a model's or world's textures in the texture library, export PNG, replace with your own image. |
 | **Collision** | View and import world collision (Havok 5.5 extended meshes); box collision for imported scenery. |
@@ -51,8 +52,8 @@ Space Needle of the Seattle mod). First time? NB Studio offers a 2-minute tour t
 | **Vehicle parts** | Part Importer: build new garage parts (model, physics, stats, attach points, garage tier dialogs). |
 | **Text, audio, video** | Edit in-game text in all languages, replace music and sound effects (XWB banks), replace videos. |
 | **Executable mods** | Toggle researched game-code changes (vehicles and Change Vehicle in town, destructible town vehicles, 2000-part vehicles, bigger world and garage, longer draw distance, all parts unlocked, debug menus...) as Xenia patches or baked into the executable. |
-| **For beginners** | A guided tour on the first start (and from *Help > Take the Tour*): it spotlights each part of the window and explains it in plain words, then walks you through your first mod in 5 steps. Opening a workspace reopens the world you were last in. |
-| **3D view** | Wireframe, Solid, Textured and **Rendered** views (switch in the corner of the 3D view). Rendered lights the world with the level's real game lighting: sun, ambient, shadows, fog, normal and specular maps, reflections, sky dome and water; glass and see-through materials are drawn properly. Blender-style editing: **G** move, **R** rotate, **S** scale, then **X/Y/Z** to lock an axis (shown as a coloured line), typed values, one undo step per change. |
+| **For beginners** | A guided tour on the first start (and from *Help > Take the Tour*): it spotlights each part of the window and explains it in plain words, then walks you through your first mod in 5 steps. Opening a workspace reopens the world you were last in; *File > Open Recent* lists the workspaces you used last. |
+| **3D view** | Wireframe, Solid, Textured and **Rendered** views (switch in the corner of the 3D view). Every material is drawn with the game's own pixel shader, translated from the Xbox 360 shader code: metal, glass, reflections, texture tiling and colour come out as in the game. Rendered lights the world with the level's real lighting (sun, fill light, sky-and-ground ambient, shadows, fog), read from the level scripts; each world shows its own sky dome (also in Textured). Blender-style editing: **G** move, **R** rotate, **S** scale, then **X/Y/Z** to lock an axis (shown as a coloured line), typed values. While you fly (right mouse button held, or just after W A D Q E), S flies backwards instead of scaling. |
 | **Atmosphere & weather** | The *Atmosphere* tab edits each time of day's sky, light and fog with colour pickers and sliders (with a live preview in a running game); *World > Weather* adds falling snow. Everything Snowy Showdown Town needed can be done in NB Studio. |
 | **Testing** | Launch your modded game in Xenia with one key (F5), and tweak a running game live (teleport, gravity, camera). |
 | **Sharing** | Export a `.nbpatch` mod: a small differential patch with only your changes, plus its name, version, category (map, vehicle parts, gameplay, visuals, audio, tweak, co-op), tags and description. It contains no game data; others apply it to their own copy with one click (with backup and rollback) or add it to NB Multiplayer's mod library. |
@@ -65,6 +66,17 @@ Everything is non-destructive: NB Studio works on a **workspace** (a copy of you
 and keeps a history of every saved file.
 
 ## Screenshots
+
+<p align="center">
+  <img src="docs/images/studio-materials-1-6.jpg" alt="Clanker's tunnel in Banjoland: NB Studio 1.5, NB Studio 1.6 and the game" width="100%">
+</p>
+<p align="center"><i>Clanker's tunnel in Banjoland. NB Studio 1.6 draws every material with the game's own shader code: the metal panels and sand now look like the game (right) instead of black with glowing blobs (left).</i></p>
+
+<p align="center">
+  <img src="docs/images/studio-palace-rendered.jpg" alt="L.O.G.'s palace in the Rendered view" width="49%">
+  <img src="docs/images/studio-spiral-rendered.jpg" alt="Spiral Mountain in the Rendered view" width="49%">
+</p>
+<p align="center"><i>L.O.G.'s palace and the town's other marker-placed objects, with the afternoon sky dome; Spiral Mountain with its rock and grass tiled as in the game.</i></p>
 
 <p align="center">
   <img src="docs/images/studio-rendered.jpg" alt="Showdown Town in the Rendered view" width="49%">

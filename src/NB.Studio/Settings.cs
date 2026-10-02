@@ -16,6 +16,26 @@ public sealed class Settings
     /// when the workspace opens.</summary>
     public Dictionary<string, string> LastWorlds { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>How many steps Ctrl+Z can go back.</summary>
+    public int UndoSteps { get; set; } = 100;
+    /// <summary>3D view: S scales the selection (Blender style). Off: S always flies backwards.</summary>
+    public bool SScales { get; set; } = true;
+    /// <summary>Workspaces opened most recently first (File > Open Recent).</summary>
+    public List<string> RecentWorkspaces { get; set; } = new();
+    public const int RecentMax = 12;
+    /// <summary>The recent list was started from the workspaces opened before it existed.</summary>
+    public bool RecentSeeded { get; set; }
+
+    public void AddRecent(string root)
+    {
+        root = Norm(root);
+        RecentWorkspaces.RemoveAll(r => string.Equals(Norm(r), root, StringComparison.OrdinalIgnoreCase));
+        RecentWorkspaces.Insert(0, root);
+        if (RecentWorkspaces.Count > RecentMax) RecentWorkspaces.RemoveRange(RecentMax, RecentWorkspaces.Count - RecentMax);
+    }
+
+    static string Norm(string p) { try { return Path.TrimEndingDirectorySeparator(Path.GetFullPath(p)); } catch (Exception) { return p; } }
+
     static string PathOf => Path.Combine(NB.Core.Project.ProjectRegistry.DataDir, "settings.json");
 
     public static Settings Load()

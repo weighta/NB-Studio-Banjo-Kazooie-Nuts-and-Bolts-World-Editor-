@@ -42,7 +42,8 @@ public sealed class MainForm : Form
     TabControl _leftTabs = null!;
     ToolStrip _toolbar = null!;
     MenuStrip _menu = null!;
-    readonly Stack<(SceneObject Obj, Matrix4x4 Before, Matrix4x4 After)> _undo = new(), _redo = new();
+    /// <summary>Ctrl+Z / Ctrl+Y: transforms, path links and every workspace file an action writes.</summary>
+    readonly UndoHistory _history = new();
     bool _syncingTree;
 
     public MainForm()
@@ -126,7 +127,11 @@ public sealed class MainForm : Form
         _view.ObjectEdited += o => PushUndo(o, _pendingBefore, o.Transform);
         _view.ContextMenuRequested += (o, p) => { if (o != null) { BuildObjectMenu(o); _objMenu.Show(_view, p); } };
         _transform.TransformChanged += (o, before) => { PushUndo(o, before, o.Transform); _view.Refresh3D(); UpdateTitle(); };
-        _transform.LinkChanged += (o, before) => { _view.Refresh3D(); UpdateTitle(); Log($"{o.Name}: next path node {before} -> {o.Marker!.Link} (World > Save to write it)"); };
+        _transform.LinkChanged += (o, before) => { _history.PushLink(o, before, o.Marker!.Link); _view.Refresh3D(); UpdateTitle(); Log($"{o.Name}: next path node {before} -> {o.Marker!.Link} (World > Save to write it)"); };
+        _history.Limit = _settings.UndoSteps;
+        _history.Log = Log;
+        _view.SScales = _settings.SScales;
+        FormClosed += (_, _) => _history.Detach();
         _tree.AfterSelect += (_, e) => { if (!_syncingTree && e.Node?.Tag is SceneObject o) _view.Select(o, focus: true); };
         _tree.AfterCheck += (_, e) => { if (e.Node?.Tag is SceneObject o) { o.Visible = e.Node.Checked; _view.Refresh3D(); } else if (e.Action != TreeViewAction.Unknown && e.Node != null) foreach (TreeNode c in e.Node.Nodes) c.Checked = e.Node.Checked; };
         _tree.NodeMouseClick += (_, e) => { if (e.Button == MouseButtons.Right && e.Node.Tag is SceneObject o) { _tree.SelectedNode = e.Node; BuildObjectMenu(o); _objMenu.Show(_tree, e.Location); } };
@@ -163,6 +168,7 @@ public sealed class MainForm : Form
         };
         FormClosing += (_, e) =>
         {
+            if (_scripted) return;   // test runs end without questions
             if (_scene != null && _scene.Objects.Any(o => o.Dirty) &&
                 MessageBox.Show(this, "There are unsaved world edits. Quit anyway?", Text, MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) e.Cancel = true;
             else if (_atmos.HasUnsaved && !e.Cancel &&
@@ -230,7 +236,7 @@ public sealed class MainForm : Form
                 "Lines that start with ↳ are Acts (the challenges). They use the same world with their own objects.",
                 () => Scr(_leftTabs), () => _leftTabs.SelectedIndex = 0));
             steps.Add(new("The 3D view",
-                "Your world, in 3D.\n• Look around: hold the right mouse button and move the mouse.\n• Fly: W A S D, Q and E for down and up, Shift to go faster (with something selected, S scales it, so fly back with the Down arrow).\n" +
+                "Your world, in 3D.\n• Look around: hold the right mouse button and move the mouse.\n• Fly: W A S D, Q and E for down and up, Shift to go faster. Tip: hold the right mouse button while you fly, then S always flies backwards (otherwise, with something selected, S scales it).\n" +
                 "• The buttons in the top-right corner switch the view: Wireframe, Solid, Textured, or Rendered (lit like the game).\n" +
                 "• Select: left-click an object.\n• Move it: press G and move the mouse, then click to drop it. Press X, Y or Z while moving to slide along one direction only.\n" +
                 "• Scale it: press S (with X, Y or Z for one direction).\n• Made a mistake? Ctrl+Z undoes it.",
@@ -317,13 +323,28 @@ public sealed class MainForm : Form
         var file = new ToolStripMenuItem("&File");
         file.DropDownItems.Add("&New Workspace from Game Directory…", null, async (_, _) => await NewWorkspace());
         file.DropDownItems.Add("&Open Workspace…", null, async (_, _) => { using var d = new FolderBrowserDialog { Description = "Workspace folder (contains workspace.json)" }; if (d.ShowDialog(this) == DialogResult.OK) await OpenWorkspace(d.SelectedPath); });
+        var recent = new ToolStripMenuItem("Open &Recent");
+        recent.DropDownItems.Add("(none)");   // filled when opened
+        recent.DropDownOpening += (_, _) => FillRecent(recent);
+        file.DropDownItems.Add(recent);
         file.DropDownItems.Add("Validate Original Game Directory…", null, (_, _) => ValidateOriginal());
+        file.DropDownItems.Add(new ToolStripSeparator());
+        file.DropDownItems.Add(new ToolStripMenuItem("&Settings…", null, (_, _) => ShowSettings(), Keys.Control | Keys.Oemcomma) { ShortcutKeyDisplayString = "Ctrl+," });
         file.DropDownItems.Add(new ToolStripSeparator());
         file.DropDownItems.Add("E&xit", null, (_, _) => Close());
 
         var edit = new ToolStripMenuItem("&Edit");
-        edit.DropDownItems.Add(new ToolStripMenuItem("&Undo", null, (_, _) => Undo(), Keys.Control | Keys.Z));
-        edit.DropDownItems.Add(new ToolStripMenuItem("&Redo", null, (_, _) => Redo(), Keys.Control | Keys.Y));
+        var undoItem = new ToolStripMenuItem("&Undo", null, async (_, _) => await Undo(), Keys.Control | Keys.Z);
+        var redoItem = new ToolStripMenuItem("&Redo", null, async (_, _) => await Redo(), Keys.Control | Keys.Y);
+        edit.DropDownItems.Add(undoItem);
+        edit.DropDownItems.Add(redoItem);
+        edit.DropDownOpening += (_, _) =>
+        {
+            undoItem.Text = _history.UndoLabel is { } u ? "&Undo " + MenuText(u) : "&Undo";
+            redoItem.Text = _history.RedoLabel is { } r ? "&Redo " + MenuText(r) : "&Redo";
+            undoItem.Enabled = _history.CanUndo; redoItem.Enabled = _history.CanRedo;
+        };
+        edit.DropDownClosed += (_, _) => { undoItem.Enabled = redoItem.Enabled = true; };   // the shortcuts stay live
         edit.DropDownItems.Add(new ToolStripMenuItem("Undo Last &Bundle Save (import / duplicate / delete)", null, async (_, _) => await UndoLastBundleSave()));
         edit.DropDownItems.Add(new ToolStripSeparator());
         edit.DropDownItems.Add(new ToolStripMenuItem("Reset Selected Transform", null, (_, _) => { if (_view.Selected is { } o) ResetTransform(o); }));
@@ -355,7 +376,10 @@ public sealed class MainForm : Form
         _viewCollision = vC;
         var vP = new ToolStripMenuItem("Paths (path-node links)") { Checked = true, CheckOnClick = true };
         vP.CheckedChanged += (_, _) => { _view.ShowPaths = vP.Checked; _view.Refresh3D(); };
-        view.DropDownItems.AddRange(new ToolStripItem[] { vMode, new ToolStripSeparator(), vT, vS, vM, vP, vC });
+        var vO = new ToolStripMenuItem("Objects at Markers (buildings, characters, pickups)") { Checked = _view.ShowObjects, CheckOnClick = true,
+            ToolTipText = "Models the game places with markers, like L.O.G.'s palace, Jiggy bank, characters and notes. Off: markers are small boxes (faster)." };
+        vO.CheckedChanged += (_, _) => { _view.ShowObjects = vO.Checked; _view.Refresh3D(); };
+        view.DropDownItems.AddRange(new ToolStripItem[] { vMode, new ToolStripSeparator(), vT, vS, vO, vM, vP, vC });
 
         var build = new ToolStripMenuItem("&Build");
         build.DropDownItems.Add("&Validate Workspace", null, async (_, _) => await ValidateWorkspace());
@@ -446,7 +470,7 @@ public sealed class MainForm : Form
         };
         var help = new ToolStripMenuItem("&Help");
         help.DropDownItems.Add("Controls", null, (_, _) => MessageBox.Show(this,
-            "3D view:\n  Right-drag: look    WASD / Q E or the arrow keys: fly (Shift = fast; with a selection S scales: fly back with Down, or while right-dragging)\n  Wheel: dolly    Middle-drag: pan    Left-click: select    F: focus selection    Esc: deselect\n  View modes: the bar in the top-right corner (Wire, Solid, Texture, Render) or Shift+Z. Render uses the level's light setup (click the light line to switch).\n\nTransforms (Blender style), with an object selected:\n  G move on the camera plane, R rotate, S scale; then X / Y / Z constrain to that world axis (drawn as a line in the axis colour;\n  press again for the object's own axis, again for free). Type a value (e.g. G Z 5 Enter); Ctrl snaps.\n  Left click / Enter confirms (one undo step), right click / Esc cancels.\n  1 / 2 / 3: move / rotate / scale gizmo; drag the selection with the left button (ground plane), or drag an axis handle\n  (or hold X, Y or Z) to constrain to that axis.\n  Right-click an object for its context menu.\n\nEdits are held in memory until World > Save (Ctrl+S) writes the bundle into the workspace.", "Controls"));
+            "3D view:\n  Right-drag: look    WASD / Q E or the arrow keys: fly (Shift = fast; with a selection S scales it, except while you fly: right button held or W A D Q E just used; File > Settings)\n  Wheel: dolly    Middle-drag: pan    Left-click: select    F: focus selection    Esc: deselect\n  View modes: the bar in the top-right corner (Wire, Solid, Texture, Render) or Shift+Z. Render uses the level's light setup (click the light line to switch).\n\nTransforms (Blender style), with an object selected:\n  G move on the camera plane, R rotate, S scale; then X / Y / Z constrain to that world axis (drawn as a line in the axis colour;\n  press again for the object's own axis, again for free). Type a value (e.g. G Z 5 Enter); Ctrl snaps.\n  Left click / Enter confirms (one undo step), right click / Esc cancels.\n  1 / 2 / 3: move / rotate / scale gizmo; drag the selection with the left button (ground plane), or drag an axis handle\n  (or hold X, Y or Z) to constrain to that axis.\n  Right-click an object for its context menu.\n\nEdits are held in memory until World > Save (Ctrl+S) writes the bundle into the workspace.\nCtrl+Z / Ctrl+Y undo and redo any change, including imports, duplicates, deletes and saved tag or atmosphere edits (File > Settings: number of steps).", "Controls"));
         help.DropDownItems.Add("Take the Tour (for beginners)", null, (_, _) => StartTour());
         help.DropDownItems.Add("File Format Notes (docs)", null, (_, _) => OpenDocs());
         ms.Items.AddRange(new ToolStripItem[] { file, edit, world, view, build, tools, mods, help });
@@ -485,7 +509,7 @@ public sealed class MainForm : Form
         imp.Enabled = o.Kind == SceneObjectKind.Scenery;
         imp.ToolTipText = "Replaces this object's reference model (all its instances) with an OBJ/FBX, including its materials: each material's texture is imported into this world.";
         var texl = _objMenu.Items.Add("Textures… (view / export / replace)", null, (_, _) => OpenTextureLibrary(o));
-        texl.Enabled = o.Model != null;
+        texl.Enabled = o.Model != null && o.Kind != SceneObjectKind.Marker;   // objects placed by markers: their model may live in another bundle (World > Texture Library lists every texture)
         texl.ToolTipText = "Texture library of this model: every texture it uses, export as PNG, open in another viewer, edit and apply back, replace (everywhere or for this model only).";
         var col = _objMenu.Items.Add("Import Collision (OBJ/FBX)…", null, async (_, _) => await ImportCollision(o));
         string? colAsset = o.Kind == SceneObjectKind.Scenery ? CollisionAssetOf(o) : null;
@@ -502,6 +526,67 @@ public sealed class MainForm : Form
     }
 
     // ------------------------------------------------------------------ workspace
+
+    /// <summary>File > Open Recent: the workspaces opened last, newest first (missing folders are greyed out).</summary>
+    void FillRecent(ToolStripMenuItem menu)
+    {
+        menu.DropDownItems.Clear();
+        var list = RecentWorkspaces();
+        if (list.Count == 0) { menu.DropDownItems.Add(new ToolStripMenuItem("(no workspaces opened yet)") { Enabled = false }); return; }
+        int k = 0;
+        foreach (var root in list)
+        {
+            bool ok = File.Exists(Path.Combine(root, "workspace.json"));
+            string name = Path.GetFileName(Path.TrimEndingDirectorySeparator(root));
+            bool current = _ws != null && string.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(_ws.Root)), root, StringComparison.OrdinalIgnoreCase);
+            var item = new ToolStripMenuItem((++k <= 9 ? $"&{k}  " : "    ") + MenuText(name) + (ok ? "" : "  (missing)"))
+            {
+                ToolTipText = root, Enabled = ok, Checked = current,
+                ShortcutKeyDisplayString = root.Length > 60 ? "…" + root[^57..] : root,
+            };
+            item.Click += async (_, _) => await OpenWorkspace(root);
+            menu.DropDownItems.Add(item);
+        }
+        menu.DropDownItems.Add(new ToolStripSeparator());
+        menu.DropDownItems.Add("Remove Missing Folders", null, (_, _) => { _settings.RecentWorkspaces.RemoveAll(r => !File.Exists(Path.Combine(r, "workspace.json"))); _settings.Save(); });
+        menu.DropDownItems.Add("Clear List", null, (_, _) =>
+        {
+            if (MessageBox.Show(this, "Clear the list of recent workspaces? The workspaces themselves are not touched.", Text, MessageBoxButtons.OKCancel) != DialogResult.OK) return;
+            _settings.RecentWorkspaces.Clear(); _settings.RecentSeeded = true; _settings.Save();
+        });
+    }
+
+    /// <summary>The recent list; the first time, it starts from the workspaces NB Studio and NB Multiplayer opened before.</summary>
+    List<string> RecentWorkspaces()
+    {
+        if (!_settings.RecentSeeded)
+        {
+            _settings.RecentSeeded = true;
+            try
+            {
+                foreach (var e in ProjectRegistry.Load().OrderBy(e => e.LastOpened))
+                    if (File.Exists(Path.Combine(e.Path, "workspace.json"))) _settings.AddRecent(e.Path);
+            }
+            catch (Exception) { }
+            if (_settings.LastWorkspace != null && File.Exists(Path.Combine(_settings.LastWorkspace, "workspace.json"))) _settings.AddRecent(_settings.LastWorkspace);
+            if (_ws != null) _settings.AddRecent(_ws.Root);
+            _settings.Save();
+        }
+        return _settings.RecentWorkspaces.ToList();
+    }
+
+    /// <summary>File > Settings.</summary>
+    void ShowSettings()
+    {
+        using var d = new Panels.SettingsDialog(_settings, _history.Count);
+        if (d.ShowDialog(this) != DialogResult.OK) return;
+        _settings.Save();
+        _history.Limit = _settings.UndoSteps; _history.ApplyLimit();
+        _view.SScales = _settings.SScales;
+        _start.SetAutoOpen(_settings.AutoOpenLast);
+        Log($"Settings saved: {_settings.UndoSteps} undo steps, S key {(_settings.SScales ? "scales the selection" : "flies backwards")}, " +
+            $"{(_settings.AutoOpenLast ? "opens the last workspace at start" : "starts on the start page")}.");
+    }
 
     async Task NewWorkspace()
     {
@@ -528,7 +613,8 @@ public sealed class MainForm : Form
         {
             _start.SetStatus($"Opening {Path.GetFileName(root.TrimEnd('\\', '/'))}…"); Application.DoEvents();
             _ws = Workspace.Open(root);
-            _settings.LastWorkspace = root; _settings.Save();
+            _history.Attach(_ws);
+            _settings.LastWorkspace = root; _settings.AddRecent(root); _settings.Save();
             ProjectRegistry.Touch(root);   // shared with NB Multiplayer's Projects page
             Log($"Workspace: {_ws.Root}\n  original (read-only): {_ws.Original.Root}\n  changes logged: {_ws.Manifest.Changes.Count}");
             await LoadIndex(false);
@@ -1131,15 +1217,20 @@ public sealed class MainForm : Form
     async Task OpenWorld(WorldEntry w, ActEntry? act = null)
     {
         if (_ws == null) return;
-        if (_scene != null && _scene.Objects.Any(o => o.Dirty) &&
+        // the same world again (after a duplicate, a delete, an import, an undo ...): keep the camera, the selection, the
+        // undo history and any unsaved transform edits
+        bool reload = _scene != null && _sceneEntry == w && _sceneAct == act;
+        if (!reload && _scene != null && _scene.Objects.Any(o => o.Dirty) &&
             MessageBox.Show(this, "Discard unsaved edits in the current world?", Text, MessageBoxButtons.YesNo) != DialogResult.Yes) return;
+        var carry = reload ? _scene!.Objects.Where(o => o.Dirty).Select(o => (Key: UndoHistory.KeyOf(o), o.Transform, Link: o.Marker?.Link)).ToList() : null;
+        string? selKey = reload && _view.Selected != null ? UndoHistory.KeyOf(_view.Selected) : null;
         _busy = true; SetProgress($"Loading {w.Display}…", 0);
         try
         {
             var ws = _ws;
             var index = _index;
             var scene = await Task.Run(() => new WorldScene(ws, w.Bundle, w.BackgroundModel, new Progress<(string S, double P)>(p => BeginInvoke(() => SetProgress(p.S, p.P))),
-                act != null ? new[] { act.ActBundle } : null));
+                act != null ? new[] { act.ActBundle } : null, index));
             // textures: resolve every diffuse texture up front across the whole workspace (world bundle, shared/common
             // bundles, stream archives) and report what could not be found
             scene.Textures = new NB.Core.Textures.TextureResolver(ws, index, scene.Caff, w.Bundle);
@@ -1152,11 +1243,21 @@ public sealed class MainForm : Form
                     if (i % 8 == 0) { int k = i; BeginInvoke(() => SetProgress($"Loading textures {k}/{texNames.Count}…", k / (double)Math.Max(1, texNames.Count))); }
                 }
             });
-            _scene = scene; _sceneEntry = w; _sceneAct = act; _undo.Clear(); _redo.Clear();
+            _scene = scene; _sceneEntry = w; _sceneAct = act;
+            if (reload)
+            {
+                var byKey = new Dictionary<string, SceneObject>();
+                foreach (var o in scene.Objects) byKey.TryAdd(UndoHistory.KeyOf(o), o);
+                foreach (var c in carry!)
+                    if (byKey.TryGetValue(c.Key, out var o)) { o.Transform = c.Transform; if (c.Link is { } l && o.Marker != null) o.Marker.Link = l; }
+                _history.Rebind(scene);
+            }
+            else _history.DropSceneSteps();
             if (_ws != null) { _settings.LastWorlds[_ws.Root] = WorldKey(w, act); _settings.Save(); }
             try { _atmos.SetWorld(w.Bundle, w.Display); } catch (Exception e) { Log("Atmosphere: " + e.Message); }
-            _view.SetScene(scene);
+            _view.SetScene(scene, keepCamera: reload);
             FillTree();
+            if (selKey != null && scene.Objects.FirstOrDefault(o => UndoHistory.KeyOf(o) == selKey) is { } sel) _view.Select(sel);
             Log($"Opened {(act?.Display ?? w.Display)} (world bundle {w.Bundle:x6}{(act != null ? $", act bundle {act.ActBundle:x6} markers" : "")}): {scene.Objects.Count} objects, {scene.Models.Count} reference models.");
             {
                 var src = scene.Textures.Sources.Values.Select(v => v.StartsWith("world") ? "world bundle" : v.StartsWith("resident") ? "other resident bundles" : v.StartsWith("streamed") ? "stream archives" : "missing").GroupBy(x => x).ToDictionary(g => g.Key, g => g.Count());
@@ -1164,6 +1265,7 @@ public sealed class MainForm : Form
                 var missing = scene.Textures.Missing.ToList();
                 if (missing.Count > 0) Log($"  Missing textures ({missing.Count}, drawn untextured): " + string.Join(", ", missing.Take(12)) + (missing.Count > 12 ? " …" : ""));
             }
+            Log("  Contents: " + scene.Audit.Summary());
             foreach (var l in scene.Log.Take(30)) Log("  " + l);
             if (scene.Log.Count > 30) Log($"  … {scene.Log.Count - 30} more notes");
             _center.SelectedIndex = 0;
@@ -1209,7 +1311,7 @@ public sealed class MainForm : Form
     {
         _transform.SetObject(o);
         _tags.ShowObject(_scene, o);
-        _status.Text = o == null ? "" : $"{o.Name} — {AssetIds.DisplayName(o.ModelName)}  pos ({o.Transform.M41:F2}, {o.Transform.M42:F2}, {o.Transform.M43:F2})";
+        _status.Text = o == null ? "" : $"{o.Name} — {AssetIds.DisplayName(o.ModelName)}{(o.ModelSource == "" || o.Model == null ? "" : o.Model.View == null ? $" ({o.ModelSource})" : $" (model {AssetIds.DisplayName(o.Model.View.Name).Replace("aid_model_banjox_", "")} from {o.ModelSource})")}  pos ({o.Transform.M41:F2}, {o.Transform.M42:F2}, {o.Transform.M43:F2})";
         if (o != null)
         {
             _syncingTree = true;
@@ -1231,26 +1333,57 @@ public sealed class MainForm : Form
     void PushUndo(SceneObject o, Matrix4x4 before, Matrix4x4 after)
     {
         if (before == after) return;
-        _undo.Push((o, before, after)); _redo.Clear();
+        _history.PushTransform(o, before, after);
         UpdateTitle();
-        var node = FindNode(_tree.Nodes, o); if (node != null) node.Text = o.Name + (o.Dirty ? " *" : "");
+        RefreshNode(o);
     }
 
-    void Undo()
+    /// <summary>A text box with the keyboard focus gets Ctrl+Z / Ctrl+Y for its own text.</summary>
+    TextBoxBase? FocusedTextBox()
     {
+        Control? c = ActiveControl;
+        while (c is ContainerControl cc && cc.ActiveControl != null) c = cc.ActiveControl;
+        return c as TextBoxBase;
+    }
+
+    bool _undoing;
+
+    async Task Undo() => await UndoRedo(undo: true);
+    async Task Redo() => await UndoRedo(undo: false);
+
+    async Task UndoRedo(bool undo)
+    {
+        if (FocusedTextBox() is { } tb) { if (undo) tb.Undo(); return; }
         _view.CancelTransform();   // a G / R / S transform in progress is cancelled, not undone
-        if (_undo.Count == 0) return;
-        var u = _undo.Pop(); u.Obj.Transform = u.Before; _redo.Push(u);
-        _view.Select(u.Obj); _view.Refresh3D(); UpdateTitle();
+        if (_busy || _undoing) return;
+        _undoing = true;
+        try
+        {
+            UndoStep? s;
+            try { s = undo ? _history.Undo() : _history.Redo(); }
+            catch (Exception e) { Error(undo ? "Undo failed" : "Redo failed", e); return; }
+            if (s == null) { Log(undo ? "Nothing to undo." : "Nothing to redo."); return; }
+            Log((undo ? "Undo: " : "Redo: ") + s.Label);
+            switch (s)
+            {
+                case TransformStep t when t.Obj != null:
+                    _view.Select(t.Obj); RefreshNode(t.Obj); break;
+                case LinkStep l when l.Obj != null:
+                    _view.Select(l.Obj); RefreshNode(l.Obj); break;
+                case FileStep:
+                    // game files went back: reload the world that shows them
+                    if (_sceneEntry != null) await OpenWorld(_sceneEntry, _sceneAct);
+                    break;
+            }
+            _view.Refresh3D(); UpdateTitle();
+        }
+        finally { _undoing = false; }
     }
 
-    void Redo()
-    {
-        _view.CancelTransform();
-        if (_redo.Count == 0) return;
-        var u = _redo.Pop(); u.Obj.Transform = u.After; _undo.Push(u);
-        _view.Select(u.Obj); _view.Refresh3D(); UpdateTitle();
-    }
+    /// <summary>A label for a menu item: "&" shown as itself, long names shortened.</summary>
+    static string MenuText(string s) => (s.Length > 60 ? s[..57] + "..." : s).Replace("&", "&&");
+
+    void RefreshNode(SceneObject o) { var node = FindNode(_tree.Nodes, o); if (node != null) node.Text = o.Name + (o.Dirty ? " *" : ""); }
 
     void ResetTransform(SceneObject o)
     {
@@ -1267,7 +1400,8 @@ public sealed class MainForm : Form
         if (_scene == null || _ws == null) return;
         try
         {
-            int n = _scene.Save();
+            int n;
+            using (_history.Suppress()) n = _scene.Save();
             Log(n == 0 ? "No world changes to save." : $"Saved {n} changed object(s) → {Path.GetRelativePath(_ws.Root, _ws.Game.ResidentPath(_scene.Bundle))} (uncompressed CAFF, checksum recomputed).");
             FillTree(); UpdateTitle();
         }
@@ -1587,7 +1721,8 @@ public sealed class MainForm : Form
                         var o = _view.Selected!; var before = o.Transform; var t = before.Translation; var m = before; m.Translation = Vector3.Zero; m = Matrix4x4.CreateScale(f) * m; m.Translation = t; o.Transform = m;
                         PushUndo(o, before, o.Transform); L($"script: scaled {o.Name} x{f}"); break;
                     }
-                    case "--undo": Undo(); L("script: undo"); break;
+                    case "--undo": await Undo(); L("script: undo"); break;
+                    case "--redo": await Redo(); L("script: redo"); break;
                     case "--path-link":
                     {
                         var m = _view.Selected?.Marker ?? throw new InvalidOperationException("--path-link: select a path node first");
@@ -1622,6 +1757,62 @@ public sealed class MainForm : Form
                         int n = NB.Core.Mods.DataMods.Set(_ws!, _index!, ds, v);
                         L($"script: data {id} = {v} ({n} bundle(s)); read back {NB.Core.Mods.DataMods.Get(_ws!, _index!, ds)}"); break;
                     }
+                    case "--tour": StartTour(); await Task.Delay(400); L("script: tour started"); break;
+                    case "--tour-step": { int n = int.Parse(Next()); _tour?.GoTo(n); await Task.Delay(400); L($"script: tour step {n}"); break; }
+                    case "--tour-end": _tour?.Dispose(); _tour = null; break;
+                    case "--menu-open":
+                    {
+                        // opens a menu path such as "File/Open Recent" (stays open for --screen)
+                        ToolStripItemCollection items = MainMenuStrip!.Items;
+                        foreach (var part in Next().Split('/'))
+                        {
+                            var mi = items.OfType<ToolStripMenuItem>().First(x => x.Text.Replace("&", "").StartsWith(part));
+                            mi.ShowDropDown(); Application.DoEvents(); await Task.Delay(300); Application.DoEvents();
+                            foreach (ToolStripItem it in mi.DropDownItems) L($"menu {part}: " + it.Text + (it.Enabled ? "" : " (disabled)") + (it is ToolStripMenuItem t && t.Checked ? "  [x]" : ""));
+                            items = mi.DropDownItems;
+                        }
+                        break;
+                    }
+                    case "--menu-path-shot":
+                    {
+                        // a menu path ("File/Open Recent") drawn dropdown by dropdown, side by side
+                        ToolStripItemCollection items = MainMenuStrip!.Items;
+                        var shots = new List<Bitmap>();
+                        foreach (var part in Next().Split('/'))
+                        {
+                            var mi = items.OfType<ToolStripMenuItem>().First(x => x.Text.Replace("&", "").StartsWith(part));
+                            mi.ShowDropDown(); Application.DoEvents(); await Task.Delay(300); Application.DoEvents();
+                            var dd = mi.DropDown; var b = new Bitmap(dd.Width, dd.Height); dd.DrawToBitmap(b, new Rectangle(0, 0, dd.Width, dd.Height)); shots.Add(b);
+                            foreach (ToolStripItem it in mi.DropDownItems) L($"menu {part}: " + it.Text + (it.Enabled ? "" : " (disabled)") + (it is ToolStripMenuItem t && t.Checked ? "  [x]" : ""));
+                            items = mi.DropDownItems;
+                        }
+                        using (var all = new Bitmap(shots.Sum(b => b.Width) + 8 * shots.Count, shots.Max(b => b.Height)))
+                        {
+                            using (var g = Graphics.FromImage(all)) { g.Clear(Color.White); int x = 0; foreach (var b in shots) { g.DrawImage(b, x, 0); x += b.Width + 8; } }
+                            all.Save(Next());
+                        }
+                        foreach (var b in shots) b.Dispose();
+                        foreach (ToolStripMenuItem mi in MainMenuStrip!.Items) mi.HideDropDown();
+                        break;
+                    }
+                    case "--menu-close": foreach (ToolStripMenuItem mi in MainMenuStrip!.Items) mi.HideDropDown(); break;
+                    case "--settings-shot":
+                    {
+                        using var d = new Panels.SettingsDialog(_settings, _history.Count);
+                        d.StartPosition = FormStartPosition.Manual; d.Location = new Point(Left + 100, Top + 100);
+                        d.Show(this); Application.DoEvents(); await Task.Delay(500); Application.DoEvents();
+                        using var bmp = new Bitmap(d.Width, d.Height); d.DrawToBitmap(bmp, new Rectangle(0, 0, d.Width, d.Height));
+                        bmp.Save(Next()); d.Close(); L("script: settings dialog captured"); break;
+                    }
+                    case "--settings":
+                    {
+                        // --settings key=value (UndoSteps, SScales)
+                        var kv = Next().Split('=');
+                        if (kv[0] == "UndoSteps") { _settings.UndoSteps = int.Parse(kv[1]); _history.Limit = _settings.UndoSteps; _history.ApplyLimit(); }
+                        else if (kv[0] == "SScales") { _settings.SScales = bool.Parse(kv[1]); _view.SScales = _settings.SScales; }
+                        L($"script: setting {kv[0]} = {kv[1]}; undo history {_history.Count} step(s)"); break;
+                    }
+                    case "--history": L($"script: history {_history.Count} step(s); undo: {_history.UndoLabel ?? "-"}; redo: {_history.RedoLabel ?? "-"}"); break;
                     case "--menu-shot":
                     {
                         var name = Next(); var file = Next();

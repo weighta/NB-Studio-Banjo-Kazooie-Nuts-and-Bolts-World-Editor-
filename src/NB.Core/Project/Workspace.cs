@@ -201,10 +201,20 @@ public sealed class Workspace
         Log(Path.GetRelativePath(Game.Root, path), description);
     }
 
+    /// <summary>Raised just before a working-copy file is overwritten (full path), from the writing thread: an editor's
+    /// undo history copies the old version here.</summary>
+    public event Action<string>? BeforeWrite;
+    /// <summary>Raised after a change was logged (relative file, description).</summary>
+    public event Action<string, string>? Changed;
+
+    /// <summary>Drops every cached resident bundle (after files were restored behind the cache's back).</summary>
+    public void ForgetCaches() => _residentCache.Clear();
+
     public void Log(string file, string description)
     {
         Manifest.Changes.Add(new ChangeEntry { Time = DateTime.Now, File = file, Description = description });
         SaveManifest();
+        Changed?.Invoke(file, description);
     }
 
     /// <summary>Files whose content differs from the original (size or SHA-1).</summary>
@@ -239,6 +249,7 @@ public sealed class Workspace
     /// <summary>Keeps the current version of a working-copy file before it is overwritten (last <see cref="HistoryKeep"/> per file).</summary>
     public void Snapshot(string path)
     {
+        BeforeWrite?.Invoke(path);
         if (_folder) { _beforeWrite?.Invoke(path); return; }
         if (!File.Exists(path)) return;
         var rel = Path.GetRelativePath(Game.Root, path);
@@ -262,6 +273,7 @@ public sealed class Workspace
         if (h.Count == 0) throw new InvalidOperationException("no saved history for " + relative);
         var dst = Path.Combine(Game.Root, relative);
         var bytes = File.ReadAllBytes(h[0]);
+        BeforeWrite?.Invoke(dst);
         File.Delete(h[0]);
         File.WriteAllBytes(dst, bytes);
         _residentCache.Clear();

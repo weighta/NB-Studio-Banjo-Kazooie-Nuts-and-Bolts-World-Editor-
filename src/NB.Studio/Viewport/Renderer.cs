@@ -14,14 +14,36 @@ public sealed class SceneLighting
     public Vector3 SunDirection = Vector3.Normalize(new Vector3(-0.5f, 0.7f, -0.3f));
     public Vector3 Sun = Vector3.One, Ambient = new(0.35f);
     public float Intensity = 1.1f;
+    /// <summary>The game's ambient is a 2-term spherical harmonic per channel, read live from its pixel-shader constants
+    /// (c35/c37/c39 = (AmbientBase, AmbientUp, 0, 0) × the light setup's ambient colour, in six worlds):
+    /// ambient(N) = colour × (1.107 + 0.519 × N.y), i.e. 1.63× the colour facing up, 0.59× facing down.</summary>
+    public float AmbientBase = 1.107f, AmbientUp = 0.519f;
+    /// <summary>The second directional light of the game's shaders (c81 colour, c82 direction); off by default.</summary>
+    public Vector3 FillColour = Vector3.Zero, FillDirection = Vector3.UnitY;
     public bool Fog;
     public float FogStart = 100, FogEnd = 1000, FogMax = 0.3f;
     public Vector3 FogColour = new(0.8f, 0.82f, 0.9f);
+    /// <summary>Second fog band (near haze), see <see cref="NB.Core.World.LevelLighting.Fog2Max"/>.</summary>
+    public float Fog2Max, Fog2Start, Fog2End;
+
+    /// <summary>Light setup op 0x6C +0x10 (1 in most levels, 1.844 Jiggoseum, 2.33 Showdown Town night, 2.78 Terrarium of
+    /// Terror). The material shaders run with exposure c45 = 1 in every level (read live), so this value acts in the game's
+    /// post-processing; the viewer applies it as the tone-map exposure (closest match to the game frames: Jiggoseum and
+    /// Terrarium were 30 / 70 % too dark without it).</summary>
+    public float ExposureMax = 1;
+
+    /// <summary>Tone-map exposure (c45): 1 in every level (read live from the game).</summary>
+    public float AutoExposure => 1f;
+    /// <summary>Brightness scale after the tone map: sqrt(<see cref="ExposureMax"/>), fitted on 40 game frames of six worlds
+    /// (best of linear / sqrt / none; Jiggoseum and Terrarium of Terror then match within 2 %).</summary>
+    public float PostScale => MathF.Sqrt(Math.Clamp(ExposureMax, 1f, 4f));
 
     public static SceneLighting From(NB.Core.World.LevelLighting l) => new()
     {
         Name = l.Name, SunDirection = l.SunDirection, Sun = l.Sun, Ambient = l.Ambient, Intensity = l.Intensity,
         Fog = l.Fog && l.FogEnd > l.FogStart, FogStart = l.FogStart, FogEnd = l.FogEnd, FogMax = l.FogMax, FogColour = l.FogColour,
+        Fog2Max = l.Fog2Max, Fog2Start = l.Fog2Start, Fog2End = l.Fog2End,
+        FillColour = l.FillColour, FillDirection = l.FillColour.LengthSquared() > 0 ? l.FillDirection : Vector3.UnitY, ExposureMax = l.ExposureMax,
     };
 }
 
@@ -38,6 +60,8 @@ public sealed class Renderer : IDisposable
     readonly HashSet<int> _hasAlpha = new();
     /// <summary>Mean luminance of each texture (0..1): the lighter layer of a layered material takes its paint tint.</summary>
     readonly Dictionary<int, float> _lum = new();
+    /// <summary>Share of semi-transparent texels (alpha 0.1..0.9): glass rather than a cut-out.</summary>
+    readonly Dictionary<int, float> _midAlpha = new();
     public Func<string, (byte[] Rgba, int W, int H)?>? TextureSource;
     public ViewMode Mode = ViewMode.Textured;
     public SceneLighting Lighting = new();
@@ -74,6 +98,7 @@ public sealed class Renderer : IDisposable
         uniform vec4 uSel;      // selection / edited tint (rgb, amount)
         uniform vec3 uEye; uniform vec3 uSunDir; uniform vec3 uSunCol; uniform vec3 uAmb;
         uniform vec4 uFog; uniform vec3 uFogCol;     // start, end, max, enabled
+        uniform vec4 uFog2;                          // second band: start, end, max
         uniform vec3 uWire;
         vec3 perturb(vec3 n, vec3 p, vec2 uv, vec3 t) {
             // cotangent frame from screen-space derivatives (no stored tangents needed)
@@ -129,7 +154,7 @@ public sealed class Renderer : IDisposable
             float nl = max(dot(n, L), 0.0);
             float sh = shadowAt(max(dot(length(vN) > 0.0 ? normalize(vN) : n, L), 0.0));
             // hemisphere ambient: the level ambient, a little brighter from the sky
-            vec3 amb = uAmb * (0.85 + 0.3 * (n.y * 0.5 + 0.5));
+            vec3 amb = uAmb * (1.107 + 0.519 * n.y);   // the game's 2-term SH ambient (read live)
             rgb = col * (amb + uSunCol * nl * sh);
             vec3 specMask = (uHas & 8) != 0 ? texture(tSpec, vUV).rgb : vec3(1.0);
             if (uSpecPow > 0.0) {
@@ -150,7 +175,8 @@ public sealed class Renderer : IDisposable
             if (uFog.w > 0.5) {
               float d = length(uEye - vW);
               float f = clamp((d - uFog.x) / max(1.0, uFog.y - uFog.x), 0.0, 1.0) * uFog.z;
-              rgb = mix(rgb, uFogCol, f);
+              float f2 = clamp((d - uFog2.x) / max(1.0, uFog2.y - uFog2.x), 0.0, 1.0) * uFog2.z;
+              rgb = mix(rgb, uFogCol, 1.0 - (1.0 - f) * (1.0 - f2));
             }
           }
           o = vec4(mix(rgb, uSel.rgb, uSel.a), (uBlend == 2 || uBlend == 4) ? alpha : 1.0);
@@ -168,11 +194,13 @@ public sealed class Renderer : IDisposable
     public void Init()
     {
         _prog = Link(VS, FS);
-        foreach (var n in new[] { "uMvp", "uModel", "uMode", "uHas", "uBlend", "uOverTint", "uMatTint", "uOpacity", "uSpecCol", "uSpecPow", "uRefl", "uReflCol", "uSel", "uEye", "uSunDir", "uSunCol", "uAmb", "uFog", "uFogCol", "uWire", "uShadow", "uUseShadow" })
+        foreach (var n in new[] { "uMvp", "uModel", "uMode", "uHas", "uBlend", "uOverTint", "uMatTint", "uOpacity", "uSpecCol", "uSpecPow", "uRefl", "uReflCol", "uSel", "uEye", "uSunDir", "uSunCol", "uAmb", "uFog", "uFogCol", "uFog2", "uWire", "uShadow", "uUseShadow" })
             _u[n] = GL.GetUniformLocation(_prog, n);
         GL.UseProgram(_prog);
         for (int i = 0; i < Samplers.Length; i++) GL.Uniform1(GL.GetUniformLocation(_prog, Samplers[i]), i);
         GL.Uniform1(GL.GetUniformLocation(_prog, "tShadow"), 8);
+        _base = new XProg { Prog = _prog, Translated = false };
+        foreach (var kv in _u) _base.U[kv.Key] = kv.Value;
         _shProg = Link(SVS, SFS); _uShMvp = GL.GetUniformLocation(_shProg, "uMvp"); _uShCut = GL.GetUniformLocation(_shProg, "uCut");
         GL.UseProgram(_shProg); GL.Uniform1(GL.GetUniformLocation(_shProg, "tA"), 0);
         _lineProg = Link(LVS, LFS); _uLineMvp = GL.GetUniformLocation(_lineProg, "uMvp");
@@ -229,6 +257,11 @@ public sealed class Renderer : IDisposable
             GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.Repeat);
             if (_maxAniso > 1) GL.TexParameter(TextureTarget.Texture2D, (TextureParameterName)0x84FE, Math.Min(8f, _maxAniso));
             for (int i = 3; i < im.Rgba.Length; i += 4) if (im.Rgba[i] < 250) { _hasAlpha.Add(t); break; }
+            {
+                int mid = 0, n = 0, st = Math.Max(1, im.Rgba.Length / 4 / 8192);
+                for (int i = 3; i < im.Rgba.Length; i += 4 * st) { n++; if (im.Rgba[i] is > 25 and < 230) mid++; }
+                _midAlpha[t] = n == 0 ? 0 : mid / (float)n;
+            }
             long sum = 0; int step = Math.Max(1, im.Rgba.Length / 4 / 4096);
             int cnt = 0; for (int i = 0; i + 2 < im.Rgba.Length; i += 4 * step) { sum += im.Rgba[i] * 3 + im.Rgba[i + 1] * 6 + im.Rgba[i + 2]; cnt++; }
             _lum[t] = cnt == 0 ? 0.5f : sum / (cnt * 2550f);
@@ -242,26 +275,15 @@ public sealed class Renderer : IDisposable
 
     Matrix4x4 _viewProj; Vector3 _eye;
 
-    public void Begin(Matrix4x4 viewProj, Vector3 eye)
+    public void Begin(Matrix4x4 viewProj, Vector3 eye, Vector3 camRight = default, Vector3 camUp = default)
     {
         ObjectsDrawn = DrawsIssued = 0;
-        _viewProj = viewProj; _eye = eye;
+        _viewProj = viewProj; _eye = eye; _camRight = camRight; _camUp = camUp;
         Array.Fill(_bound, -1);   // other code may have bound textures since the last frame
-        _queue.Clear(); _multiply.Clear();
-        GL.UseProgram(_prog);
-        GL.Uniform1(_u["uMode"], (int)Mode);
-        GL.Uniform3(_u["uEye"], eye.X, eye.Y, eye.Z);
-        var l = Lighting;
-        var sun = l.Sun * l.Intensity;
-        GL.Uniform3(_u["uSunDir"], l.SunDirection.X, l.SunDirection.Y, l.SunDirection.Z);
-        GL.Uniform3(_u["uSunCol"], sun.X, sun.Y, sun.Z);
-        GL.Uniform3(_u["uAmb"], l.Ambient.X, l.Ambient.Y, l.Ambient.Z);
-        GL.Uniform4(_u["uFog"], l.FogStart, l.FogEnd, l.FogMax, l.Fog ? 1f : 0f);
-        GL.Uniform3(_u["uFogCol"], l.FogColour.X, l.FogColour.Y, l.FogColour.Z);
-        GL.Uniform3(_u["uWire"], 0.78f, 0.80f, 0.84f);
+        _queue.Clear(); _multiply.Clear(); _opaque.Clear();
+        _frame++; _cur = null;
+        Use(_base);
         bool useSh = Mode == ViewMode.Rendered && _shadowValid && Shadows;
-        GL.Uniform1(_u["uUseShadow"], useSh ? 1 : 0);
-        UniformMat(_u["uShadow"], _shadowVP);
         GL.ActiveTexture(TextureUnit.Texture8); GL.BindTexture(TextureTarget.Texture2D, useSh ? _shTex : 0); GL.ActiveTexture(TextureUnit.Texture0);
         GL.Enable(EnableCap.DepthTest); GL.DepthMask(true); GL.DepthFunc(DepthFunction.Lequal);
         GL.Disable(EnableCap.CullFace);
@@ -281,6 +303,8 @@ public sealed class Renderer : IDisposable
         public Vector3 Center; public float Radius;
         public bool Resolved; public int Has;
         public readonly int[] Tex = new int[8];
+        /// <summary>Translated shader: program, textures per sampler, constants (vec4s flattened).</summary>
+        public XProg? XProg; public readonly int[] STex = new int[8]; public float[] ConstArray = Array.Empty<float>();
     }
     readonly Dictionary<ModelAsset, Batch[]> _batches = new();
     /// <summary>Materials for generated geometry (water surfaces) instead of reading the draw's stream state.</summary>
@@ -358,6 +382,21 @@ public sealed class Renderer : IDisposable
         if (m.MaskUv2) h |= 4096;
         if (m.AlphaUv2) h |= 8192;
         b.Has = h; b.Resolved = true;
+        // an alpha-tested section that also blends (render states SRC_ALPHA / ONE_MINUS_SRC_ALPHA) with a translucent texture
+        // is glass (Terrarium of Terror's dome), not a cut-out: draw it blended
+        if (m.Blend == BlendKind.Cutout && m.CutoutBlends && m.Shader != null && m.SamplerTextures.TryGetValue(0, out var t0n) && _midAlpha.GetValueOrDefault(Texture(t0n)) > 0.3f)
+            m.Blend = BlendKind.Blend;
+        if (m.Shader is { } tr && m.Blend != BlendKind.Multiply)
+        {
+            b.XProg = Translated(tr);
+            if (b.XProg != null)
+            {
+                foreach (var (k, name) in m.SamplerTextures) if (k is >= 0 and < 8) b.STex[k] = Texture(name);
+                var cv = tr.ConstValues.ToList();
+                if (tr.NormalRows is { } nrw) { cv.Add(nrw.X); cv.Add(nrw.Y); }
+                b.ConstArray = cv.SelectMany(v => new[] { v.X, v.Y, v.Z, v.W }).ToArray();
+            }
+        }
     }
 
     /// <summary>View frustum planes (a·p + d ≥ 0 inside) and camera position for culling in <see cref="DrawModel"/>.</summary>
@@ -400,35 +439,62 @@ public sealed class Renderer : IDisposable
             Vector3 wc = Vector3.Transform(b.Center, world);
             if (frustum is { } f && !f.Visible(wc, b.Radius * scale)) continue;
             if (!any) { any = true; ObjectsDrawn++; }
+            if (!flat && !b.Resolved) Resolve(b);
             if (!flat && !unlit && b.Mat.Blend is BlendKind.Blend or BlendKind.Multiply or BlendKind.Additive)
             {
                 (b.Mat.Blend == BlendKind.Multiply ? _multiply : _queue).Add((b, world, tint, Vector3.DistanceSquared(wc, _eye)));
                 continue;
             }
+            if (!flat && !unlit && b.XProg != null)
+            {
+                // translated materials are drawn together per program (FlushOpaque): far fewer program / texture switches
+                _opaque.Add((b, world, tint, 0));
+                continue;
+            }
             if (!setMat) { setMat = true; SetObject(world, tint); }
             if (unlit)
             {
-                GL.Uniform1(_u["uMode"], 4);
                 if (b.Mat.Blend == BlendKind.Blend) { GL.Enable(EnableCap.Blend); GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha); }
                 if (b.Mat.Blend == BlendKind.Multiply) continue;
             }
-            DrawBatch(b, flat);
-            if (unlit) { GL.Uniform1(_u["uMode"], (int)Mode); GL.Disable(EnableCap.Blend); }
+            DrawBatch(b, flat, unlit ? 4 : -1);
+            if (unlit) GL.Disable(EnableCap.Blend);
         }
         GL.BindVertexArray(0);
     }
 
     void SetObject(Matrix4x4 world, Vector4 tint)
     {
-        UniformMat(_u["uMvp"], world * _viewProj); UniformMat(_u["uModel"], world);
-        GL.Uniform4(_u["uSel"], tint.X, tint.Y, tint.Z, tint.W);
+        _objWorld = world; _objTint = tint; _objVersion++;
+        if (_cur != null) ApplyObject(_cur);
     }
 
-    void DrawBatch(Batch b, bool flat)
+    void DrawBatch(Batch b, bool flat, int modeOverride = -1)
     {
+        if (!flat && !b.Resolved) Resolve(b);
+        var prog = !flat && b.XProg != null ? b.XProg : _base;
+        Use(prog);
+        int mode = modeOverride < 0 ? (int)Mode : modeOverride;
+        if (prog.ModeSet != mode) { prog.ModeSet = mode; GL.Uniform1(prog.Loc("uMode"), mode); }
+        if (prog.Translated)
+        {
+            var m = b.Mat; var tr = m.Shader!;
+            for (int i = 0; i < 8; i++)
+                if (_bound[i] != b.STex[i]) { GL.ActiveTexture(TextureUnit.Texture0 + i); GL.BindTexture(TextureTarget.Texture2D, b.STex[i]); _bound[i] = b.STex[i]; }
+            if (prog.LastBatch != b)
+            {
+                prog.LastBatch = b;
+                GL.Uniform1(prog.Loc("uBlend"), (int)m.Blend);
+                GL.Uniform1(prog.Loc("uSpecPow"), tr.SpecPower);
+                if (b.ConstArray.Length > 0) GL.Uniform4(prog.Loc("uC[0]"), b.ConstArray.Length / 4, b.ConstArray);
+            }
+            GL.BindVertexArray(b.Vao);
+            GL.DrawElements(PrimitiveType.Triangles, b.Count, DrawElementsType.UnsignedInt, 0);
+            DrawsIssued++;
+            return;
+        }
         if (!flat)
         {
-            if (!b.Resolved) Resolve(b);
             for (int i = 0; i < 8; i++)
                 if (_bound[i] != b.Tex[i]) { GL.ActiveTexture(TextureUnit.Texture0 + i); GL.BindTexture(TextureTarget.Texture2D, b.Tex[i]); _bound[i] = b.Tex[i]; }
             var m = b.Mat;
@@ -481,7 +547,10 @@ public sealed class Renderer : IDisposable
         GL.Clear(ClearBufferMask.DepthBufferBit);
         GL.PolygonMode(MaterialFace.FrontAndBack, PolygonMode.Fill);
         GL.Enable(EnableCap.PolygonOffsetFill); GL.PolygonOffset(1.5f, 3f);
-        GL.UseProgram(_shProg);
+        // one-sided surfaces seen from behind by the sun do not cast (the game culls back faces in its shadow pass:
+        // Banjoland's single-sided ceiling over the plaza leaves the floor sunlit)
+        if (ShadowCull != 0) { GL.Enable(EnableCap.CullFace); GL.FrontFace(ShadowCull > 0 ? FrontFaceDirection.Cw : FrontFaceDirection.Ccw); GL.CullFace(CullFaceMode.Back); }
+        GL.UseProgram(_shProg); _cur = null;
         _shadowVP = lightViewProj;
         Array.Fill(_bound, -1);
     }
@@ -513,9 +582,13 @@ public sealed class Renderer : IDisposable
         GL.BindVertexArray(0);
     }
 
+    /// <summary>Back-face culling in the shadow pass: -1 = counter-clockwise front faces (the game data; verified on Banjoland's plaza, which the sun lights through the open-backed roof), 1 = clockwise, 0 = off.</summary>
+    public int ShadowCull = -1;
+
     public void EndShadow(int viewW, int viewH)
     {
         GL.Disable(EnableCap.PolygonOffsetFill);
+        GL.Disable(EnableCap.CullFace); GL.FrontFace(FrontFaceDirection.Ccw);
         GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
         GL.Viewport(0, 0, viewW, viewH);
         _shadowValid = true;
@@ -525,10 +598,29 @@ public sealed class Renderer : IDisposable
 
     /// <summary>Draws the queued contact-occlusion overlays (multiplied onto the frame) and the blended batches,
     /// farthest first, without depth writes.</summary>
+    readonly List<(Batch B, Matrix4x4 World, Vector4 Tint, float Dist)> _opaque = new();
+
+    /// <summary>Draws the opaque / cut-out batches of translated materials queued by <see cref="DrawModel"/>, grouped by
+    /// program and textures.</summary>
+    public void FlushOpaque()
+    {
+        if (_opaque.Count == 0) return;
+        GL.Disable(EnableCap.Blend); GL.DepthMask(true);
+        Matrix4x4 lastW = new(); Vector4 lastT = new(-1); bool first = true;
+        foreach (var (b, w, t, _) in _opaque.OrderBy(x => x.B.XProg!.Prog).ThenBy(x => x.B.STex[0]).ThenBy(x => x.B.STex[1]))
+        {
+            if (first || w != lastW || t != lastT) { SetObject(w, t); lastW = w; lastT = t; first = false; }
+            DrawBatch(b, false);
+        }
+        GL.BindVertexArray(0);
+        _opaque.Clear();
+    }
+
     public void FlushTransparent()
     {
+        FlushOpaque();
         if (_queue.Count == 0 && _multiply.Count == 0) return;
-        GL.UseProgram(_prog);
+        Use(_base);
         GL.Enable(EnableCap.Blend);
         GL.DepthMask(false);
         GL.Enable(EnableCap.PolygonOffsetFill); GL.PolygonOffset(-1f, -2f);
@@ -559,7 +651,7 @@ public sealed class Renderer : IDisposable
             buf[i * 12] = a.X; buf[i * 12 + 1] = a.Y; buf[i * 12 + 2] = a.Z; buf[i * 12 + 3] = c.X; buf[i * 12 + 4] = c.Y; buf[i * 12 + 5] = c.Z;
             buf[i * 12 + 6] = b.X; buf[i * 12 + 7] = b.Y; buf[i * 12 + 8] = b.Z; buf[i * 12 + 9] = c.X; buf[i * 12 + 10] = c.Y; buf[i * 12 + 11] = c.Z;
         }
-        GL.UseProgram(_lineProg);
+        GL.UseProgram(_lineProg); _cur = null;
         UniformMat(_uLineMvp, viewProj);
         if (onTop) GL.Disable(EnableCap.DepthTest);
         GL.PolygonMode(MaterialFace.FrontAndBack, PolygonMode.Fill);
@@ -600,7 +692,7 @@ public sealed class Renderer : IDisposable
     public void DrawLineBatch(LineBatch lb, Matrix4x4 mvp, bool onTop = false)
     {
         if (lb.Count == 0) return;
-        GL.UseProgram(_lineProg);
+        GL.UseProgram(_lineProg); _cur = null;
         UniformMat(_uLineMvp, mvp);
         GL.PolygonMode(MaterialFace.FrontAndBack, PolygonMode.Fill);
         GL.LineWidth(onTop ? 2f : 1f);
@@ -642,7 +734,7 @@ public sealed class Renderer : IDisposable
     {
         if (ov.Tex == 0) return;
         float[] v = { x, y, 0, 0, x + ov.W, y, 1, 0, x + ov.W, y + ov.H, 1, 1, x, y, 0, 0, x + ov.W, y + ov.H, 1, 1, x, y + ov.H, 0, 1 };
-        GL.UseProgram(_ovProg);
+        GL.UseProgram(_ovProg); _cur = null;
         GL.Uniform2(_uOvScreen, (float)screenW, (float)screenH);
         GL.Disable(EnableCap.DepthTest);
         GL.PolygonMode(MaterialFace.FrontAndBack, PolygonMode.Fill);
@@ -668,6 +760,201 @@ public sealed class Renderer : IDisposable
         GL.UniformMatrix4(loc, 1, false, a);
     }
 
+
+    // ------------------------------------------------------------------ translated material shaders
+
+    /// <summary>A linked program with its uniform locations and the frame / object state last applied to it.</summary>
+    public sealed class XProg
+    {
+        public int Prog; public bool Translated;
+        public readonly Dictionary<string, int> U = new();
+        public int FrameSet = -1, ObjSet = -1, ModeSet = -1;
+        public object? LastBatch;
+        public int Loc(string n) { if (!U.TryGetValue(n, out int l)) U[n] = l = GL.GetUniformLocation(Prog, n); return l; }
+    }
+    XProg _base = null!;
+    XProg? _cur;
+    int _frame, _objVersion;
+    Matrix4x4 _objWorld = Matrix4x4.Identity; Vector4 _objTint;
+    Vector3 _camRight = Vector3.UnitX, _camUp = Vector3.UnitY;
+    readonly Dictionary<string, XProg?> _xprogs = new();
+    /// <summary>Exposure of the tone map: 0 = automatic (<see cref="SceneLighting.AutoExposure"/>, the light setup's post
+    /// exposure); the material shaders' own c45 is 1 in every level (read live from the game).</summary>
+    public float Exposure = 0f;
+    /// <summary>Apply the light setup's second fog band.</summary>
+    public bool Fog2 = true;
+    /// <summary>Final per-channel grade of the Rendered mode (out = c · scale + offset), standing in for the game's
+    /// post-processing (not translated): fitted jointly on 40 game frames of six worlds (20 quantiles per channel) after the
+    /// lighting was set to the values read live from the game (exposure 1, SH ambient).</summary>
+    public Vector3 GradeScale = new(1.217f, 1.358f, 1.296f), GradeOffset = new(-0.092f, -0.125f, -0.099f);
+    /// <summary>Statistics: translated programs compiled, failures.</summary>
+    public int ProgramsCompiled, ProgramsFailed;
+    public string? LastProgramError;
+
+    void Use(XProg p)
+    {
+        if (_cur != p) { GL.UseProgram(p.Prog); _cur = p; }
+        if (p.FrameSet != _frame) { p.FrameSet = _frame; p.LastBatch = null; ApplyFrame(p); }
+        if (p.ObjSet != _objVersion) ApplyObject(p);
+    }
+
+    void ApplyObject(XProg p)
+    {
+        p.ObjSet = _objVersion;
+        UniformMat(p.Loc("uMvp"), _objWorld * _viewProj); UniformMat(p.Loc("uModel"), _objWorld);
+        GL.Uniform4(p.Loc("uSel"), _objTint.X, _objTint.Y, _objTint.Z, _objTint.W);
+    }
+
+    void ApplyFrame(XProg p)
+    {
+        var l = Lighting;
+        var sun = l.Sun * l.Intensity;
+        p.ModeSet = (int)Mode;
+        GL.Uniform1(p.Loc("uMode"), (int)Mode);
+        GL.Uniform3(p.Loc("uEye"), _eye.X, _eye.Y, _eye.Z);
+        GL.Uniform3(p.Loc("uSunDir"), l.SunDirection.X, l.SunDirection.Y, l.SunDirection.Z);
+        GL.Uniform3(p.Loc("uSunCol"), sun.X, sun.Y, sun.Z);
+        GL.Uniform4(p.Loc("uFog"), l.FogStart, l.FogEnd, l.FogMax, l.Fog ? 1f : 0f);
+        GL.Uniform3(p.Loc("uFogCol"), l.FogColour.X, l.FogColour.Y, l.FogColour.Z);
+        GL.Uniform4(p.Loc("uFog2"), l.Fog2Start, l.Fog2End, l.Fog && Fog2 ? Math.Clamp(l.Fog2Max, 0, 1) : 0f, 0f);
+        bool useSh = Mode == ViewMode.Rendered && _shadowValid && Shadows;
+        GL.Uniform1(p.Loc("uUseShadow"), useSh ? 1 : 0);
+        UniformMat(p.Loc("uShadow"), _shadowVP);
+        if (!p.Translated)
+        {
+            GL.Uniform3(p.Loc("uAmb"), l.Ambient.X, l.Ambient.Y, l.Ambient.Z);
+            GL.Uniform3(p.Loc("uWire"), 0.78f, 0.80f, 0.84f);
+            return;
+        }
+        // ambient as the game's 4-term spherical harmonics, dot((1, N.y, N.z, N.x), c) per channel: the level ambient,
+        // a little brighter from the sky (same hemisphere as the untranslated path)
+        var a = l.Ambient;
+        GL.Uniform4(p.Loc("uSH0"), a.X * l.AmbientBase, a.X * l.AmbientUp, 0, 0);
+        GL.Uniform4(p.Loc("uSH1"), a.Y * l.AmbientBase, a.Y * l.AmbientUp, 0, 0);
+        GL.Uniform4(p.Loc("uSH2"), a.Z * l.AmbientBase, a.Z * l.AmbientUp, 0, 0);
+        float ex = (Exposure > 0 ? Exposure : l.AutoExposure);
+        GL.Uniform4(p.Loc("uExpo"), ex, ex, ex, 1f);
+        GL.Uniform3(p.Loc("uGradeA"), GradeScale.X, GradeScale.Y, GradeScale.Z);
+        GL.Uniform3(p.Loc("uGradeB"), GradeOffset.X, GradeOffset.Y, GradeOffset.Z);
+        GL.Uniform1(p.Loc("uPost"), Exposure > 0 ? 1f : l.PostScale);
+        GL.Uniform4(p.Loc("uCamR"), _camRight.X, _camRight.Y, _camRight.Z, 0f);
+        // c53 / c54 = the view matrix's right and up rows (read live; the shaders map R' onto them, v grows with "up")
+        GL.Uniform4(p.Loc("uCamU"), _camUp.X, _camUp.Y, _camUp.Z, 0f);
+        var fd = l.FillDirection; var fc = l.FillColour;
+        GL.Uniform4(p.Loc("uFillCol"), fc.X, fc.Y, fc.Z, 0f);
+        GL.Uniform4(p.Loc("uFillDir"), fd.X, fd.Y, fd.Z, 0f);
+    }
+
+    const string XFS_HEAD = """
+        #version 330 core
+        in vec3 vN; in vec3 vW; in vec2 vUV; in vec2 vUV2; in vec4 vCol; in vec4 vSh; out vec4 o;
+        uniform sampler2DShadow tShadow; uniform int uUseShadow;
+        uniform sampler2D tS0; uniform sampler2D tS1; uniform sampler2D tS2; uniform sampler2D tS3;
+        uniform sampler2D tS4; uniform sampler2D tS5; uniform sampler2D tS6; uniform sampler2D tS7;
+        uniform vec4 uC[48];
+        uniform int uMode;      // 2 textured, 3 rendered, 4 unlit
+        uniform int uBlend;     // 0 opaque, 1 cut-out, 2 blend, 3 multiply, 4 additive
+        uniform vec4 uSel;
+        uniform vec3 uEye; uniform vec3 uSunDir; uniform vec3 uSunCol; uniform float uSpecPow;
+        uniform vec4 uSH0; uniform vec4 uSH1; uniform vec4 uSH2; uniform vec4 uExpo; uniform vec4 uCamR; uniform vec4 uCamU;
+        uniform vec4 uFillCol; uniform vec4 uFillDir;
+        uniform vec4 uFog; uniform vec3 uFogCol; uniform vec4 uFog2; uniform vec3 uGradeA; uniform vec3 uGradeB; uniform float uPost;
+        const vec4 uVcolScale = vec4(1.0);
+        vec3 cubeDir = vec3(0.0, 0.0, 1.0);
+        vec2 CubeUV(vec3 d) { d = normalize(d); return vec2(dot(d, uCamR.xyz), dot(d, uCamU.xyz)) * 0.5 + 0.5; }
+        float shadowAt(float nl) {
+            if (uUseShadow == 0) return 1.0;
+            vec3 sc = vSh.xyz / vSh.w * 0.5 + 0.5;
+            if (sc.x <= 0.0 || sc.y <= 0.0 || sc.x >= 1.0 || sc.y >= 1.0 || sc.z >= 1.0) return 1.0;
+            vec2 ts = 1.0 / vec2(textureSize(tShadow, 0));
+            float bias = 0.0004 + 0.0012 * (1.0 - nl);
+            float acc = 0.0;
+            for (int x = -1; x <= 1; x++) for (int y = -1; y <= 1; y++) acc += texture(tShadow, vec3(sc.xy + vec2(x, y) * ts * 1.25, sc.z - bias));
+            return acc / 9.0;
+        }
+        vec3 perturb(vec3 n, vec3 p, vec2 uv, vec3 t) {
+            vec3 dp1 = dFdx(p), dp2 = dFdy(p); vec2 du1 = dFdx(uv), du2 = dFdy(uv);
+            vec3 dp2perp = cross(dp2, n), dp1perp = cross(n, dp1);
+            vec3 T = dp2perp * du1.x + dp1perp * du2.x; vec3 B = dp2perp * du1.y + dp1perp * du2.y;
+            float invmax = inversesqrt(max(dot(T,T), dot(B,B)));
+            if (!(invmax < 1e8)) return n;
+            vec2 xy = t.xy * 2.0 - 1.0; xy.y = -xy.y; vec3 tn = vec3(xy, sqrt(max(0.0, 1.0 - dot(xy, xy))));
+            return normalize(mat3(T * invmax, B * invmax, n) * tn);
+        }
+        void main() {
+          vec3 n0 = length(vN) > 0.0 ? normalize(vN) : vec3(0.0, 1.0, 0.0);
+          if (!gl_FrontFacing) n0 = -n0;
+          vec2 gUV = vUV, gUV2 = vUV2; vec4 gCol = vCol; vec3 gPos = vW;
+          vec3 gV = normalize(uEye - vW);
+          vec3 gN = n0;
+        """;
+    const string XFS_LIGHT = """
+          vec3 L = normalize(uSunDir);
+          float gNdotL; vec3 gSun; float gSpecPow;
+          if (uMode == 3) {
+            gNdotL = clamp(dot(gN, L), 0.0, 1.0);
+            gSun = uSunCol * shadowAt(max(dot(n0, L), 0.0));
+            gSpecPow = pow(clamp(dot(normalize(gV + L), gN), 0.0, 1.0), max(uSpecPow, 1.0)) * step(0.0, dot(gN, L));
+          } else {
+            // textured: albedo with a soft headlight so shapes read, no specular
+            gNdotL = 0.55 + 0.45 * abs(dot(n0, normalize(gV + vec3(0.25, 0.5, 0.15))));
+            gSun = vec3(1.0); gSpecPow = 0.0;
+          }
+          vec3 gDiff = gNdotL * gSun; vec3 gSpec = gSpecPow * gSun;
+          vec4 r0 = vec4(0.0), r1 = vec4(0.0), r2 = vec4(0.0), r3 = vec4(0.0), r4 = vec4(0.0), r5 = vec4(0.0), r6 = vec4(0.0), r7 = vec4(0.0);
+          vec4 r8 = vec4(0.0), r9 = vec4(0.0), r10 = vec4(0.0), r11 = vec4(0.0), r12 = vec4(0.0), r13 = vec4(0.0), r14 = vec4(0.0), r15 = vec4(0.0);
+          vec4 r16 = vec4(0.0), r17 = vec4(0.0), r18 = vec4(0.0), r19 = vec4(0.0), r20 = vec4(0.0), r21 = vec4(0.0), r22 = vec4(0.0), r23 = vec4(0.0);
+          vec4 r24 = vec4(0.0), r25 = vec4(0.0), r26 = vec4(0.0), r27 = vec4(0.0), r28 = vec4(0.0), r29 = vec4(0.0), r30 = vec4(0.0), r31 = vec4(0.0);
+          bool p = false; float ps = 0.0; vec4 oc = vec4(0.0, 0.0, 0.0, 1.0); vec4 pre = vec4(0.0);
+        """;
+    const string XFS_TAIL = """
+          vec4 res = (uMode == 2 && HASPRE) ? pre : oc;
+          if (uMode == 2 && HASPRE) res.a = oc.a;
+          vec3 rgb = clamp(res.rgb, 0.0, 1.0);
+          if (uMode >= 3) rgb = min(rgb * uPost, vec3(1.5));   // the level's post exposure (see SceneLighting.PostScale)
+          if (uMode == 3 && uFog.w > 0.5) {
+            float d = length(uEye - vW);
+            float f = clamp((d - uFog.x) / max(1.0, uFog.y - uFog.x), 0.0, 1.0) * uFog.z;
+            float f2 = clamp((d - uFog2.x) / max(1.0, uFog2.y - uFog2.x), 0.0, 1.0) * uFog2.z;
+            rgb = mix(rgb, uFogCol, 1.0 - (1.0 - f) * (1.0 - f2));
+          }
+          // the game's post-processing (contrast / levels), fitted per channel against Showdown Town game frames
+          if (uMode >= 3) rgb = clamp(rgb * uGradeA + uGradeB, 0.0, 1.0);
+          float alpha = clamp(res.a, 0.0, 1.0);
+          if (uBlend == 1 && alpha < 0.5) discard;
+          if ((uBlend == 2 || uBlend == 4) && alpha < 0.004) discard;
+          o = vec4(mix(rgb, uSel.rgb, uSel.a), (uBlend == 2 || uBlend == 4) ? alpha : 1.0);
+        }
+        """;
+
+    /// <summary>The program of a translated material (compiled once per distinct shader body); null when it does not compile.</summary>
+    XProg? Translated(ShaderTranslation tr)
+    {
+        string nrm = tr.NormalSampler is >= 0 and < 8 ? $"tS{tr.NormalSampler}" : "";
+        int nr = tr.ConstValues.Count;   // the normal map's coordinate rows follow the shader's constants in uC
+        string ncoord = tr.NormalRows != null ? $"vec2(dot(vec4({(tr.NormalSet == 1 ? "gUV2" : "gUV")}, 0.0, 1.0), uC[{nr}]), dot(vec4({(tr.NormalSet == 1 ? "gUV2" : "gUV")}, 0.0, 1.0), uC[{nr + 1}]))"
+            : tr.NormalSet == 1 || tr.NormalUv2 ? "gUV2" : "gUV";
+        string key = tr.Body + "|" + nrm + "|" + tr.HasPreTone + "|" + ncoord;
+        if (_xprogs.TryGetValue(key, out var xp)) return xp;
+        var fs = new System.Text.StringBuilder(XFS_HEAD);
+        if (nrm.Length > 0) fs.Append($"  {{ vec2 nuv = {ncoord}; gN = perturb(n0, vW, nuv, texture({nrm}, nuv).rgb); }}\n");
+        fs.Append(XFS_LIGHT);
+        fs.Append(tr.Body);
+        fs.Append(XFS_TAIL.Replace("HASPRE", tr.HasPreTone ? "true" : "false"));
+        try
+        {
+            int prog = Link(VS, fs.ToString());
+            xp = new XProg { Prog = prog, Translated = true };
+            GL.UseProgram(prog); _cur = null;
+            for (int i = 0; i < 8; i++) GL.Uniform1(GL.GetUniformLocation(prog, "tS" + i), i);
+            GL.Uniform1(GL.GetUniformLocation(prog, "tShadow"), 8);
+            ProgramsCompiled++;
+        }
+        catch (Exception e) { xp = null; ProgramsFailed++; LastProgramError = e.Message + "\n" + fs; }
+        _xprogs[key] = xp;
+        return xp;
+    }
+
     /// <summary>Frees all batches and textures (call when a new scene is loaded).</summary>
     public void Clear()
     {
@@ -675,7 +962,7 @@ public sealed class Renderer : IDisposable
         _batches.Clear();
         Array.Fill(_bound, -1);
         foreach (var t in _textures.Values) if (t != 0) GL.DeleteTexture(t);
-        _textures.Clear(); _hasAlpha.Clear(); _lum.Clear();
+        _textures.Clear(); _hasAlpha.Clear(); _lum.Clear(); _midAlpha.Clear();
         _queue.Clear(); _multiply.Clear();
     }
 

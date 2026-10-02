@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Numerics;
+using NB.Core.Models;
 
 namespace NB.Studio.Viewport;
 
@@ -25,7 +26,7 @@ public sealed partial class SceneViewport
             {
                 var v = next().ToLowerInvariant();
                 ViewMode = v switch { "wire" or "wireframe" => ViewMode.Wireframe, "solid" => ViewMode.Solid, "rendered" or "render" => ViewMode.Rendered, _ => ViewMode.Textured };
-                Render(); log($"script: view mode {ViewMode}" + (ViewMode == ViewMode.Rendered ? $", light {LightingName}, sky {(_sky != null ? "yes" : "none")}" : ""));
+                Render(); log($"script: view mode {ViewMode}" + (ViewMode is ViewMode.Rendered or ViewMode.Textured ? $", light {LightingName}, sky {SkyName ?? "none"}, exposure {(_r.Exposure > 0 ? _r.Exposure : _r.Lighting.AutoExposure):0.00}, fill {_r.Lighting.FillColour}" : ""));
                 return true;
             }
             case "--light": NextLight(next()); log($"script: light {LightingName}: {_r.Lighting.SunDirection} sun {_r.Lighting.Sun} x{_r.Lighting.Intensity} amb {_r.Lighting.Ambient} fog {_r.Lighting.Fog}"); return true;
@@ -35,7 +36,35 @@ public sealed partial class SceneViewport
                 EnsureLighting(); _r.Lighting.SunDirection = Vector3.Normalize(new Vector3(v[0], v[1], v[2])); _gl.Invalidate();
                 log($"script: sun direction {_r.Lighting.SunDirection}"); return true;
             }
+            case "--xlate-stats":
+            {
+                Render();
+                log($"script: translated programs {_r.ProgramsCompiled}, failed {_r.ProgramsFailed}" + (_r.LastProgramError != null ? Environment.NewLine + _r.LastProgramError[..Math.Min(6000, _r.LastProgramError.Length)] : ""));
+                return true;
+            }
+            case "--shadow-cull": _r.ShadowCull = int.Parse(next()); _r.InvalidateShadow(); _gl.Invalidate(); log($"script: shadow cull {_r.ShadowCull}"); return true;
+            case "--grade":
+            {
+                var v = next().Split(',').Select(F).ToArray();
+                _r.GradeScale = new Vector3(v[0], v[1], v[2]); _r.GradeOffset = new Vector3(v[3], v[4], v[5]); _gl.Invalidate();
+                log($"script: grade {_r.GradeScale} {_r.GradeOffset}"); return true;
+            }
+            case "--shadow-casters": ShadowCasters = int.Parse(next()); _gl.Invalidate(); log($"script: shadow casters {ShadowCasters}"); return true;
+            case "--shadow-reach": ShadowReach = F(next()); _gl.Invalidate(); log($"script: shadow reach {ShadowReach}"); return true;
+            case "--amb-scale": { float k = F(next()); EnsureLighting(); _r.Lighting.Ambient *= k; _r.Lighting.AmbientUp = F(next()); _gl.Invalidate(); log($"script: ambient {_r.Lighting.Ambient} up {_r.Lighting.AmbientUp}"); return true; }
+            case "--fog2": _r.Fog2 = next() == "on"; _gl.Invalidate(); log($"script: fog2 {_r.Fog2}"); return true;
+            case "--exposure": _r.Exposure = F(next()); _gl.Invalidate(); log($"script: exposure {_r.Exposure}"); return true;
             case "--shadows": _r.Shadows = next() == "on"; if (!_r.Shadows) _r.InvalidateShadow(); _gl.Invalidate(); log($"script: shadows {_r.Shadows}"); return true;
+            case "--hide-objects":
+            {
+                // hide objects drawn at markers whose model source or name contains the text (performance / audit checks)
+                var q = next(); int n = 0;
+                if (Scene != null)
+                    foreach (var o in Scene.Objects)
+                        if (o.Kind == NB.Core.World.SceneObjectKind.Marker && o.Model != null && (o.ModelSource.Contains(q, StringComparison.OrdinalIgnoreCase) || o.Name.Contains(q, StringComparison.OrdinalIgnoreCase))) { o.Visible = false; n++; }
+                _linesVersion++; _gl.Invalidate(); log($"script: hid {n} objects matching '{q}'"); return true;
+            }
+            case "--lod-cull": LodCulling = next() == "on"; _gl.Invalidate(); log($"script: LOD distance culling {(LodCulling ? "on" : "off")}"); return true;
             case "--fov": FieldOfView = F(next()); log($"script: fov {FieldOfView}"); return true;
             case "--gizmo": { var g = next().ToLowerInvariant(); Mode = g switch { "rotate" => GizmoMode.Rotate, "scale" => GizmoMode.Scale, "select" => GizmoMode.Select, _ => GizmoMode.Move }; _gl.Invalidate(); log($"script: gizmo {Mode}"); return true; }
             case "--view-size":
@@ -54,7 +83,7 @@ public sealed partial class SceneViewport
             case "--show":
             {
                 var what = next(); bool on = next() == "on";
-                switch (what) { case "markers": ShowMarkers = on; break; case "paths": ShowPaths = on; break; case "terrain": ShowTerrain = on; break; case "scenery": ShowScenery = on; break; }
+                switch (what) { case "markers": ShowMarkers = on; break; case "paths": ShowPaths = on; break; case "terrain": ShowTerrain = on; break; case "scenery": ShowScenery = on; break; case "objects": ShowObjects = on; break; }
                 Refresh3D(); log($"script: show {what} {on}"); return true;
             }
             case "--key":
@@ -72,6 +101,27 @@ public sealed partial class SceneViewport
                     Render();
                 }
                 log($"script: keys {keyList}; transforming {Transforming}" + (Selected != null ? $"; selection at {Fmt(Selected.Transform.Translation)}" : "")); return true;
+            }
+            case "--keyseq":
+            {
+                // held keys like a person: "+W" press (repeats count as key repeat), "-W" release, "tick" one fly
+                // step, "rmb+" / "rmb-" right button down / up (looking), "sleep700" wait 700 ms
+                var seq = next(); var log2 = new List<string>();
+                foreach (var t in seq.Split(','))
+                {
+                    if (t == "tick") { TickCore(); continue; }
+                    if (t == "rmb+") { OnMouseDown(null, new MouseEventArgs(MouseButtons.Right, 1, 300, 300, 0)); OnMouseMove(null, new MouseEventArgs(MouseButtons.Right, 0, 320, 300, 0)); continue; }
+                    if (t == "rmb-") { OnMouseUp(null, new MouseEventArgs(MouseButtons.Right, 1, 320, 300, 0)); continue; }
+                    if (t.StartsWith("sleep")) { Thread.Sleep(int.Parse(t[5..])); continue; }
+                    var key = Enum.Parse<Keys>(t[1..], true);
+                    if (t[0] == '+') { bool fresh = _keys.Add(key); OnKey(new KeyEventArgs(key), fresh); }
+                    else { _keys.Remove(key); if (key == Keys.S) _sFlies = false; }
+                    log2.Add($"{t}:{Transforming}");
+                }
+                var cam = _camPos;
+                log($"script: keyseq {seq} -> {string.Join(" ", log2)}; transforming {Transforming}; camera {Fmt(cam)}");
+                if (Transforming) CancelTransform();
+                return true;
             }
             case "--mouse":
             {
@@ -129,7 +179,7 @@ public sealed partial class SceneViewport
                 if (Scene != null)
                     foreach (var o in Scene.Objects)
                     {
-                        if (!o.Visible || o.Model == null || (o.Kind == NB.Core.World.SceneObjectKind.Scenery && IsHidden(o))) continue;
+                        if (!DrawsModel(o, keepSelected: false)) continue;
                         foreach (var (m, local) in new[] { (o.Model, Matrix4x4.Identity) }.Concat(o.Children))
                         {
                             if (!Matrix4x4.Invert(local * o.Transform, out var inv)) continue;
@@ -150,6 +200,26 @@ public sealed partial class SceneViewport
                 log($"    base {mi.Base} over {mi.Overlay} mask {mi.Mask} normal {mi.Normal} spec {mi.Spec} refl {mi.Reflect} ao {mi.Ao} alpha {mi.AlphaTex}");
                 log($"    textures: {string.Join(" | ", d.Textures.Select(t => $"s{t.Slot}:{t.Texture}"))}");
                 if (d.Passes.Length > 0) log($"    pass0 c: {string.Join(" ", d.Passes[0].Constants.OrderBy(k => k.Key).Select(k => $"c{k.Key}={k.Value}"))}");
+                if (mi.Shader is { } tr)
+                {
+                    log($"    shader: {tr}; normal tf{tr.NormalSampler}; uv2 samplers [{string.Join(",", tr.SamplerUv2)}]; vcol {tr.UsesVertexColour}; textures {string.Join(" ", mi.SamplerTextures.Select(k => $"tf{k.Key}:{k.Value}"))}");
+                    log(tr.Body);
+                }
+                else if (d.ColourShader is { } sh2) log("    shader not translated: " + XenosTranslator.Translate(sh2, d.Passes.Length > 0 ? d.Passes[0].Constants : d.PixelConstants, d.Colors != null, d.UVs2 != null).Fail);
+                if (Environment.GetEnvironmentVariable("NB_PICK_DISASM") == "1" && d.ColourShader is { } sh3) log(sh3.Disassemble());
+                return true;
+            }
+            case "--sunray":
+            {
+                // the first surface between a view pixel's surface point and the sun (shadow debugging)
+                var v = next().Split(',').Select(int.Parse).ToArray();
+                var (ro, rd) = Ray(new Point(v[0], v[1]));
+                var hit = RayScene(ro, rd);
+                if (hit.O == null) { log("script: sunray: nothing under the pixel"); return true; }
+                var p0 = ro + rd * hit.T;
+                var sd = Vector3.Normalize(_r.Lighting.SunDirection);
+                var h2 = RayScene(p0 + sd * 0.05f, sd);
+                log($"script: sunray from {Fmt(p0)} ({hit.O.Name}) towards {Fmt(sd)}: " + (h2.O == null ? "lit" : $"blocked by {h2.O.Name} ({NB.Core.Formats.AssetIds.DisplayName(h2.M!.View.Name)}) draw #{h2.D} flags {h2.M.Draws[h2.D].SectionFlags:X} at {h2.T:0.0} units, point {Fmt(p0 + sd * h2.T)}"));
                 return true;
             }
             case "--sel-info":
@@ -164,6 +234,28 @@ public sealed partial class SceneViewport
             }
         }
         return false;
+    }
+
+    (float T, NB.Core.World.SceneObject? O, NB.Core.Models.ModelAsset? M, int D) RayScene(Vector3 ro, Vector3 rd)
+    {
+        (float T, NB.Core.World.SceneObject? O, NB.Core.Models.ModelAsset? M, int D) best = (float.MaxValue, null, null, -1);
+        if (Scene == null) return best;
+        foreach (var o in Scene.Objects)
+        {
+            if (!o.Visible || o.Model == null || (o.Kind == NB.Core.World.SceneObjectKind.Scenery && IsHidden(o))) continue;
+            foreach (var (m, local) in new[] { (o.Model, Matrix4x4.Identity) }.Concat(o.Children))
+            {
+                if (!Matrix4x4.Invert(local * o.Transform, out var inv)) continue;
+                var lo = Vector3.Transform(ro, inv); var ld = Vector3.TransformNormal(rd, inv);
+                for (int di = 0; di < m.Draws.Count; di++)
+                {
+                    var dr = m.Draws[di]; if (m.LodOnlyNodes.Contains(dr.Node)) continue;
+                    float t = RayDraw(lo, ld, dr);
+                    if (t < best.T) best = (t, o, m, di);
+                }
+            }
+        }
+        return best;
     }
 
     static float RayDraw(Vector3 o, Vector3 d, NB.Core.Models.MeshDraw dr)
