@@ -110,8 +110,9 @@ public static class ImageIO
     public static (byte[] Rgba, int W, int H) FromBitmap(Bitmap src)
     {
         int w = src.Width, h = src.Height;
-        using var bmp = new Bitmap(w, h, PixelFormat.Format32bppArgb);
-        using (var g = Graphics.FromImage(bmp)) g.DrawImage(src, 0, 0, w, h);
+        // LockBits converts any pixel format to 32bpp ARGB exactly; drawing the image (Graphics.DrawImage, used before) blended
+        // and filtered it, so half-transparent pixels and edges changed and an exported texture did not read back identically
+        var bmp = src;
         var bd = bmp.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
         var outp = new byte[w * h * 4];
         var row = new byte[w * 4];

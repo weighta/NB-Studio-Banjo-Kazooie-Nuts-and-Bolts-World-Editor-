@@ -14,6 +14,7 @@ public sealed class TextureResolver
 {
     readonly Workspace _ws;
     readonly CaffFile? _preferred;
+    readonly uint? _preferredBundle;
     readonly Dictionary<string, List<AssetEntry>> _byName = new(StringComparer.OrdinalIgnoreCase);
     readonly Dictionary<string, (byte[] Rgba, int W, int H)?> _cache = new();
     readonly Dictionary<uint, BundleArchive> _streams = new();
@@ -22,9 +23,11 @@ public sealed class TextureResolver
     public readonly Dictionary<string, string> Sources = new();
     public IEnumerable<string> Missing => Sources.Where(kv => kv.Value.StartsWith("missing") || kv.Value.StartsWith("error")).Select(kv => kv.Key);
 
-    public TextureResolver(Workspace ws, AssetIndex? index, CaffFile? preferred)
+    /// <param name="preferredBundle">The bundle <paramref name="preferred"/> was loaded from: full-size loads then take its own
+    /// streamed top level (Bundle/50/&lt;bundle&gt;) first; without it the resident half-size level won over the top level.</param>
+    public TextureResolver(Workspace ws, AssetIndex? index, CaffFile? preferred, uint? preferredBundle = null)
     {
-        _ws = ws; _preferred = preferred;
+        _ws = ws; _preferred = preferred; _preferredBundle = preferredBundle & 0xFFFFFF;
         if (index != null)
             foreach (var e in index.Entries.Where(e => e.Type == "texture"))
             {
@@ -67,8 +70,16 @@ public sealed class TextureResolver
         var cands = full ? new[] { stem + "top", stem, stem + "mip" } : new[] { stem + "mip", stem, stem + "top" };
         try
         {
+            // 0. full size: the preferred bundle's own streamed top level (this world's copy, e.g. a replaced texture)
+            if (full && _preferredBundle is uint pb && _byName.TryGetValue(stem + "top", out var tops) && tops.Any(e => e.Streamed && e.Bundle == pb))
+            {
+                var e = tops.First(e => e.Streamed && e.Bundle == pb);
+                if (!_streams.TryGetValue(pb, out var arc)) _streams[pb] = arc = _ws.LoadStream(pb);
+                var se = arc.Entries.FirstOrDefault(x => x.Id == e.Id && x.Data != null);
+                if (se != null && TryCaff(CaffFile.Read(se.Data!), stem + "top", out var r0)) { result = r0; Sources[name] = $"streamed {pb:x6} ({stem}top)"; }
+            }
             // 1. the preferred (world) bundle
-            if (_preferred != null)
+            if (_preferred != null && result == null)
                 foreach (var cand in cands)
                     if (TryCaff(_preferred, cand, out var r)) { result = r; Sources[name] = "world bundle (" + cand + ")"; break; }
             // 2. any resident bundle, 3. stream archives

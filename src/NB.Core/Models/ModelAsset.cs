@@ -59,6 +59,30 @@ public sealed class MeshDraw
     /// <summary>Draw block (stream op 0x17 = {u32 block, u32 end offset}) the draw belongs to; -1 outside any block.
     /// Background models cull whole blocks: culling cell (chunk 0) group g = block g (verified on all 112 Showdown Town cells).</summary>
     public int Block = -1;
+    /// <summary>Second texture coordinate set (contact-occlusion / blend maps use it), when the layout has one.</summary>
+    public Vector2[]? UVs2;
+    /// <summary>Tangents (the second 2:10:10:10 element of normal-mapped layouts).</summary>
+    public Vector3[]? Tangents;
+    /// <summary>Material section flags (stream op 0x15 +8) in effect at this draw: low nibble 1 = opaque, 2 = alpha
+    /// blended (render states SRC_ALPHA / ONE_MINUS_SRC_ALPHA set in the section), 0 = alpha-tested cut-outs (grilles, foliage).</summary>
+    public uint SectionFlags;
+    /// <summary>Per pass of the 3-way pass switch (op 0x16): the state each pass binds before this draw. Pass 1 is the
+    /// depth-only pass (no pixel shader, op 0x2A); passes 0 and 2 are colour passes. Empty when the stream has no switch.</summary>
+    public DrawPass[] Passes = Array.Empty<DrawPass>();
+}
+
+/// <summary>Render state of one pass at a draw (see <see cref="MeshDraw.Passes"/>).</summary>
+public sealed class DrawPass
+{
+    /// <summary>Pixel shader microcode (pool part, offset), when its patch location is known.</summary>
+    public (int Part, int Offset)? PixelShader;
+    public bool NullPixelShader;
+    public List<(int Slot, string Texture)> Textures = new();
+    public Dictionary<int, Vector4> Constants = new();
+    /// <summary>Render-state op 0x0C (register, value): 0x48/0x4C/0x50 = src blend / dest blend / blend op (Xenos
+    /// enums: 6 = SRC_ALPHA, 7 = ONE_MINUS_SRC_ALPHA), 0x44 = blend factor (alpha in the top byte).</summary>
+    public Dictionary<int, uint> States = new();
+    public DrawPass Clone() => new() { PixelShader = PixelShader, NullPixelShader = NullPixelShader, Textures = Textures, Constants = new(Constants), States = new(States) };
 }
 
 /// <summary>
@@ -252,6 +276,7 @@ public sealed class ModelAsset
         // Resource header R: R+0x48 points at the GPU buffer table (entries: ptr object, ptr .gpu, size).
         var gpuPtrLocs = new HashSet<int>(View.Pointers.Where(kv => kv.Key.Part == dataPid && kv.Value == gpuPid).Select(kv => kv.Key.Offset));
         var vsPatch = new Dictionary<int, (int Part, int Offset)>();
+        var psPatch = new Dictionary<int, (int Part, int Offset)>();
         var ibTable = new Dictionary<int, (int Gpu, int Size, int Fmt)>();
         var dataToData = View.Pointers.Where(kv => kv.Key.Part == dataPid && kv.Value == dataPid).Select(kv => kv.Key.Offset).OrderBy(o => o).ToList();
         {
@@ -278,6 +303,15 @@ public sealed class ModelAsset
                         if (View.PtrAt(".data", addrs.Offset + 4 * i) is { } a) vsPatch[streamLoc] = (a.Part, a.Offset);
                     }
                 }
+                if (View.PtrAt(".data", R + 0x24) is { } plocs && View.PtrAt(".data", R + 0x28) is { } paddrs)
+                {
+                    int n = BE.S32(d, R + 0x2C);
+                    for (int i = 0; i < n && plocs.Offset + 4 * i + 4 <= d.Length; i++)
+                    {
+                        int streamLoc = BE.S32(d, plocs.Offset + 4 * i);
+                        if (View.PtrAt(".data", paddrs.Offset + 4 * i) is { } a) psPatch[streamLoc] = (a.Part, a.Offset);
+                    }
+                }
                 break;
             }
         }
@@ -289,13 +323,49 @@ public sealed class ModelAsset
         var psConst = new Dictionary<int, Vector4>();
         var vbShaders = new Dictionary<int, HashSet<int>>();
         var seen = new HashSet<(int, int)>();
+        // The 3-way pass switch (op 0x16: three stream targets) runs one variant per render pass; every variant but the last
+        // jumps (op 0x19) to the join point. State is simulated per pass: common commands apply to all three.
+        var passes = new[] { new DrawPass(), new DrawPass(), new DrawPass() };
+        int[]? swStart = null; int swJoin = -1; bool anySwitch = false;
+        uint curFlags = 0;
         while (pos + 4 <= s.Length)
         {
             uint w = BE.U32(s, pos);
             int size = (int)(w >> 16), op = (int)((w >> 8) & 0xFF);
             if ((w & 0xFF) != 0 || size < 4 || pos + size > s.Length) break;
+            int variant = -1;
+            if (swStart != null)
+            {
+                if (swJoin >= 0 && pos >= swJoin) swStart = null;
+                else for (int k = 0, best = -1; k < 3; k++) if (swStart[k] <= pos && swStart[k] > best && (swJoin < 0 || swStart[k] < swJoin)) { best = swStart[k]; variant = k; }
+            }
+            IEnumerable<DrawPass> Targets() => variant < 0 ? passes : new[] { passes[variant] };
             switch (op)
             {
+                case 0x16 when size >= 20:
+                {
+                    var t = new int[3];
+                    for (int k = 0; k < 3; k++) t[k] = View.PtrAt(".stream", pos + 8 + 4 * k)?.Offset ?? int.MaxValue;
+                    if (t.All(x => x != int.MaxValue)) { swStart = t; swJoin = -1; anySwitch = true; }
+                    break;
+                }
+                case 0x19 when variant >= 0 && swJoin < 0:
+                    swJoin = View.PtrAt(".stream", pos + 4)?.Offset ?? -1;
+                    break;
+                case 0x15: curFlags = size >= 12 ? BE.U32(s, pos + 8) : 0; break;
+                case 0x02:
+                {
+                    (int, int)? ps = psPatch.TryGetValue(pos + 4, out var pp) ? pp : null;
+                    foreach (var p in Targets()) { p.PixelShader = ps; p.NullPixelShader = false; }
+                    break;
+                }
+                case 0x2A: foreach (var p in Targets()) { p.PixelShader = null; p.NullPixelShader = true; } break;
+                case 0x0C when size >= 12:
+                {
+                    int reg = BE.S32(s, pos + 4); uint val = BE.U32(s, pos + 8);
+                    foreach (var p in Targets()) p.States[reg] = val;
+                    break;
+                }
                 case 0x17: // draw block: +4 block index, +8 stream offset of the block's end (skipped when culled)
                     curBlock = BE.S32(s, pos + 4);
                     break;
@@ -320,6 +390,7 @@ public sealed class ModelAsset
                         list.Add((slot, name));
                     }
                     curTex = list;
+                    foreach (var p in Targets()) p.Textures = list;
                     break;
                 }
                 case 0x06: // set shader constants: +4 kind (0 = pixel), +8 (first register << 16 | count), then float4s
@@ -329,7 +400,9 @@ public sealed class ModelAsset
                     for (int k = 0; k < cnt && pos + 12 + 16 * k + 16 <= pos + size; k++)
                     {
                         int q = pos + 12 + 16 * k;
-                        psConst[reg + k] = new Vector4(BE.F32(s, q), BE.F32(s, q + 4), BE.F32(s, q + 8), BE.F32(s, q + 12));
+                        var cv = new Vector4(BE.F32(s, q), BE.F32(s, q + 4), BE.F32(s, q + 8), BE.F32(s, q + 12));
+                        psConst[reg + k] = cv;
+                        foreach (var p in Targets()) p.Constants[reg + k] = cv;
                     }
                     break;
                 }
@@ -340,7 +413,8 @@ public sealed class ModelAsset
                     int ib = View.PtrAt(".stream", pos + 12)?.Offset ?? -1;
                     int node = op == 0x30 ? BE.S32(s, pos + 16) : -1;   // rendergraph node (LOD levels list nodes)
                     if (curVb >= 0 && ib >= 0 && seen.Add((curVb, ib)))
-                        Draws.Add(new MeshDraw { VbRecord = curVb, IbObject = ib, IndexCount = count, Primitive = prim, Textures = curTex ?? new(), PixelConstants = new(psConst), Node = node, Block = curBlock });
+                        Draws.Add(new MeshDraw { VbRecord = curVb, IbObject = ib, IndexCount = count, Primitive = prim, Textures = curTex ?? new(), PixelConstants = new(psConst), Node = node, Block = curBlock,
+                                                 SectionFlags = curFlags, Passes = anySwitch ? passes.Select(p => p.Clone()).ToArray() : Array.Empty<DrawPass>() });
                     break;
                 }
             }
@@ -418,10 +492,18 @@ public sealed class ModelAsset
     {
         var pos = dr.Layout.FirstOrDefault(e => e.Offset == 0) ?? dr.Layout.First();
         var uv = dr.Layout.FirstOrDefault(e => e.Format is VtxFormat.k_16_16_FLOAT or VtxFormat.k_32_32_FLOAT);
+        var uv2 = uv == null ? null : dr.Layout.FirstOrDefault(e => e != uv && e.Offset > uv.Offset && e.Format is VtxFormat.k_16_16_FLOAT or VtxFormat.k_32_32_FLOAT);
         var nrm = dr.Layout.FirstOrDefault(e => e != pos && e.Format is VtxFormat.k_2_10_10_10 or VtxFormat.k_10_11_11 or VtxFormat.k_11_11_10);
+        var tan = nrm == null ? null : dr.Layout.FirstOrDefault(e => e != pos && e != nrm && e.Offset > nrm.Offset && e.Format is VtxFormat.k_2_10_10_10 or VtxFormat.k_10_11_11 or VtxFormat.k_11_11_10);
+        // vertex colour: a normalized 8:8:8:8 element, unless the layout is skinned (then it holds the blend weights)
+        bool skinned = dr.Layout.Any(e => e != pos && e.Format == VtxFormat.k_16_16_16_16 && !e.Normalized);
+        var col = skinned ? null : dr.Layout.FirstOrDefault(e => e.Format == VtxFormat.k_8_8_8_8 && e.Normalized && e != pos);
         dr.Positions = new Vector3[n];
         if (uv != null) dr.UVs = new Vector2[n];
+        if (uv2 != null) dr.UVs2 = new Vector2[n];
         if (nrm != null) dr.Normals = new Vector3[n];
+        if (tan != null) dr.Tangents = new Vector3[n];
+        if (col != null) dr.Colors = new uint[n];
         for (int i = 0; i < n; i++)
         {
             int b = start + i * dr.Stride;
@@ -430,6 +512,9 @@ public sealed class ModelAsset
             dr.Positions[i] = new Vector3(p.X, p.Y, p.Z);
             if (uv != null) { var t = Fetch(g, b + uv.Offset, uv); dr.UVs![i] = new Vector2(t.X, t.Y); }
             if (nrm != null) { var t = Fetch(g, b + nrm.Offset, nrm); dr.Normals![i] = Vector3.Normalize(new Vector3(t.X, t.Y, t.Z) + new Vector3(1e-9f)); }
+            if (uv2 != null) { var t = Fetch(g, b + uv2.Offset, uv2); dr.UVs2![i] = new Vector2(t.X, t.Y); }
+            if (tan != null) { var t = Fetch(g, b + tan.Offset, tan); dr.Tangents![i] = Vector3.Normalize(new Vector3(t.X, t.Y, t.Z) + new Vector3(1e-9f)); }
+            if (col != null) dr.Colors![i] = BE.U32(g, b + col.Offset);   // raw big-endian word: memory bytes 0..3 = bits 31..0
         }
         DecodeSkin(dr, g, start, n, pos);
     }

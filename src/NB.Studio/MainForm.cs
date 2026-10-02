@@ -31,6 +31,7 @@ public sealed class MainForm : Form
     readonly TagEditorPanel _tags = new() { Dock = DockStyle.Fill };
     readonly PartImporterPanel _parts = new() { Dock = DockStyle.Fill };
     readonly LivePanel _live;
+    readonly AtmospherePanel _atmos;
     readonly TextBox _log = new() { Dock = DockStyle.Fill, Multiline = true, ScrollBars = ScrollBars.Both, ReadOnly = true, WordWrap = false, Font = new Font("Consolas", 9) };
     readonly ToolStripStatusLabel _status = new() { Spring = true, TextAlign = ContentAlignment.MiddleLeft };
     readonly ToolStripProgressBar _progress = new() { Visible = false, Width = 200 };
@@ -38,6 +39,9 @@ public sealed class MainForm : Form
     readonly TabControl _right = new() { Dock = DockStyle.Fill };
     readonly ContextMenuStrip _objMenu = new();
     ToolStripMenuItem? _viewCollision;
+    TabControl _leftTabs = null!;
+    ToolStrip _toolbar = null!;
+    MenuStrip _menu = null!;
     readonly Stack<(SceneObject Obj, Matrix4x4 Before, Matrix4x4 After)> _undo = new(), _redo = new();
     bool _syncingTree;
 
@@ -60,9 +64,15 @@ public sealed class MainForm : Form
         _live.Log += s => BeginInvoke(() => Log(s));
         _live.ViewCameraPosition = () => _view.CameraPosition;
         _live.ShowInView += p => { _view.SetCamera(p + new Vector3(0, 45, -70), 0, -30); _center.SelectedIndex = 0; };
+        _atmos = new AtmospherePanel(() =>
+        {
+            if (_ws == null) return null;
+            var img = XexFile.Read(File.ReadAllBytes(_ws.Game.Xex)).GetImage();
+            return img.AsSpan((int)(NB.Core.Live.XeniaLive.TextStart - 0x82000000), 64).ToArray();
+        }) { Dock = DockStyle.Fill };
 
         // ---- layout
-        var left = new TabControl { Dock = DockStyle.Fill };
+        var left = _leftTabs = new TabControl { Dock = DockStyle.Fill };
         var tWorlds = new TabPage("Worlds"); tWorlds.Controls.Add(_worlds);
         var tScene = new TabPage("Scene"); tScene.Controls.Add(_tree); tScene.Controls.Add(_treeSearch);
         var tAssets = new TabPage("Assets"); tAssets.Controls.Add(_assets);
@@ -70,11 +80,12 @@ public sealed class MainForm : Form
 
         var c3d = new TabPage("3D View"); c3d.Controls.Add(_view);
         var cPrev = new TabPage("Asset Preview"); cPrev.Controls.Add(_preview);
+        var cAtmos = new TabPage("Atmosphere"); cAtmos.Controls.Add(_atmos);
         var cText = new TabPage("Text"); cText.Controls.Add(_text);
         var cAudio = new TabPage("Audio"); cAudio.Controls.Add(_audio);
         var cVideo = new TabPage("Video"); cVideo.Controls.Add(_video);
         var cParts = new TabPage("Part Importer"); cParts.Controls.Add(_parts);
-        _center.TabPages.AddRange(new[] { c3d, cPrev, cText, cAudio, cVideo, cParts });
+        _center.TabPages.AddRange(new[] { c3d, cPrev, cAtmos, cText, cAudio, cVideo, cParts });
 
         var rProps = new TabPage("Properties"); rProps.Controls.Add(_transform);
         var rTags = new TabPage("Tag Editor"); rTags.Controls.Add(_tags);
@@ -100,9 +111,10 @@ public sealed class MainForm : Form
         _start.NewRequested += async () => await NewWorkspace();
         _start.WorkspaceRequested += async p => await OpenWorkspace(p);
         _start.AutoOpenChanged += on => { _settings.AutoOpenLast = on; _settings.Save(); };
+        _start.TourRequested += StartTour;
         Controls.Add(_start); Controls.SetChildIndex(_start, 0);
-        Controls.Add(BuildToolbar());
-        var menu = BuildMenu(); MainMenuStrip = menu; Controls.Add(menu);
+        Controls.Add(_toolbar = BuildToolbar());
+        var menu = _menu = BuildMenu(); MainMenuStrip = menu; Controls.Add(menu);
         Controls.Add(statusStrip);
         Load += (_, _) => { splitLR.SplitterDistance = 330; splitCR.FixedPanel = FixedPanel.Panel2; splitCR.SplitterDistance = Math.Max(400, splitCR.Width - 540); splitMain.SplitterDistance = Math.Max(300, splitMain.Height - 150); };
 
@@ -125,12 +137,27 @@ public sealed class MainForm : Form
         _text.Log = Log; _audio.Log = Log; _video.Log = Log; _parts.Log = Log;
         _audio.VgmstreamPath = FindUp(Path.Combine("thirdparty", "vgmstream", "vgmstream-cli.exe"));
         _tags.Changed += () => UpdateTitle();
+        _atmos.Log = Log;
+        _atmos.Changed += () => UpdateTitle();
+        _atmos.ExeModsChanged += () => ApplyExeMods();
+        _atmos.WorldChanged += async b =>
+        {
+            if (_scene == null || _sceneEntry == null || _scene.Bundle != b) return;
+            if (_scene.Objects.Any(o => o.Dirty)) Log("The open world changed on disk: save or undo its transform edits, then reopen it to see the change.");
+            else { var tab = _center.SelectedTab; await OpenWorld(_sceneEntry, _sceneAct); _center.SelectedTab = tab; }   // stay on the Atmosphere tab
+        };
 
         Shown += async (_, _) =>
         {
             Log("Nuts & Bolts Mod Tool — open or create a workspace to begin (File menu).");
             var args = Environment.GetCommandLineArgs().Skip(1).ToList();
-            if (args.Count > 0) { await RunScript(args); return; }
+            if (args.Count > 0) { _scripted = true; await RunScript(args); return; }
+            // first start ever: offer the beginner's tour
+            if (!_settings.TourOffered)
+            {
+                _settings.TourOffered = true; _settings.Save();
+                if (TourOverlay.AskWelcome(this)) { StartTour(); return; }
+            }
             if (_settings.AutoOpenLast && _settings.LastWorkspace != null && File.Exists(Path.Combine(_settings.LastWorkspace, "workspace.json")))
                 await OpenWorkspace(_settings.LastWorkspace);
         };
@@ -138,7 +165,130 @@ public sealed class MainForm : Form
         {
             if (_scene != null && _scene.Objects.Any(o => o.Dirty) &&
                 MessageBox.Show(this, "There are unsaved world edits. Quit anyway?", Text, MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) e.Cancel = true;
+            else if (_atmos.HasUnsaved && !e.Cancel &&
+                MessageBox.Show(this, "There are unsaved sky, light and fog changes (Atmosphere tab). Quit anyway?", Text, MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) e.Cancel = true;
         };
+    }
+
+    // ------------------------------------------------------------------ beginner's tour, last world
+
+    TourOverlay? _tour;
+    bool _scripted;   // started with script options: no tour, no automatic reopening of the last world
+
+    static Rectangle? Scr(Control c) => c.Visible && c.IsHandleCreated && c.Width > 0 ? c.RectangleToScreen(c.ClientRectangle) : null;
+    static Rectangle? TabHeader(TabControl t, int i) => t.IsHandleCreated && i >= 0 && i < t.TabCount ? t.RectangleToScreen(t.GetTabRect(i)) : null;
+    static int TabIndex(TabControl t, string text) { for (int i = 0; i < t.TabCount; i++) if (t.TabPages[i].Text == text) return i; return -1; }
+
+    static Rectangle? TabHeaders(TabControl t, int from, int to)
+    {
+        if (!t.IsHandleCreated || from < 0 || to < from || to >= t.TabCount) return null;
+        var r = Rectangle.Union(t.GetTabRect(from), t.GetTabRect(to));
+        return t.RectangleToScreen(r);
+    }
+
+    /// <summary>
+    /// The tour for people who have never modded: on the start page it explains workspaces and the menus, then
+    /// (when a workspace is open) every part of the editor in plain words, ending with "your first mod in 5 steps".
+    /// </summary>
+    void StartTour()
+    {
+        _tour?.Dispose();
+        var steps = new List<TourStep>();
+        if (_ws == null || _start.Visible)
+        {
+            bool hasLast = _settings.LastWorkspace != null && File.Exists(Path.Combine(_settings.LastWorkspace, "workspace.json"));
+            steps.Add(new("Welcome to NB Studio!",
+                "NB Studio lets you change Banjo-Kazooie: Nuts & Bolts: its worlds, objects, vehicles, textures (the pictures painted on everything), sounds, text, and even how the game behaves.\n\n" +
+                "This short tour shows you around. Use Next (or the right arrow key), Back, or Skip whenever you like. You can take it again any time from Help > Take the Tour."));
+            steps.Add(new("Step 1: make a workspace",
+                "A workspace is your own private copy of the game that you can change freely. Your real game folder is never touched, so you can't break it.\n\n" +
+                "Click here and choose the folder where your game is (the one with default.xex in it). NB Studio copies what it needs; this takes a minute the first time.",
+                () => _start.CardBounds(hasLast ? 2 : 1) is { Width: > 0 } r ? _start.RectangleToScreen(r) : null));
+            steps.Add(new(hasLast ? "Continue or open" : "Open a workspace",
+                (hasLast ? "Continue opens the workspace you used last time. " : "") +
+                "Open Workspace lets you pick any workspace folder you made before. You can have as many workspaces as you like, for example one per mod.",
+                () => _start.CardBounds(hasLast ? 0 : 0) is { Width: > 0 } r ? _start.RectangleToScreen(r) : null));
+            steps.Add(new("The menus",
+                "Everything else lives up here:\n" +
+                "• File: workspaces, exporting your mod.\n" +
+                "• World: save the world you changed.\n" +
+                "• Build: play your mod in Xenia (F5) and pack it into one small file to share.\n" +
+                "• Mods: one-click changes to the game itself (for example, drive any vehicle in town).\n" +
+                "• Tools: handy extras, like the Xbox 360 Photo Viewer.\n" +
+                "• Help: controls and this tour.",
+                () => Scr(_menu)));
+            steps.Add(new("Now open a workspace",
+                "Make or open a workspace now. As soon as it opens, the tour continues inside the editor and shows you every part of it.",
+                null, () => { _settings.TourPending = _ws == null; _settings.Save(); }));
+        }
+        else
+        {
+            steps.Add(new("Your workspace is open",
+                "The editor has four areas:\n• Left: lists of worlds, objects and game files.\n• Middle: the 3D view and other editors.\n• Right: details of what you selected.\n• Bottom: messages.\n\nLet's look at each one."));
+            steps.Add(new("Worlds",
+                "Every place in the game: Showdown Town, Nutty Acres, Banjoland and more. Double-click one to walk around it in 3D.\n\n" +
+                "Lines that start with ↳ are Acts (the challenges). They use the same world with their own objects.",
+                () => Scr(_leftTabs), () => _leftTabs.SelectedIndex = 0));
+            steps.Add(new("The 3D view",
+                "Your world, in 3D.\n• Look around: hold the right mouse button and move the mouse.\n• Fly: W A S D, Q and E for down and up, Shift to go faster (with something selected, S scales it, so fly back with the Down arrow).\n" +
+                "• The buttons in the top-right corner switch the view: Wireframe, Solid, Textured, or Rendered (lit like the game).\n" +
+                "• Select: left-click an object.\n• Move it: press G and move the mouse, then click to drop it. Press X, Y or Z while moving to slide along one direction only.\n" +
+                "• Scale it: press S (with X, Y or Z for one direction).\n• Made a mistake? Ctrl+Z undoes it.",
+                () => Scr(_center), () => _center.SelectedIndex = 0));
+            steps.Add(new("The toolbar",
+                "Quick buttons for the tools: Select, Move, Rotate and Scale.\n\nSave World (Ctrl+S) writes your changes into the workspace. Launch in Xenia (F5) starts your modded game so you can play it.",
+                () => Scr(_toolbar)));
+            steps.Add(new("Scene",
+                "A list of everything in the open world: buildings, trees, pickups, characters, AI paths and more. Click a name to jump to it in 3D. Untick a box to hide that object while you work. The search box finds things by name.",
+                () => Scr(_leftTabs), () => _leftTabs.SelectedIndex = 1));
+            steps.Add(new("Assets",
+                "Every file inside the game: textures, 3D models, sounds, music, scripts and more. Use the filter to find things. Double-click one to look at it, right-click to export it or replace it with your own.",
+                () => Scr(_leftTabs), () => _leftTabs.SelectedIndex = 2));
+            steps.Add(new("Asset Preview",
+                "Shows the asset you picked: a texture, a model or a sound. This is where you swap a texture for your own picture or a model for your own.\n\n" +
+                "Tip: World > Texture Library shows every texture of the open world, and Replace from Folder swaps many at once (that's how Snowy Showdown Town got its snow).",
+                () => TabHeader(_center, TabIndex(_center, "Asset Preview")), () => _center.SelectedIndex = TabIndex(_center, "Asset Preview")));
+            steps.Add(new("Atmosphere",
+                "The mood of a world, for each time of day: the sky, the sunlight (light) and the fog. Pick colours, slide the brightness, and watch it change live in a running game.\n\n" +
+                "World > Weather adds falling snow. Together, these are how Snowy Showdown Town was made.",
+                () => TabHeader(_center, TabIndex(_center, "Atmosphere")), () => { int i = TabIndex(_center, "Atmosphere"); if (i >= 0) _center.SelectedIndex = i; }));
+            steps.Add(new("Text, Audio, Video, Part Importer",
+                "• Text: change what characters say, in every language.\n• Audio: swap music and sound effects.\n• Video: replace the game's videos.\n• Part Importer: make brand-new vehicle parts for Mumbo's garage.",
+                () => TabHeaders(_center, TabIndex(_center, "Text"), TabIndex(_center, "Part Importer"))));
+            steps.Add(new("Properties",
+                "The exact numbers for the object you selected: where it is (position), which way it faces (rotation) and how big it is (scale). Type a number to place things precisely.",
+                () => Scr(_right), () => { _right.SelectedIndex = 0; _center.SelectedIndex = 0; }));
+            steps.Add(new("Tag Editor",
+                "An object's settings, called tags: how fast, how strong, how much health, which model it uses. Change a value and save. Many fun mods are only a few numbers here.",
+                () => Scr(_right), () => _right.SelectedIndex = 1));
+            steps.Add(new("Live (game)",
+                "Connects to the game while it runs in Xenia: see where you are, teleport, change gravity, and jump the 3D view to where you are in the game.",
+                () => Scr(_right), () => _right.SelectedIndex = 2));
+            steps.Add(new("Messages",
+                "What NB Studio did, and any warnings. If something doesn't work, the reason is usually written here.",
+                () => Scr(_log), () => _right.SelectedIndex = 0));
+            steps.Add(new("Your first mod in 5 steps",
+                "1. In Worlds, double-click Showdown Town.\n2. Click any object, for example a lamp post.\n3. Press G, move the mouse, click to drop it.\n4. Save the world: World > Save (Ctrl+S).\n5. Press F5 to play it in Xenia.\n\n" +
+                "Happy with it? Build > Create Distributable Patch packs your mod into one small file you can share, or play in NB Multiplayer. Have fun!",
+                () => Scr(_menu), () => { _leftTabs.SelectedIndex = 0; _center.SelectedIndex = 0; }));
+        }
+        _tour = new TourOverlay(this, steps);
+        _tour.Finished += () => BeginInvoke(() => { _tour?.Dispose(); _tour = null; });
+        _tour.Start();
+    }
+
+    static string WorldKey(WorldEntry w, ActEntry? act) => $"{w.Bundle:x6}|{(act != null ? act.ActBundle.ToString("x6") : "")}";
+
+    /// <summary>Reopens the world (or Act) that was last open in this workspace, so you're back where you were.</summary>
+    async Task OpenLastWorld()
+    {
+        if (_ws == null || !_settings.LastWorlds.TryGetValue(_ws.Root, out var key)) return;
+        var item = _worlds.Items.OfType<WorldItem>().FirstOrDefault(i => WorldKey(i.Entry, i.Act) == key);
+        if (item == null) return;
+        _worlds.SelectedItem = item;
+        _center.SelectedIndex = 0;
+        Log($"Reopening {(item.Act?.Display ?? item.Entry.Display)} (last world viewed in this workspace).");
+        await OpenWorld(item.Entry, item.Act);
     }
 
     Matrix4x4 _pendingBefore;
@@ -181,21 +331,31 @@ public sealed class MainForm : Form
         var world = new ToolStripMenuItem("&World");
         world.DropDownItems.Add(new ToolStripMenuItem("&Save World Changes to Workspace", null, (_, _) => SaveWorld(), Keys.Control | Keys.S));
         world.DropDownItems.Add("Texture &Library (all textures of this world)…", null, (_, _) => OpenTextureLibrary(null));
+        world.DropDownItems.Add("&Atmosphere: Sky, Light && Fog…", null, (_, _) => ShowAtmosphere(null));
+        world.DropDownItems.Add("&Weather (Falling Snow)…", null, (_, _) => ShowAtmosphere("weather"));
+        world.DropDownItems.Add(new ToolStripSeparator());
         world.DropDownItems.Add("Export Whole Scene as OBJ…", null, (_, _) => ExportScene());
         world.DropDownItems.Add("Export Scene Placement List (CSV)…", null, (_, _) => ExportPlacements());
 
         var view = new ToolStripMenuItem("&View");
         var vT = new ToolStripMenuItem("Terrain") { Checked = true, CheckOnClick = true }; vT.CheckedChanged += (_, _) => { _view.ShowTerrain = vT.Checked; _view.Refresh3D(); };
         var vS = new ToolStripMenuItem("Scenery") { Checked = true, CheckOnClick = true }; vS.CheckedChanged += (_, _) => { _view.ShowScenery = vS.Checked; _view.Refresh3D(); };
-        var vX = new ToolStripMenuItem("Textures") { Checked = true, CheckOnClick = true }; vX.CheckedChanged += (_, _) => { _view.Textured = vX.Checked; _view.Refresh3D(); };
-        var vW = new ToolStripMenuItem("Wireframe") { CheckOnClick = true }; vW.CheckedChanged += (_, _) => _view.Wireframe = vW.Checked;
+        // shading of the 3D view (also the bar in its top-right corner; Shift+Z cycles); remembered between sessions
+        var vMode = new ToolStripMenuItem("View &Mode");
+        foreach (var vm in Enum.GetValues<ViewMode>())
+        {
+            var mi = new ToolStripMenuItem(vm.ToString()) { Tag = vm, Checked = _view.ViewMode == vm };
+            mi.Click += (_, _) => _view.ViewMode = vm;
+            vMode.DropDownItems.Add(mi);
+        }
+        _view.ViewModeChanged += m => { foreach (ToolStripMenuItem mi in vMode.DropDownItems) mi.Checked = (ViewMode)mi.Tag! == m; };
         var vM = new ToolStripMenuItem("Markers (actors, pickups, paths)") { Checked = true, CheckOnClick = true }; vM.CheckedChanged += (_, _) => { _view.ShowMarkers = vM.Checked; _view.Refresh3D(); };
         var vC = new ToolStripMenuItem("Collision (Havok)") { CheckOnClick = true, ToolTipText = "Wireframe of the Havok collision: terrain cyan, scenery yellow" };
         vC.CheckedChanged += (_, _) => { _ = ToggleCollision(vC.Checked); };
         _viewCollision = vC;
         var vP = new ToolStripMenuItem("Paths (path-node links)") { Checked = true, CheckOnClick = true };
         vP.CheckedChanged += (_, _) => { _view.ShowPaths = vP.Checked; _view.Refresh3D(); };
-        view.DropDownItems.AddRange(new ToolStripItem[] { vT, vS, vM, vP, vC, vX, vW });
+        view.DropDownItems.AddRange(new ToolStripItem[] { vMode, new ToolStripSeparator(), vT, vS, vM, vP, vC });
 
         var build = new ToolStripMenuItem("&Build");
         build.DropDownItems.Add("&Validate Workspace", null, async (_, _) => await ValidateWorkspace());
@@ -286,7 +446,8 @@ public sealed class MainForm : Form
         };
         var help = new ToolStripMenuItem("&Help");
         help.DropDownItems.Add("Controls", null, (_, _) => MessageBox.Show(this,
-            "3D view:\n  Right-drag: look    WASD / Q E: fly (Shift = fast)    Wheel: dolly    Middle-drag: pan\n  Left-click: select    F: focus selection    Esc: deselect\n  1 / 2 / 3: move / rotate / scale mode; drag the selected object with the left button.\n  Hold X, Y or Z while dragging to constrain to that axis.\n  Right-click an object for its context menu.\n\nEdits are held in memory until World > Save (Ctrl+S) writes the bundle into the workspace.", "Controls"));
+            "3D view:\n  Right-drag: look    WASD / Q E or the arrow keys: fly (Shift = fast; with a selection S scales: fly back with Down, or while right-dragging)\n  Wheel: dolly    Middle-drag: pan    Left-click: select    F: focus selection    Esc: deselect\n  View modes: the bar in the top-right corner (Wire, Solid, Texture, Render) or Shift+Z. Render uses the level's light setup (click the light line to switch).\n\nTransforms (Blender style), with an object selected:\n  G move on the camera plane, R rotate, S scale; then X / Y / Z constrain to that world axis (drawn as a line in the axis colour;\n  press again for the object's own axis, again for free). Type a value (e.g. G Z 5 Enter); Ctrl snaps.\n  Left click / Enter confirms (one undo step), right click / Esc cancels.\n  1 / 2 / 3: move / rotate / scale gizmo; drag the selection with the left button (ground plane), or drag an axis handle\n  (or hold X, Y or Z) to constrain to that axis.\n  Right-click an object for its context menu.\n\nEdits are held in memory until World > Save (Ctrl+S) writes the bundle into the workspace.", "Controls"));
+        help.DropDownItems.Add("Take the Tour (for beginners)", null, (_, _) => StartTour());
         help.DropDownItems.Add("File Format Notes (docs)", null, (_, _) => OpenDocs());
         ms.Items.AddRange(new ToolStripItem[] { file, edit, world, view, build, tools, mods, help });
         return ms;
@@ -373,6 +534,8 @@ public sealed class MainForm : Form
             await LoadIndex(false);
             UpdateTitle();
             _start.Visible = false;
+            if (_settings.TourPending) { _settings.TourPending = false; _settings.Save(); StartTour(); }
+            else if (!_scripted) await OpenLastWorld();
         }
         catch (Exception e) { _start.SetStatus(""); Error("Opening workspace failed", e); }
     }
@@ -399,6 +562,7 @@ public sealed class MainForm : Form
         _tags.Index = _index;
         try { _text.SetWorkspace(_ws); _audio.SetWorkspace(_ws, _index); _video.SetWorkspace(_ws); } catch (Exception e) { Log("Media panels: " + e.Message); }
         try { _parts.SetWorkspace(_ws, _index); } catch (Exception e) { Log("Part importer: " + e.Message); }
+        try { _atmos.SetWorkspace(_ws, _index); } catch (Exception e) { Log("Atmosphere: " + e.Message); }
         Log($"Asset index: {_index.Entries.Count} assets in {_index.BundleSummary.Count} bundles; {_worlds.Items.Count} world scenes (double-click one to open).");
     }
 
@@ -461,23 +625,32 @@ public sealed class MainForm : Form
         finally { _busy = false; SetProgress(null, 0); }
     }
 
-    async Task CreatePatch()
+    /// <param name="script">Automation (--patch-create): fills the shown dialog like a user and returns the target file.</param>
+    async Task CreatePatch(Func<Panels.PatchInfoDialog, Task<string?>>? script = null)
     {
         if (_ws == null) return;
         if (_scene != null && _scene.Objects.Any(o => o.Dirty)) Log("Note: unsaved world edits are not in the patch (World > Save first).");
+        if (_atmos.HasUnsaved) Log("Note: unsaved sky, light and fog changes are not in the patch (Atmosphere > Save to Workspace first).");
         var changed = _ws.ModifiedFiles(hash: false);
         var guess = ModCategories.Suggest(new PatchPackage.PatchManifest { Files = changed.Select(f => new PatchPackage.PatchFile { Path = f.Replace('\\', '/') }).ToList() });
         using var info = new Panels.PatchInfoDialog(Path.GetFileName(_ws.Root.TrimEnd('\\', '/')), Environment.UserName, guess, changed.Count, _ws.Manifest.ExeMods.Count);
-        if (info.ShowDialog(this) != DialogResult.OK) return;
-        using var d = new SaveFileDialog { Filter = "NB patch (*.nbpatch)|*.nbpatch", FileName = string.Concat(info.ModName.Where(c => !Path.GetInvalidFileNameChars().Contains(c))) + ".nbpatch", Title = "Save distributable patch" };
-        if (d.ShowDialog(this) != DialogResult.OK) return;
-        var ws = _ws; var target = d.FileName;
+        string target;
+        if (script == null)
+        {
+            if (info.ShowDialog(this) != DialogResult.OK) return;
+            using var d = new SaveFileDialog { Filter = "NB patch (*.nbpatch)|*.nbpatch", FileName = string.Concat(info.ModName.Where(c => !Path.GetInvalidFileNameChars().Contains(c))) + ".nbpatch", Title = "Save distributable patch" };
+            if (d.ShowDialog(this) != DialogResult.OK) return;
+            target = d.FileName;
+        }
+        else if (await script(info) is string t) target = t; else return;
+        var ws = _ws;
         _busy = true; SetProgress("Building patch…", 0);
         try
         {
             var man = await Task.Run(() => NB.Core.Project.PatchPackage.Build(ws, target, info.ModName, info.Author, info.Description.Length > 0 ? info.Description : "Made with NB Studio",
                 true, new Progress<(string F, double P)>(p => BeginInvoke(() => SetProgress("Delta " + p.F, p.P))), null,
-                m => { m.Version = info.Version; m.Category = info.Category; m.Tags = info.Tags; m.Multiplayer = info.Multiplayer; }));
+                m => { m.Version = info.Version; m.Category = info.Category; m.Tags = info.Tags; m.Multiplayer = info.Multiplayer; if (info.Pictures.Count > 0) m.Extra[Panels.PatchPictures.ExtraKey] = Panels.PatchPictures.EntryList(info.Pictures); }));
+            if (info.Pictures.Count > 0) Log($"  {Panels.PatchPictures.AddTo(target, info.Pictures)} picture(s) stored in the patch");
             foreach (var f in man.Files) Log($"  {f.Kind} {f.Path}: {f.CopiedBytes:N0} bytes from the original + {f.LiteralBytes:N0} new");
             Log($"Patch written: {target} ({new FileInfo(target).Length:N0} bytes, {man.Files.Count} file(s){(man.ExeMods.Count > 0 ? ", executable mods: " + string.Join(", ", man.ExeMods.Select(m => m.Id)) : "")}). It contains no original game data.");
         }
@@ -524,7 +697,8 @@ public sealed class MainForm : Form
         {
             var man = await Task.Run(() => PatchPackage.BuildFromFolders(rep, target, info.ModName, info.Author, info.Description,
                 new Progress<(string F, double P)>(p => BeginInvoke(() => SetProgress("Delta " + p.F, p.P))),
-                m => { m.Version = info.Version; m.Category = info.Category; m.Tags = info.Tags; m.Multiplayer = info.Multiplayer; }));
+                m => { m.Version = info.Version; m.Category = info.Category; m.Tags = info.Tags; m.Multiplayer = info.Multiplayer; if (info.Pictures.Count > 0) m.Extra[Panels.PatchPictures.ExtraKey] = Panels.PatchPictures.EntryList(info.Pictures); }));
+            if (info.Pictures.Count > 0) Log($"  {Panels.PatchPictures.AddTo(target, info.Pictures)} picture(s) stored in the mod");
             foreach (var f in man.Files) Log($"  {f.Kind} {f.Path}: {f.CopiedBytes:N0} bytes from the original + {f.LiteralBytes:N0} new");
             Log($"Mod written: {target} ({new FileInfo(target).Length:N0} bytes, {man.Files.Count} file(s){(man.ExeMods.Count > 0 ? ", executable mods: " + string.Join(", ", man.ExeMods.Select(m => m.Id)) : "")}).");
             _busy = false; SetProgress(null, 0);
@@ -726,6 +900,16 @@ public sealed class MainForm : Form
         catch (Exception e) { Error("Model import failed", e); }
     }
 
+    // ------------------------------------------------------------------ atmosphere
+
+    /// <summary>World > Atmosphere / Weather: the Atmosphere tab (sky, light, fog of each time of day; falling snow).</summary>
+    void ShowAtmosphere(string? entry)
+    {
+        SelectCenter("Atmosphere");
+        if (_scene == null) { Log("Atmosphere: open a world first (Worlds tab, double-click Showdown Town)."); return; }
+        if (entry != null) try { _atmos.ScriptSelect(entry); } catch (Exception) { }
+    }
+
     // ------------------------------------------------------------------ texture library
 
     Panels.TextureLibraryForm? _texLib;
@@ -748,6 +932,25 @@ public sealed class MainForm : Form
         public TextureHost(MainForm f, string? model) { _f = f; _model = model; }
         WorldScene Scene => _f._scene ?? throw new InvalidOperationException("no world open");
         public string EditFolder => Path.Combine(_f._ws!.Root, "texture_edits");
+
+        public IReadOnlyCollection<string> WorldTextureStems =>
+            Scene.Caff.Symbols.Select(AssetIds.DisplayName).Where(n => n.StartsWith("aid_texture_")).Select(TextureReplacer.Stem).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+
+        public async Task<string> ReplaceManyAsync(List<(string Stem, string File)> items)
+        {
+            var f = _f; var sc = Scene; var ws = f._ws!;
+            if (sc.Objects.Any(x => x.Dirty)) throw new InvalidOperationException("Save or undo the transform edits in this world first (World > Save).");
+            var res = await Task.Run(() =>
+            {
+                var imgs = items.Select(i => { var (rgba, w, h) = ImageIO.Load(i.File); return (i.Stem, rgba, w, h); }).ToList();
+                return TextureReplacer.ReplaceMany(ws, sc.Bundle, imgs);
+            });
+            foreach (var n in res.Notes.Where(n => !n.Contains("re-encoded"))) f.Log("  " + n);
+            string summary = $"Replaced {items.Count} texture(s) of world {sc.Bundle:x6}: {res.ResidentAssets} resident and {res.StreamedAssets} streamed asset(s) re-encoded.";
+            f.Log("texture library: " + summary + " Reloading world…");
+            await f.OpenWorld(f._sceneEntry!, f._sceneAct);
+            return summary;
+        }
 
         public (byte[] Rgba, int W, int H)? LoadFull(string stem) => Scene.Textures?.LoadFull(stem) ?? Scene.LoadTexture(stem);
 
@@ -939,7 +1142,7 @@ public sealed class MainForm : Form
                 act != null ? new[] { act.ActBundle } : null));
             // textures: resolve every diffuse texture up front across the whole workspace (world bundle, shared/common
             // bundles, stream archives) and report what could not be found
-            scene.Textures = new NB.Core.Textures.TextureResolver(ws, index, scene.Caff);
+            scene.Textures = new NB.Core.Textures.TextureResolver(ws, index, scene.Caff, w.Bundle);
             var texNames = scene.DiffuseTextureNames().ToList();
             await Task.Run(() =>
             {
@@ -950,6 +1153,8 @@ public sealed class MainForm : Form
                 }
             });
             _scene = scene; _sceneEntry = w; _sceneAct = act; _undo.Clear(); _redo.Clear();
+            if (_ws != null) { _settings.LastWorlds[_ws.Root] = WorldKey(w, act); _settings.Save(); }
+            try { _atmos.SetWorld(w.Bundle, w.Display); } catch (Exception e) { Log("Atmosphere: " + e.Message); }
             _view.SetScene(scene);
             FillTree();
             Log($"Opened {(act?.Display ?? w.Display)} (world bundle {w.Bundle:x6}{(act != null ? $", act bundle {act.ActBundle:x6} markers" : "")}): {scene.Objects.Count} objects, {scene.Models.Count} reference models.");
@@ -1033,6 +1238,7 @@ public sealed class MainForm : Form
 
     void Undo()
     {
+        _view.CancelTransform();   // a G / R / S transform in progress is cancelled, not undone
         if (_undo.Count == 0) return;
         var u = _undo.Pop(); u.Obj.Transform = u.Before; _redo.Push(u);
         _view.Select(u.Obj); _view.Refresh3D(); UpdateTitle();
@@ -1040,6 +1246,7 @@ public sealed class MainForm : Form
 
     void Redo()
     {
+        _view.CancelTransform();
         if (_redo.Count == 0) return;
         var u = _redo.Pop(); u.Obj.Transform = u.After; _undo.Push(u);
         _view.Select(u.Obj); _view.Refresh3D(); UpdateTitle();
@@ -1070,7 +1277,7 @@ public sealed class MainForm : Form
     void UpdateTitle()
     {
         int dirty = _scene?.Objects.Count(o => o.Dirty) ?? 0;
-        Text = "Nuts & Bolts Mod Tool" + (_ws != null ? $" — {Path.GetFileName(_ws.Root)}" : "") + (_scene != null ? $" — {WorldCatalog.DisplayNames.GetValueOrDefault(_scene.Background.View.Name.Replace("aid_model_banjox_background_", "").Replace("_default", ""), "")} [{_scene.Bundle:x6}]" : "") + (dirty > 0 || _tags.HasUnsaved ? " *" : "");
+        Text = "Nuts & Bolts Mod Tool" + (_ws != null ? $" — {Path.GetFileName(_ws.Root)}" : "") + (_scene != null ? $" — {WorldCatalog.DisplayNames.GetValueOrDefault(_scene.Background.View.Name.Replace("aid_model_banjox_background_", "").Replace("_default", ""), "")} [{_scene.Bundle:x6}]" : "") + (dirty > 0 || _tags.HasUnsaved || _atmos.HasUnsaved ? " *" : "");
     }
 
     // ------------------------------------------------------------------ export
@@ -1336,6 +1543,8 @@ public sealed class MainForm : Form
     ///   NBModStudio --workspace W --world 234cec --select mumbosgarage --move 0,15,0 --save --focus --shot a.png --window b.png --exit
     /// Every step goes through the same code paths as the UI.
     /// </summary>
+    readonly List<string> _scriptPictures = new();
+
     async Task RunScript(List<string> a)
     {
         var logFile = a.Contains("--log") ? a[a.IndexOf("--log") + 1] : null;
@@ -1552,14 +1761,65 @@ public sealed class MainForm : Form
                         var e = _index!.Entries.First(x => x.Name.Contains(q, StringComparison.OrdinalIgnoreCase) && !x.Streamed);
                         _center.SelectedIndex = 1; _preview.Show(_ws!, e, Log); _tags.ShowAsset(_ws!, e); L($"script: previewing {e.Name}"); break;
                     }
+                    // ---- Atmosphere tab, weather, texture batch, patch details (same code paths as the controls)
+                    case "--atmos": ShowAtmosphere(null); await Task.Delay(300); L("script: atmosphere: " + _atmos.ScriptState()); break;
+                    case "--atmos-select": { var q = Next(); L($"script: atmosphere {_atmos.ScriptSelect(q)}: {_atmos.ScriptState()}"); await Task.Delay(200); break; }
+                    case "--atmos-set": { var f = Next(); var v = Next(); _atmos.ScriptSet(f, v); L($"script: atmosphere {f} = {v}: {_atmos.ScriptState()}"); break; }
+                    case "--atmos-winter": _atmos.ApplyWinter(); L("script: atmosphere winter preset: " + _atmos.ScriptState()); break;
+                    case "--atmos-sky":
+                    {
+                        var q = Next(); var file = Next();
+                        var stem = _atmos.SkyStems.First(x => x.Contains(q, StringComparison.OrdinalIgnoreCase));
+                        L($"script: sky texture {stem} <- {file}: {(await _atmos.ReplaceSky(stem, file, confirm: false) ? "replaced" : "FAILED")}"); break;
+                    }
+                    case "--atmos-save": _atmos.Save(); L("script: atmosphere saved"); break;
+                    case "--atmos-discard": _atmos.Discard(); L("script: atmosphere changes discarded: " + _atmos.ScriptState()); break;
+                    case "--atmos-live": { int pid = int.Parse(Next()); L("script: atmosphere live: " + _atmos.AttachLive(pid)); break; }
+                    case "--atmos-live-push": L($"script: atmosphere live push: {_atmos.PushLive()}; game reads back {_atmos.ReadLive()}"); break;
+                    case "--weather-apply": await _atmos.ApplySnow(); L("script: weather applied: " + _atmos.ScriptState()); break;
+                    case "--weather-remove": await _atmos.RemoveSnow(confirm: false); L("script: weather removed: " + _atmos.ScriptState()); break;
+                    case "--texlib-folder":
+                    {
+                        var dir = Next();
+                        L($"script: texture library replace from folder {dir}: {await _texLib!.ReplaceFromFolder(dir, confirm: false)}");
+                        L("script:   replaced: " + string.Join(", ", _texLib!.LastBatch.Select(x => x.Replace("aid_texture_banjox_", "")))); break;
+                    }
+                    case "--texlib-folder-shot":
+                    {
+                        var dir = Next(); var png = Next();
+                        using var dlg = new Panels.BatchTextureDialog(new TextureHost(this, null), dir);
+                        dlg.Show(this); for (int k = 0; k < 400 && dlg.Visible; k++) { Application.DoEvents(); await Task.Delay(25); }
+                        using (var bmp = new Bitmap(dlg.Width, dlg.Height)) { dlg.DrawToBitmap(bmp, new Rectangle(0, 0, dlg.Width, dlg.Height)); bmp.Save(png); }
+                        L($"script: replace-from-folder dialog: {dlg.Matches.Count} match(es), {dlg.Unmatched.Count} unmatched; captured {png}");
+                        dlg.Close(); break;
+                    }
+                    case "--patch-picture": _scriptPictures.Add(Next()); break;
+                    case "--patch-create":
+                    {
+                        // --patch-create <out.nbpatch> <name> <version> <author> <category> <tags> <multiplayer> <description> <dialog png>
+                        var target = Next(); var name = Next(); var ver = Next(); var author = Next(); var cat = Next(); var tags = Next(); var mp = Next(); var desc = Next(); var png = Next();
+                        await CreatePatch(async info =>
+                        {
+                            info.ScriptFill(name, ver, author, cat, tags, mp, desc);
+                            foreach (var p in _scriptPictures) info.AddPicture(p);
+                            info.Show(this); Application.DoEvents(); await Task.Delay(400); Application.DoEvents();
+                            using (var bmp = new Bitmap(info.Width, info.Height)) { info.DrawToBitmap(bmp, new Rectangle(0, 0, info.Width, info.Height)); bmp.Save(png); }
+                            info.Hide();
+                            return target;
+                        });
+                        L($"script: patch created {target} ({(File.Exists(target) ? new FileInfo(target).Length : 0):N0} bytes)"); break;
+                    }
                     case "--log": i++; break;
+                    case "--start-bg": { var f = Next(); _start.SetBackground(f); L("script: start page background " + f); break; }
                     case "--exit": L("script: exit"); Close(); return;
-                    default: L("script: unknown argument " + a[i]); break;
+                    default:
+                        if (await _view.RunScriptCommand(a[i], Next, L)) break;
+                        L("script: unknown argument " + a[i]); break;
                 }
                 await Task.Delay(50);
             }
         }
-        catch (Exception e) { L("script error: " + e); }
+        catch (Exception e) { L("script error: " + e); if (a.Contains("--exit")) Close(); }
     }
 
     // ------------------------------------------------------------------ helpers

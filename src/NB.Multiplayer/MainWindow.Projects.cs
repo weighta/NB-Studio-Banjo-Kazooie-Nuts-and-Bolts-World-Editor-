@@ -211,7 +211,31 @@ public partial class MainWindow
         if (!install) { RefreshStudio(); return; }
         var exe = StudioManager.Exe(S);
         if (_studioLatest == null) { StudioStatus.Text = "Could not reach GitHub. Try again later."; return; }
-        if (exe != null && StudioManager.VersionOf(exe) >= _studioLatest.Version) { RefreshStudio(); return; }
+        if (exe != null && StudioManager.VersionOf(exe) >= _studioLatest.Version) { RefreshStudio(); StudioStatus.Text += "\nYou have the latest version."; return; }
+        if (exe != null)
+        {
+            // an update: ask first, in the update banner (Update now / What's new / Later)
+            UpdateText.Text = $"NB Studio {_studioLatest.Version} is available (you have {StudioManager.VersionOf(exe)}). Update it now?";
+            ShowBanner(studio: true);
+            RefreshStudio();
+            return;
+        }
+        await InstallStudioAsync(exe);
+    }
+
+    /// <summary>"Update now" in the banner for NB Studio.</summary>
+    async Task InstallStudioFromBannerAsync()
+    {
+        if (_studioLatest == null) { UpdateBanner.Visibility = Visibility.Collapsed; return; }
+        UpdateNowButton.IsEnabled = false;
+        UpdateText.Text = $"Updating NB Studio to {_studioLatest.Version}... (progress on the Projects page)";
+        await InstallStudioAsync(StudioManager.Exe(S));
+        UpdateBanner.Visibility = Visibility.Collapsed;
+    }
+
+    async Task InstallStudioAsync(string? exe)
+    {
+        if (_studioLatest == null) return;
         StudioGetButton.IsEnabled = false;
         StudioProgress.Visibility = Visibility.Visible;
         try

@@ -148,6 +148,7 @@ public static class Editions
             ParkSpot = coop?.Extra.GetValueOrDefault("parkSpot", "") ?? "",
         };
         File.WriteAllText(Path.Combine(root, "edition.json"), JsonSerializer.Serialize(e, JsonOpts));
+        EnsureSafety(game);
         progress.Report(("Done", 1));
         return e;
     }
@@ -197,6 +198,35 @@ public static class Editions
             freed += before - OwnSize(built);
         }
         return freed;
+    }
+
+    /// <summary>
+    /// Builds the game-code fix "unknown-parts-safe" into an edition's default.xex (blueprints with parts the edition
+    /// doesn't have, e.g. ULTRA Parts, no longer crash the game). Only NB Multiplayer's own editions (a folder with
+    /// edition.json above the game folder) are changed, never the player's game; a hard-linked default.xex becomes a
+    /// private copy first. Skipped when already present, or when another mod uses the same words.
+    /// </summary>
+    public static void EnsureSafety(string gameDir)
+    {
+        try
+        {
+            var full = Path.GetFullPath(gameDir).TrimEnd('\\', '/');
+            var root = Path.GetDirectoryName(full);
+            if (root == null || !File.Exists(Path.Combine(root, "edition.json"))) return;
+            var xexPath = Path.Combine(full, "default.xex");
+            if (!File.Exists(xexPath)) return;
+            var xex = NB.Core.Formats.XexFile.Read(File.ReadAllBytes(xexPath));
+            var img = xex.GetImage();
+            var mod = NB.Core.Mods.ExePatches.UnknownPartsSafe;
+            bool present = mod.Words.All(w => w.Address >= xex.ImageBase && w.Address - xex.ImageBase + 4 <= img.Length
+                                              && NB.Core.IO.BE.U32(img, (int)(w.Address - xex.ImageBase)) == w.Patched);
+            if (present || NB.Core.Mods.ExePatches.Check(img, xex.ImageBase, mod).Count > 0) return;
+            var baked = xex.WritePatched(mod.Words.Select(w => (w.Address, w.Patched)));
+            if (!NB.Core.Formats.XexFile.VerifyHashes(baked, out _)) return;
+            NB.Core.IO.FileLinks.MakePrivate(xexPath);
+            File.WriteAllBytes(xexPath, baked);
+        }
+        catch (Exception) { }   // never block a launch or a build
     }
 
     public static void Delete(Edition e)

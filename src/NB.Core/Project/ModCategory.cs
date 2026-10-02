@@ -50,7 +50,12 @@ public static class ProjectRegistry
         public DateTime LastOpened { get; set; }
     }
 
-    public static string FilePath => System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "NBModTool", "projects.json");
+    public static string FilePath => System.IO.Path.Combine(DataDir, "projects.json");
+
+    /// <summary>NB Studio's settings folder (%APPDATA%/NBModTool); the NB_STUDIO_DATA environment variable points it
+    /// elsewhere, so scripted tests and side-by-side runs never touch the player's own settings.</summary>
+    public static string DataDir => Environment.GetEnvironmentVariable("NB_STUDIO_DATA") is { Length: > 0 } d ? d
+        : System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "NBModTool");
 
     public static List<Entry> Load()
     {

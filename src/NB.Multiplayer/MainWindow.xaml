@@ -51,13 +51,14 @@
         <DockPanel Grid.Column="1">
             <!-- update banner -->
             <Border x:Name="UpdateBanner" DockPanel.Dock="Top" Visibility="Collapsed" Background="#2E2412" BorderBrush="{StaticResource Accent}"
-                    BorderThickness="0,0,0,1" Padding="28,12">
+                    BorderThickness="0,0,0,1" Padding="28,12" ClipToBounds="True">
+                <Border.RenderTransform><TranslateTransform x:Name="UpdateBannerSlide"/></Border.RenderTransform>
                 <DockPanel>
                     <StackPanel Orientation="Horizontal" DockPanel.Dock="Right">
                         <Button x:Name="UpdateNowButton" Style="{StaticResource Primary}" Content="Update now" Padding="16,7" FontSize="13" Click="UpdateNow_Click"/>
                         <Button Content="What's new" Margin="8,0,0,0" Padding="14,7" FontSize="13" Click="WhatsNew_Click"/>
                         <Button Content="Later" Margin="8,0,0,0" Padding="14,7" FontSize="13" Click="UpdateLater_Click"/>
-                        <Button Content="Skip this version" Margin="8,0,0,0" Padding="14,7" FontSize="13" Click="UpdateSkip_Click"/>
+                        <Button x:Name="UpdateSkipButton" Content="Skip this version" Margin="8,0,0,0" Padding="14,7" FontSize="13" Click="UpdateSkip_Click"/>
                     </StackPanel>
                     <StackPanel VerticalAlignment="Center">
                         <TextBlock x:Name="UpdateText" Text="A new version is available." FontWeight="SemiBold"/>

@@ -320,7 +320,7 @@ public sealed class PhotoViewerForm : Form
         try { File.WriteAllBytes(path, ph.Jpeg); return path; } catch (Exception) { return null; }
     }
 
-    static string OptionFile => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "NBModTool", "photo_viewer.txt");
+    static string OptionFile => Path.Combine(NB.Core.Project.ProjectRegistry.DataDir, "photo_viewer.txt");
     static bool LoadAutoExtract() { try { return File.ReadAllText(OptionFile).Contains("autoExtract=1"); } catch (Exception) { return false; } }
     static void SaveAutoExtract(bool on)
     {

@@ -21,7 +21,11 @@ public static class GameLauncher
     {
         if (!File.Exists(XeniaExe)) throw new FileNotFoundException("The Xenia build is missing next to NB Multiplayer (xenia folder). Reinstall.", XeniaExe);
         Directory.CreateDirectory(AppSettings.DataDir);
-        SetProjectTweaks(null, null);   // editions carry their tweaks in their own default.xex
+        KeepBlueprints();
+        // editions carry their tweaks in their own default.xex (plus the parts safety, added here to older editions); the
+        // player's own game folder (Vanilla) is never changed: Xenia applies the safety in memory
+        if (edition.IsVanilla) SetProjectTweaks(Path.Combine(edition.GameDir, "default.xex"), AlwaysOn);
+        else { Editions.EnsureSafety(edition.GameDir); SetProjectTweaks(null, null); }
         Saves.PrepareLaunch(allUnlocked ?? s.UseAllUnlockedSave, forRoom: allUnlocked == true && !s.UseAllUnlockedSave);
         var args = new List<string>();
         var extra = Environment.GetEnvironmentVariable("NB_XENIA_EXTRA");   // testing: extra Xenia options
@@ -52,7 +56,9 @@ public static class GameLauncher
         if (!File.Exists(XeniaExe)) throw new FileNotFoundException("The Xenia build is missing next to NB Multiplayer (xenia folder). Reinstall.", XeniaExe);
         Directory.CreateDirectory(AppSettings.DataDir);
         var xex = Path.Combine(gameDir, "default.xex");
-        SetProjectTweaks(xex, projectExeMods);
+        KeepBlueprints();
+        Editions.EnsureSafety(gameDir);   // only NB Multiplayer's own editions are changed
+        SetProjectTweaks(xex, (projectExeMods ?? Array.Empty<string>()).Concat(AlwaysOn).Distinct().ToList());
         Saves.PrepareLaunch(s.UseAllUnlockedSave);
         var args = new List<string>();
         var extra = Environment.GetEnvironmentVariable("NB_XENIA_EXTRA");
@@ -69,6 +75,38 @@ public static class GameLauncher
     /// Xenia loads patch files from &lt;storage root&gt;\patches for every game with a matching executable. A project's
     /// tweaks are written there only for that launch; any other launch removes them again (so Vanilla stays vanilla).
     /// </summary>
+    /// <summary>Game-code fixes every game gets: blueprints with parts the game lacks (e.g. ULTRA Parts) never crash it.</summary>
+    public static readonly string[] AlwaysOn = { "unknown-parts-safe" };
+
+    /// <summary>
+    /// The player's blueprint library is kept safe (BlueprintVault): every blueprint seen is copied into the vault, and
+    /// ones missing from the profile the game will sign in are put back. Never blocks a launch.
+    /// </summary>
+    public static void KeepBlueprints()
+    {
+        try
+        {
+            BlueprintVault.Harvest(StudioContentRoots());
+            if (Saves.ActiveProfile() is { } p) BlueprintVault.RestoreInto(p);
+        }
+        catch (Exception) { }
+    }
+
+    /// <summary>NB Studio's Xenia content folder (its F5 / Try it launches use that Xenia's own storage), read only.</summary>
+    public static IEnumerable<string> StudioContentRoots()
+    {
+        string? xenia = null;
+        try
+        {
+            var f = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "NBModTool", "settings.json");
+            if (File.Exists(f)) xenia = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(f))?["XeniaPath"]?.GetValue<string>();
+        }
+        catch (Exception) { }
+        var dir = xenia != null && File.Exists(xenia) ? Path.GetDirectoryName(xenia) : null;
+        if (dir != null && File.Exists(Path.Combine(dir, "portable.txt"))) yield return Path.Combine(dir, "content");
+        yield return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Xenia", "content");
+    }
+
     static void SetProjectTweaks(string? xex, IReadOnlyList<string>? ids)
     {
         var mods = ids == null ? new List<NB.Core.Mods.ExeMod>() : NB.Core.Mods.ExePatches.ResolveAll(ids);

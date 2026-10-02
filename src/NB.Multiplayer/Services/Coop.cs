@@ -23,13 +23,16 @@ namespace NB.Multiplayer.Services;
 /// <item>9 vehicle design chunk: i64 owner, u32 design hash, u32 total length, u32 offset, u16 length, data from byte 32
 /// (designs are a few KB: sent in pieces that fit one unreliable message, again every 2 seconds)</item>
 /// <item>10 vehicle damage: i64 owner, <see cref="CoopDamage"/> from byte 16</item>
-/// <item>11 shots: i64 owner, <see cref="CoopProjectiles.Write"/> from byte 16 (torpedoes, eggs, grenades, rockets...)</item>
+/// <item>11 shots: i64 owner, <see cref="CoopProjectiles.Write"/> from byte 16 (torpedoes, eggs, grenades, rockets...;
+/// protocol 4: offsets in the vehicle's frame, shot numbers, homing targets and retargets)</item>
+/// <item>12 loose pieces (protocol 4): i64 owner, <see cref="CoopPiece.Write"/> from byte 16 (parts that broke off, while
+/// they move: at most 4 s, 15 times a second)</item>
 /// </list>
 /// </summary>
 public sealed class CoopNet : IDisposable
 {
     /// <summary>State packet layout version. Players with another version are not shown (and are reported).</summary>
-    public const byte Protocol = 3;
+    public const byte Protocol = 4;
     public static readonly int UdpPort = Net.Port + 2;
     public readonly long MyId;
     readonly string _myName;
@@ -62,17 +65,38 @@ public sealed class CoopNet : IDisposable
     readonly ConcurrentDictionary<(long Owner, uint Hash), DesignParts> _parts = new();
     sealed class DesignParts { public byte[] Data = Array.Empty<byte>(); public bool[] Got = Array.Empty<bool>(); public DateTime At; }
     const int DesignChunk = 1024;
-    /// <summary>Shots other players fired (owner, shots), replayed from their puppets.</summary>
-    public readonly ConcurrentQueue<(long Owner, List<CoopShot> Shots)> Shots = new();
+    /// <summary>Shots other players fired (owner, shots, retargets of their homing shots in flight), replayed from their puppets.</summary>
+    public readonly ConcurrentQueue<(long Owner, List<CoopShot> Shots, List<CoopRetarget> Retargets)> Shots = new();
+    /// <summary>Other players' loose pieces (owner, pieces, when they arrived).</summary>
+    public readonly ConcurrentQueue<(long Owner, List<CoopPiece> Pieces, DateTime At)> Pieces = new();
+    /// <summary>Other players' measured accelerations (from their consecutive states).</summary>
+    readonly ConcurrentDictionary<long, System.Numerics.Vector3> _accel = new();
 
-    public void SendShots(IReadOnlyList<CoopShot> shots)
+    public void SendShots(IReadOnlyList<CoopShot> shots, IReadOnlyList<CoopRetarget>? retargets = null)
     {
-        if (shots.Count == 0) return;
-        var body = CoopProjectiles.Write(shots);
+        if (shots.Count == 0 && (retargets == null || retargets.Count == 0)) return;
+        var body = CoopProjectiles.Write(shots, retargets);
         var p = Header(11, 16 + body.Length);
         BE.W64(p, 8, (ulong)MyId); body.CopyTo(p, 16);
         Send(p);
     }
+
+    /// <summary>The local vehicle's loose pieces that still move.</summary>
+    public void SendPieces(IReadOnlyList<CoopPiece> pieces)
+    {
+        if (pieces.Count == 0) return;
+        var body = CoopPiece.Write(pieces);
+        var p = Header(12, 16 + body.Length);
+        BE.W64(p, 8, (ulong)MyId); body.CopyTo(p, 16);
+        Send(p);
+    }
+
+    /// <summary>How old a packet of player <paramref name="id"/> is when it arrives here (their delay to the host + ours), seconds.</summary>
+    public float DelayOf(long id) =>
+        (float)(((Remotes.TryGetValue(id, out var r) ? r.State.DelayMs : 0) + RoundTripMs / 2) / 1000.0);
+
+    /// <summary>Diagnostics: bytes sent by packet type since the start.</summary>
+    public readonly long[] SentBytes = new long[16];
 
     /// <summary>The local player's vehicle design, in pieces.</summary>
     public void SendDesign(CoopDesign d)
@@ -180,6 +204,7 @@ public sealed class CoopNet : IDisposable
 
     void Send(byte[] p)
     {
+        if (p.Length > 4 && p[4] < 16) Interlocked.Add(ref SentBytes[p[4]], p.Length * (_isHost ? Math.Max(1, _peers.Count) : 1));
         if (_isHost) { foreach (var peer in _peers.Values) Try(() => peer.Send(p)); }
         else if (_steamClient != null) Try(() => _steamClient.SendCoop(p));
         else if (_udp != null && _hostUdp != null) Try(() => _udp.Send(p, p.Length, _hostUdp));
@@ -277,8 +302,10 @@ public sealed class CoopNet : IDisposable
             case 9:   // a vehicle design piece
             case 10:  // vehicle damage
             case 11:  // shots
+            case 12:  // loose pieces
                 if (p[4] == 9) OnDesignChunk(p);
-                else if (p[4] == 11) { if ((long)BE.U64(p, 8) != MyId && Shots.Count < 256) Shots.Enqueue(((long)BE.U64(p, 8), CoopProjectiles.Read(p, 16))); }
+                else if (p[4] == 11) { if ((long)BE.U64(p, 8) != MyId && Shots.Count < 256) { var (sh, rt) = CoopProjectiles.Read(p, 16); Shots.Enqueue(((long)BE.U64(p, 8), sh, rt)); } }
+                else if (p[4] == 12) { if ((long)BE.U64(p, 8) != MyId && Pieces.Count < 256) Pieces.Enqueue(((long)BE.U64(p, 8), CoopPiece.Read(p, 16), DateTime.UtcNow)); }
                 else if ((long)BE.U64(p, 8) != MyId && CoopDamage.Read(p, 16) is { } dm
                          && (!Damages.TryGetValue((long)BE.U64(p, 8), out var od) || dm.Seq > od.Seq || od.Seq - dm.Seq > 1000))
                     Damages[(long)BE.U64(p, 8)] = dm;
@@ -315,7 +342,18 @@ public sealed class CoopNet : IDisposable
         {
             // packets can arrive out of order: keep the newest (a restarted game starts counting again: accept a big step back)
             if (!Remotes.TryGetValue(id, out var old) || st.Seq > old.State.Seq || old.State.Seq - st.Seq > 300)
+            {
+                // acceleration from the last two states (sent 30 times a second): vertical flight is predicted with it
+                var a = System.Numerics.Vector3.Zero;
+                if (old.State.Mode == CoopMode.Vehicle && st.Mode == CoopMode.Vehicle && st.Seq > old.State.Seq && st.Seq - old.State.Seq <= 6)
+                {
+                    a = (st.Velocity - old.State.Velocity) / ((st.Seq - old.State.Seq) / 30f);
+                    if (!float.IsFinite(a.X + a.Y + a.Z) || a.Length() > 200) a = System.Numerics.Vector3.Zero;
+                    a = _accel.GetValueOrDefault(id) * 0.5f + a * 0.5f;     // smoothed: contacts make single samples spiky
+                }
+                _accel[id] = a;
                 Remotes[id] = (st, DateTime.UtcNow, name);
+            }
         }
         if (_isHost && reply != null)
         {
@@ -337,7 +375,7 @@ public sealed class CoopNet : IDisposable
         double own = RoundTripMs / 2;
         return Remotes.ToDictionary(kv => kv.Key, kv => new CoopRemote(kv.Value.State,
             (float)((now - kv.Value.Seen).TotalSeconds + (kv.Value.State.DelayMs + own) / 1000.0),
-            Designs.GetValueOrDefault(kv.Key), Damages.GetValueOrDefault(kv.Key)));
+            Designs.GetValueOrDefault(kv.Key), Damages.GetValueOrDefault(kv.Key), _accel.GetValueOrDefault(kv.Key)));
     }
 
     public void Dispose() { _stop.Cancel(); try { _udp?.Dispose(); } catch (Exception) { } }
@@ -363,7 +401,7 @@ public sealed class CoopService : IDisposable
     /// <summary>The name of the local player's vehicle design (null until the game serialized it).</summary>
     public string? LocalVehicle { get; private set; }
     readonly Stopwatch _tick = Stopwatch.StartNew();
-    long _nextSend, _nextPolice, _nextDesign, _nextDamage, _forceDamage, _nextShots;
+    long _nextSend, _nextPolice, _nextDesign, _nextDamage, _forceDamage, _nextShots, _nextPieces, _nextLog;
     uint _sentDesign, _damageSeq;
     int _shotTicks;
     CoopDamage? _sentDamage;
@@ -430,6 +468,14 @@ public sealed class CoopService : IDisposable
                 {
                     _net.SendDesign(design); _sentDesign = design.Hash; _nextDesign = now + 2000;
                 }
+                // parts that broke off the local vehicle: their flight, 15 times a second while they move; a break sends
+                // the damage at once (the others break the same blocks off their puppet without waiting for the 4 Hz tick)
+                if (now >= _nextPieces && _local.Design != 0)
+                {
+                    _nextPieces = now + 66;
+                    _net.SendPieces(sync.ReadLocalPieces());
+                    if (sync.LocalBlocksLost) _nextDamage = _forceDamage = 0;
+                }
                 if (now >= _nextDamage && _local.Design != 0)
                 {
                     _nextDamage = now + 250;
@@ -439,7 +485,7 @@ public sealed class CoopService : IDisposable
                         _net.SendVehicleDamage(dmg); _sentDamage = dmg; _forceDamage = now + 1000;
                     }
                 }
-                if (_local.Mode == CoopMode.Absent)
+                if (_local.Mode is CoopMode.Absent or CoopMode.Garage)
                 {
                     Status = x!.Player == 0 ? "Waiting for gameplay (load a save or start a new game)..." : "Waiting for Showdown Town...";
                     Thread.Sleep(100); continue;
@@ -465,13 +511,22 @@ public sealed class CoopService : IDisposable
                     if (_tick.ElapsedMilliseconds >= _nextShots)
                     {
                         _nextShots = _tick.ElapsedMilliseconds + 16;
-                        _net.SendShots(shots.ReadShots(sync.LocalVehicle));
+                        var mine = shots.ReadShots(sync.LocalVehicle, sync.PlayerOfTarget);
+                        _net.SendShots(mine, shots.Retargets);
                     }
-                    while (_net.Shots.TryDequeue(out var fired)) { uint pup = sync.PuppetOf(fired.Owner); if (pup != 0) shots.Replay(pup, fired.Shots); }
-                    shots.Pump(sync.IsLivePuppet);
+                    while (_net.Shots.TryDequeue(out var fired))
+                    {
+                        uint pup = sync.PuppetOf(fired.Owner);
+                        if (pup != 0) shots.Replay(pup, fired.Owner, fired.Shots, _net.DelayOf(fired.Owner));
+                        shots.Retarget(fired.Owner, fired.Retargets);
+                    }
+                    shots.Pump(sync.IsLivePuppet, p => sync.TargetObjectOf(p, _net.MyId));
                     if (++_shotTicks % 250 == 0) shots.Forget(sync.IsLivePuppet);
                 }
                 else _net.Shots.Clear();
+                while (_net.Pieces.TryDequeue(out var pc))
+                    sync.QueuePieces(pc.Owner, pc.Pieces, _net.DelayOf(pc.Owner) + (float)(DateTime.UtcNow - pc.At).TotalSeconds);
+                Diagnostics(sync, shots, remotes);
                 Status = remotes.Count == 0 ? "In Showdown Town, waiting for other players..."
                     : $"Co-op: {string.Join(", ", _net.Remotes.Values.Select(r => r.Name))} - {sync.Status}";
                 Thread.Sleep(ApplyIntervalMs);
@@ -484,6 +539,31 @@ public sealed class CoopService : IDisposable
     }
 
     static bool SafeExited(Process p) { try { return p.HasExited; } catch (Exception) { return true; } }
+
+    // ---- diagnostics (tests): NB_COOP_LOG=<file> appends a line every 2 s
+    static readonly string? LogPath = Environment.GetEnvironmentVariable("NB_COOP_LOG");
+    long _lastLoop, _maxGap;
+    long[] _sentAt = new long[16];
+    void Diagnostics(CoopSync sync, CoopProjectiles? shots, Dictionary<long, CoopRemote> remotes)
+    {
+        long t = _tick.ElapsedMilliseconds;
+        if (_lastLoop != 0) _maxGap = Math.Max(_maxGap, t - _lastLoop);
+        _lastLoop = t;
+        if (LogPath == null || t < _nextLog) return;
+        double secs = _nextLog == 0 ? Math.Max(1, t / 1000.0) : (t - _nextLog + 2000) / 1000.0;
+        _nextLog = t + 2000;
+        var sent = _net.SentBytes.Select(v => Interlocked.Read(ref v)).ToArray();
+        string rate = string.Join(" ", Enumerable.Range(0, 16).Where(i => sent[i] != _sentAt[i]).Select(i => $"t{i}={(sent[i] - _sentAt[i]) / secs:F0}B/s"));
+        _sentAt = sent;
+        try
+        {
+            File.AppendAllText(LogPath, $"{DateTime.Now:HH:mm:ss.fff} gap {_maxGap}ms scan {sync.LastScanMs:F0}ms remotes {remotes.Count} " +
+                $"shots replayed {shots?.Replayed} skipped {shots?.Skipped} locked {shots?.Locked} retargeted {shots?.Retargeted} pieces {sync.PieceTicks}/{sync.PiecesPlaced} teleports {sync.Teleports} walking {sync.Walking} foot {string.Join(",", sync.FootRequests.Select(kv => kv.Key + ":" + kv.Value))} " +
+                $"vreq {string.Join(",", sync.VehicleRequests.Select(kv => kv.Key + ":" + kv.Value))} sent {rate} | {sync.Assignments} | {sync.LastVehicleEvent}" + Environment.NewLine);
+        }
+        catch (IOException) { }
+        _maxGap = 0;
+    }
 
     public void Dispose() { _stop.Cancel(); try { _net.Leave(); } catch (Exception) { } _net.Dispose(); }
 }

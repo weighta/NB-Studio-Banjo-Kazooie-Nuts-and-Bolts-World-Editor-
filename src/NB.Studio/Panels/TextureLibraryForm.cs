@@ -21,6 +21,10 @@ public interface ITextureHost
     List<TextureItem> Items();
     /// <summary>Folder for "Edit Externally" copies.</summary>
     string EditFolder { get; }
+    /// <summary>Textures stored in the world's own bundle (stems), the scope of Replace from Folder.</summary>
+    IReadOnlyCollection<string> WorldTextureStems { get; }
+    /// <summary>Replaces many textures of the world's bundle in one save (image files), then reloads the world. Returns a summary.</summary>
+    Task<string> ReplaceManyAsync(List<(string Stem, string File)> items);
 }
 
 /// <summary>
@@ -37,7 +41,8 @@ public sealed class TextureLibraryForm : Form
     readonly PictureBox _pic = new() { Dock = DockStyle.Fill, SizeMode = PictureBoxSizeMode.Zoom, BackgroundImageLayout = ImageLayout.Tile };
     readonly TextBox _info = new() { Dock = DockStyle.Bottom, Height = 110, Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Font = new Font("Consolas", 9) };
     readonly FlowLayoutPanel _buttons = new() { Dock = DockStyle.Bottom, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true, Padding = new Padding(2) };
-    readonly TextBox _filter = new() { Dock = DockStyle.Top, PlaceholderText = "Filter textures…" };
+    readonly TextBox _filter = new() { Dock = DockStyle.Fill, PlaceholderText = "Filter textures…" };
+    readonly ComboBox _role = new() { Dock = DockStyle.Right, Width = 150, DropDownStyle = ComboBoxStyle.DropDownList };
     readonly CheckBox _modelOnly = new() { Text = "Only this model (replace makes a copy for it; other models keep the original)", AutoSize = true };
     readonly Label _status = new() { Dock = DockStyle.Bottom, Height = 22, TextAlign = ContentAlignment.MiddleLeft };
     readonly System.Windows.Forms.Timer _loader = new() { Interval = 15 };
@@ -52,7 +57,10 @@ public sealed class TextureLibraryForm : Form
         _pic.BackgroundImage = Checker();
         var split = new SplitContainer { Dock = DockStyle.Fill, FixedPanel = FixedPanel.Panel2 };
         Load += (_, _) => split.SplitterDistance = Math.Max(200, split.Width - 500);   // preview side ~500 px
-        split.Panel1.Controls.Add(_list); split.Panel1.Controls.Add(_filter);
+        var filterRow = new Panel { Dock = DockStyle.Top, Height = _filter.PreferredHeight };
+        filterRow.Controls.Add(_filter); filterRow.Controls.Add(_role);
+        split.Panel1.Controls.Add(_list); split.Panel1.Controls.Add(filterRow);
+        _role.SelectedIndexChanged += (_, _) => Fill();
         split.Panel2.Controls.Add(_pic); split.Panel2.Controls.Add(_info); split.Panel2.Controls.Add(_buttons);
         Controls.Add(split); Controls.Add(_status);
         _list.LargeImageList = _thumbs;
@@ -64,6 +72,7 @@ public sealed class TextureLibraryForm : Form
         Button("Edit Externally", EditExternally, "Export to the workspace's texture_edits folder and open it; edit and save it there, then press Apply Edited File.");
         Button("Apply Edited File", async () => await ApplyEdited(), "Replace the texture with its edited copy from texture_edits.");
         Button("Replace…", async () => await ReplaceFromDialog(), "Replace the texture with an image file (PNG, JPG, BMP, TGA, TIFF).");
+        Button("Replace from Folder…", async () => await ReplaceFromFolder(null), "Replace every texture of this world that has an image named after it in a folder (e.g. the files Export All wrote, edited). Shows current → new for each before anything changes.");
         Button("Open Folder", () => { Directory.CreateDirectory(_host.EditFolder); Process.Start(new ProcessStartInfo(_host.EditFolder) { UseShellExecute = true }); }, "Open the texture_edits folder.");
         _buttons.Controls.Add(_modelOnly);
 
@@ -95,7 +104,12 @@ public sealed class TextureLibraryForm : Form
 
     public void Reload()
     {
-        _items = _host.Items();
+        // colour (diffuse) textures first: they are what a world looks like; detail maps after
+        _items = _host.Items().OrderBy(t => t.Role == "colour" ? 0 : t.Role == "other" ? 1 : 2).ThenBy(t => t.Stem, StringComparer.OrdinalIgnoreCase).ToList();
+        var keep = _role.SelectedItem as string;
+        _role.Items.Clear(); _role.Items.Add("All kinds");
+        foreach (var r in _items.Select(t => t.Role).Distinct().OrderBy(r => r == "colour" ? "" : r)) _role.Items.Add(r);
+        _role.SelectedIndex = Math.Max(0, keep != null ? _role.Items.IndexOf(keep) : 0);
         Fill();
     }
 
@@ -107,7 +121,8 @@ public sealed class TextureLibraryForm : Form
         foreach (var im in _thumbs.Images.Cast<Image>().ToList()) im.Dispose();
         _thumbs.Images.Clear();
         var f = _filter.Text.Trim();
-        foreach (var t in _items.Where(t => f.Length == 0 || t.Stem.Contains(f, StringComparison.OrdinalIgnoreCase)))
+        var role = _role.SelectedIndex > 0 ? _role.SelectedItem as string : null;
+        foreach (var t in _items.Where(t => (f.Length == 0 || t.Stem.Contains(f, StringComparison.OrdinalIgnoreCase)) && (role == null || t.Role == role)))
         {
             var it = new ListViewItem(Short(t.Stem) + "\n" + t.Role) { Tag = t, ToolTipText = t.Stem };
             _list.Items.Add(it); _pending.Enqueue(it);
@@ -134,7 +149,9 @@ public sealed class TextureLibraryForm : Form
                 var img = SafeLoad(t.Stem);
                 if (img != null)
                 {
-                    using var bmp = ImageIO.ToBitmap(img.Value.Rgba, img.Value.W, img.Value.H, keepAlpha: false);
+                    // alpha textures over a checkerboard, like the viewer
+                    using (var cb = new TextureBrush(Checker())) g.FillRectangle(cb, 0, 0, 96, 96);
+                    using var bmp = ImageIO.ToBitmap(img.Value.Rgba, img.Value.W, img.Value.H, keepAlpha: true);
                     float s = Math.Min(96f / bmp.Width, 96f / bmp.Height);
                     int w = Math.Max(1, (int)(bmp.Width * s)), h = Math.Max(1, (int)(bmp.Height * s));
                     g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBilinear;
@@ -247,6 +264,42 @@ public sealed class TextureLibraryForm : Form
         await ReplaceWith(t, d.FileName, _modelOnly.Checked, confirm: true);
     }
 
+    /// <summary>Replace from Folder: matches the folder's images to this world's textures, shows them, replaces the ticked ones
+    /// (also used by Studio scripts with <paramref name="confirm"/> false: every match).</summary>
+    public async Task<string?> ReplaceFromFolder(string? folder, bool confirm = true)
+    {
+        if (folder == null)
+        {
+            using var fd = new FolderBrowserDialog { Description = "Folder with the new images (named like the textures, e.g. from Export All)", UseDescriptionForTitle = true };
+            if (fd.ShowDialog(this) != DialogResult.OK) return null;
+            folder = fd.SelectedPath;
+        }
+        using var dlg = new BatchTextureDialog(_host, folder);
+        if (dlg.Matches.Count == 0)
+        {
+            var msg = $"No image in {folder} is named after a texture of this world ({dlg.Unmatched.Count} file(s) checked). " +
+                      "Name the files like Export All does (e.g. shared_materials_grass_grass1_colour_0x0123abcd.png) or use the full texture name.";
+            if (confirm) MessageBox.Show(this, msg, Text);
+            Log?.Invoke("texture library: " + msg);
+            return null;
+        }
+        List<BatchTextureDialog.Match> chosen;
+        if (confirm) { if (dlg.ShowDialog(this) != DialogResult.OK) return null; chosen = dlg.Chosen; }
+        else { dlg.LoadAll(); chosen = dlg.Chosen; }
+        if (chosen.Count == 0) { Log?.Invoke($"texture library: nothing to replace ({dlg.Matches.Count} image(s) match, all identical to the current textures or unticked)"); return null; }
+        LastBatch = chosen.Select(m => m.Stem).ToList();
+        Log?.Invoke($"texture library: replacing {chosen.Count} texture(s): " + string.Join(", ", chosen.Select(m => Short(m.Stem))));
+        UseWaitCursor = true; Enabled = false;
+        try
+        {
+            var summary = await _host.ReplaceManyAsync(chosen.Select(m => (m.Stem, m.File)).ToList());
+            Reload();
+            _status.Text = summary;
+            return summary;
+        }
+        finally { UseWaitCursor = false; Enabled = true; }
+    }
+
     /// <summary>Replaces <paramref name="t"/> with an image file (also used by Studio scripts).</summary>
     public async Task<string?> ReplaceWith(TextureItem t, string file, bool modelOnly, bool confirm)
     {
@@ -287,6 +340,9 @@ public sealed class TextureLibraryForm : Form
     {
         while (_pending.Count > 0) { LoadSomeThumbs(); await Task.Delay(1); }
     }
+
+    /// <summary>Stems the last Replace from Folder replaced (scripts).</summary>
+    public List<string> LastBatch { get; private set; } = new();
 
     public IEnumerable<string> ListedStems => _list.Items.Cast<ListViewItem>().Select(i => ((TextureItem)i.Tag!).Stem);
 

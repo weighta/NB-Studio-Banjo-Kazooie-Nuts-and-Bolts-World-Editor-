@@ -148,7 +148,10 @@ public sealed class Workspace
         var tmp = path + ".tmp";
         File.WriteAllBytes(tmp, bytes);
         File.Move(tmp, path, true);
-        _residentCache[bundle] = check;
+        // keep the caller's object as the cached bundle: the open world, the tag editor, the atmosphere editor … all edit
+        // the same CaffFile, so a later save by one of them cannot drop the saved edits of another (caching the re-read
+        // copy made every earlier holder stale: a tag edit saved after a world save was lost on the next world save)
+        _residentCache[bundle] = caff;
         Log(Path.GetRelativePath(Game.Root, path), description);
     }
 
@@ -171,6 +174,9 @@ public sealed class Workspace
     public List<string> ModifiedFiles(bool hash = true)
     {
         var list = new List<string>();
+        // without hashing, a same-size file counts as modified when it was written after the copy and the change log names it
+        // (a re-encoded texture keeps the stream archive's size: the quick count used to miss Bundle/50 files)
+        var logged = new HashSet<string>(Manifest.Changes.Select(c => c.File), StringComparer.OrdinalIgnoreCase);
         foreach (var f in Directory.GetFiles(Game.Root, "*", SearchOption.AllDirectories))
         {
             var rel = Path.GetRelativePath(Game.Root, f);
@@ -179,6 +185,7 @@ public sealed class Workspace
             var fi = new FileInfo(f); var oi = new FileInfo(o);
             if (fi.Length != oi.Length) { list.Add(rel); continue; }
             if (hash && fi.LastWriteTimeUtc != oi.LastWriteTimeUtc && !SameContent(f, o)) list.Add(rel);
+            else if (!hash && fi.LastWriteTimeUtc != oi.LastWriteTimeUtc && logged.Contains(rel)) list.Add(rel);
         }
         return list;
     }

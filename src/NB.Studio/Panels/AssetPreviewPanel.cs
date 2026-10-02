@@ -18,9 +18,21 @@ public sealed class AssetPreviewPanel : UserControl
 
     public AssetPreviewPanel()
     {
+        // transparent texels show a checkerboard (alpha textures: glass, foliage, decals)
+        _pic.BackgroundImage = Checker(); _pic.BackgroundImageLayout = ImageLayout.Tile;
         _split.Panel1.Controls.Add(_pic);
         _split.Panel2.Controls.Add(_info);
         Controls.Add(_split); Controls.Add(_buttons);
+    }
+
+    static Bitmap Checker()
+    {
+        var b = new Bitmap(16, 16);
+        using var g = Graphics.FromImage(b);
+        g.Clear(Color.FromArgb(70, 70, 76));
+        using var br = new SolidBrush(Color.FromArgb(52, 52, 58));
+        g.FillRectangle(br, 0, 0, 8, 8); g.FillRectangle(br, 8, 8, 8, 8);
+        return b;
     }
 
     void Button(string text, Action a, bool enabled = true, string? tip = null)
@@ -67,6 +79,8 @@ public sealed class AssetPreviewPanel : UserControl
         var (rgba, w, h) = t.Decode(0);
         _pic.Image = ImageIO.ToBitmap(rgba, w, h);
         sb.AppendLine($"{t.Header}   D3DFORMAT 0x{t.Header.D3DFormat:X8}");
+        int transparent = 0; for (int i = 3; i < rgba.Length; i += 4) if (rgba[i] < 250) transparent++;
+        sb.AppendLine(transparent == 0 ? "alpha: opaque" : $"alpha: {100.0 * transparent / (w * h):0.#}% of the texels are (partly) transparent (checkerboard behind)");
         sb.AppendLine($"stored levels: {string.Join(", ", t.Levels.Select(l => $"L{l.Level} {l.Width}x{l.Height}{(l.PackedX + l.PackedY > 0 ? " (packed tail)" : "")}"))}");
         sb.AppendLine($"GPU blob {gpu.Data.Length:N0} bytes (layout {(t.ExpectedGpuSize == gpu.Data.Length ? "matches" : "MISMATCH")}); showing level {t.Levels[0].Level}.");
         sb.AppendLine("A texture is usually two assets: '…mip' (resident, levels 1..n) and '…top' (streamed, full size). Replace updates both.");

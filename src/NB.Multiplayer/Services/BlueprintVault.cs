@@ -1,0 +1,148 @@
+using System.IO;
+using System.Security.Cryptography;
+using System.Text.Json;
+
+namespace NB.Multiplayer.Services;
+
+/// <summary>
+/// Keeps the player's Nuts &amp; Bolts blueprint library safe. The game stores every saved blueprint as its own content
+/// package (data\content\&lt;xuid&gt;\4D5307ED\00000001\0x0000000N\0000000N, header in Headers\00000001\0x0000000N.header,
+/// display name "VEHICLE: ..."). The vault copies every blueprint it sees into data\blueprint_vault (by SHA-256 of the
+/// data) and puts missing ones back into the signed-in profile before a game starts, so a recreated profile, another
+/// Xenia storage folder or a wiped content folder never loses blueprints. Blueprints the player deleted in the game are
+/// remembered (tombstones) and not brought back.
+/// </summary>
+public static class BlueprintVault
+{
+    const string Title = "4D5307ED", SaveType = "00000001";
+    const int NameField = 0x971A, DisplayName = 0x411;
+    static string Dir => Path.Combine(AppSettings.DataDir, "blueprint_vault");
+    static string IndexFile => Path.Combine(Dir, "vault.json");
+
+    public sealed class Entry
+    {
+        public string Hash { get; set; } = "";
+        public string Name { get; set; } = "";
+        public Dictionary<string, int> SeenAt { get; set; } = new();   // profile xuid -> package index at the last harvest
+        public bool Deleted { get; set; }
+        public DateTime FirstSeen { get; set; }
+    }
+
+    /// <summary>0x00000001..0x00FFFFFF are blueprints; the save slots are 0x0b0a5c5c / 0x0b0d6cca.</summary>
+    static bool IsBlueprint(string folder, out int index)
+    {
+        index = 0;
+        return folder.Length == 10 && folder.StartsWith("0x") &&
+               int.TryParse(folder[2..], System.Globalization.NumberStyles.HexNumber, null, out index) && index >= 1 && index < 0x01000000;
+    }
+
+    static Dictionary<string, Entry> Load()
+    {
+        try { return JsonSerializer.Deserialize<Dictionary<string, Entry>>(File.ReadAllText(IndexFile)) ?? new(); }
+        catch (Exception) { return new(); }
+    }
+    static void Store(Dictionary<string, Entry> v)
+    {
+        Directory.CreateDirectory(Dir);
+        var tmp = IndexFile + ".tmp";
+        File.WriteAllText(tmp, JsonSerializer.Serialize(v, new JsonSerializerOptions { WriteIndented = true }));
+        File.Move(tmp, IndexFile, true);
+    }
+
+    /// <summary>Content roots to read: NB Multiplayer's own, plus NB Studio's Xenia storage when known (read-only).</summary>
+    static IEnumerable<string> ContentRoots(IEnumerable<string>? extra)
+    {
+        yield return Path.Combine(AppSettings.DataDir, "content");
+        foreach (var e in extra ?? Array.Empty<string>()) if (Directory.Exists(e)) yield return e;
+    }
+
+    /// <summary>Copies every blueprint of every profile into the vault. Call when the game has exited and before a launch.
+    /// <paramref name="ownRoot"/> profiles (NB Multiplayer's) also get deletion tracking; extra roots are only read.</summary>
+    public static void Harvest(IEnumerable<string>? extraContentRoots = null)
+    {
+        var v = Load();
+        var ownRoot = Path.Combine(AppSettings.DataDir, "content");
+        foreach (var root in ContentRoots(extraContentRoots))
+        {
+            if (!Directory.Exists(root)) continue;
+            foreach (var prof in Directory.GetDirectories(root))
+            {
+                string xuid = Path.GetFileName(prof);
+                var pkgRoot = Path.Combine(prof, Title, SaveType);
+                var present = new HashSet<string>();
+                if (Directory.Exists(pkgRoot))
+                    foreach (var pkg in Directory.GetDirectories(pkgRoot))
+                    {
+                        if (!IsBlueprint(Path.GetFileName(pkg), out int idx)) continue;
+                        var data = Path.Combine(pkg, Path.GetFileName(pkg)[2..]);
+                        var header = Path.Combine(prof, Title, "Headers", SaveType, Path.GetFileName(pkg) + ".header");
+                        if (!File.Exists(data)) continue;
+                        var bytes = File.ReadAllBytes(data);
+                        if (bytes.Length < 8 + 0x7C) continue;
+                        var hash = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+                        present.Add(hash);
+                        if (!v.TryGetValue(hash, out var e))
+                        {
+                            e = v[hash] = new Entry { Hash = hash, FirstSeen = DateTime.Now, Name = ReadName(bytes) };
+                            Directory.CreateDirectory(Dir);
+                            File.WriteAllBytes(Path.Combine(Dir, hash + ".bp"), bytes);
+                            if (File.Exists(header)) File.Copy(header, Path.Combine(Dir, hash + ".header"), true);
+                        }
+                        e.Deleted = false;
+                        if (root == ownRoot) e.SeenAt[xuid] = idx;
+                    }
+                if (root != ownRoot) continue;
+                // seen in this profile at the last harvest and gone now: the player deleted it in the game
+                foreach (var e in v.Values)
+                    if (e.SeenAt.ContainsKey(xuid) && !present.Contains(e.Hash)) { e.Deleted = true; e.SeenAt.Remove(xuid); }
+            }
+        }
+        Store(v);
+    }
+
+    /// <summary>Puts every vault blueprint the active profile lacks (and the player did not delete) back into it, at the
+    /// lowest free index. Returns how many were restored.</summary>
+    public static int RestoreInto(string profileDir)
+    {
+        var v = Load();
+        string xuid = Path.GetFileName(profileDir);
+        var pkgRoot = Path.Combine(profileDir, Title, SaveType);
+        var hdrRoot = Path.Combine(profileDir, Title, "Headers", SaveType);
+        Directory.CreateDirectory(pkgRoot); Directory.CreateDirectory(hdrRoot);
+        var have = new HashSet<string>(); var used = new HashSet<int>();
+        foreach (var pkg in Directory.GetDirectories(pkgRoot))
+        {
+            if (!IsBlueprint(Path.GetFileName(pkg), out int idx)) continue;
+            var data = Path.Combine(pkg, Path.GetFileName(pkg)[2..]);
+            if (!File.Exists(data)) continue;                // a deleted blueprint leaves its header only
+            used.Add(idx);
+            have.Add(Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(data))).ToLowerInvariant());
+        }
+        int restored = 0, next = 1;
+        foreach (var e in v.Values.Where(e => !e.Deleted && !have.Contains(e.Hash)).OrderBy(e => e.FirstSeen))
+        {
+            var src = Path.Combine(Dir, e.Hash + ".bp");
+            if (!File.Exists(src)) continue;
+            while (used.Contains(next)) next++;
+            if (next > 990) break;                           // the game lists at most 999 content items (incl. 2 save slots)
+            string name = $"0x{next:x8}";
+            Directory.CreateDirectory(Path.Combine(pkgRoot, name));
+            File.Copy(src, Path.Combine(pkgRoot, name, name[2..]), true);
+            var hdr = File.Exists(Path.Combine(Dir, e.Hash + ".header")) ? File.ReadAllBytes(Path.Combine(Dir, e.Hash + ".header"))
+                                                                         : Saves.BlueprintHeaderTemplate(e.Name);
+            var fn = System.Text.Encoding.ASCII.GetBytes(name);
+            Array.Clear(hdr, NameField, 42); fn.CopyTo(hdr, NameField);
+            File.WriteAllBytes(Path.Combine(hdrRoot, name + ".header"), hdr);
+            e.SeenAt[xuid] = next; used.Add(next); restored++;
+        }
+        Store(v);
+        return restored;
+    }
+
+    static string ReadName(byte[] b)
+    {
+        var sb = new System.Text.StringBuilder();
+        for (int o = 8 + 0x20; o + 1 < Math.Min(b.Length, 8 + 0x60); o += 2) { char c = (char)(b[o] << 8 | b[o + 1]); if (c == 0) break; sb.Append(c); }
+        return sb.ToString();
+    }
+}

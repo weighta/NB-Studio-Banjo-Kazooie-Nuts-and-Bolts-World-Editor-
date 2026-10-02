@@ -6,21 +6,25 @@ namespace NB.Core.Live;
 /// <summary>Where a co-op player is.</summary>
 public enum CoopMode : byte
 {
-    /// <summary>Not in Showdown Town (title screen, loading, another world, the garage) or the game is not running.</summary>
+    /// <summary>Not in Showdown Town (title screen, loading, another world) or the game is not running.</summary>
     Absent = 0,
     Vehicle = 1,
     OnFoot = 2,
-    /// <summary>Choosing another vehicle (Change Vehicle): hidden from everyone until done.</summary>
+    /// <summary>Choosing another vehicle (Change Vehicle): the others keep the old vehicle standing with the game's
+    /// vehicle-edit icon over it until the new one arrives.</summary>
     Building = 3,
     /// <summary>(Protocol 2 senders use the Menu / Photo flags instead.)</summary>
     Paused = 4,
+    /// <summary>In Mumbo's garage (Build Vehicle from town, protocol 4): position = where they left town; the others
+    /// show a Mumbo pad icon there.</summary>
+    Garage = 5,
 }
 
 /// <summary>Extra details of a co-op state (shown in the room panel).</summary>
 [Flags]
 public enum CoopFlags : byte { None = 0, Menu = 1, Photo = 2 }
 
-/// <summary>One player's state, as sent 30 times a second in Showdown Town co-op (protocol 3).</summary>
+/// <summary>One player's state, as sent 30 times a second in Showdown Town co-op (protocol 4).</summary>
 public struct CoopState
 {
     public CoopMode Mode;
@@ -35,12 +39,15 @@ public struct CoopState
     public ushort DelayMs;
     /// <summary>Hash of the vehicle design the player drives (<see cref="CoopDesign"/>; 0 = not known / no exe mod).</summary>
     public uint Design;
+    /// <summary>On foot: Banjo's body state id ([[avatar+0xAC8]+0x670]: walk 146, jump 79, wrench spin 150..152...;
+    /// 0 = keep the last one). Rotation is then his heading (a rotation about Y).</summary>
+    public ushort BodyState;
 
     public bool InVehicle => Mode == CoopMode.Vehicle;
     /// <summary>In Showdown Town and visible to the others.</summary>
     public bool Shown => Mode is CoopMode.Vehicle or CoopMode.OnFoot or CoopMode.Paused;
 
-    public const int Size = 4 + 13 * 4 + 4 + 4 + 4;
+    public const int Size = 4 + 13 * 4 + 4 + 4 + 4 + 4;
     public byte[] Write()
     {
         var b = new byte[Size];
@@ -50,7 +57,7 @@ public struct CoopState
         foreach (var f in new[] { Position.X, Position.Y, Position.Z, Rotation.X, Rotation.Y, Rotation.Z, Rotation.W,
                                   Velocity.X, Velocity.Y, Velocity.Z, AngularVelocity.X, AngularVelocity.Y, AngularVelocity.Z })
         { BE.WF32(b, o, f); o += 4; }
-        BE.W32(b, o, Blueprint); BE.W32(b, o + 4, Seq); BE.W32(b, o + 8, Design);
+        BE.W32(b, o, Blueprint); BE.W32(b, o + 4, Seq); BE.W32(b, o + 8, Design); BE.W16(b, o + 12, BodyState);
         return b;
     }
     public static CoopState Read(byte[] b)
@@ -58,17 +65,19 @@ public struct CoopState
         float F(int i) => BE.F32(b, 4 + 4 * i);
         return new CoopState
         {
-            Mode = b[0] <= 4 ? (CoopMode)b[0] : CoopMode.Absent, Flags = (CoopFlags)(b[1] & 3), DelayMs = BE.U16(b, 2),
+            Mode = b[0] <= 5 ? (CoopMode)b[0] : CoopMode.Absent, Flags = (CoopFlags)(b[1] & 3), DelayMs = BE.U16(b, 2),
             Position = new(F(0), F(1), F(2)), Rotation = new(F(3), F(4), F(5), F(6)),
             Velocity = new(F(7), F(8), F(9)), AngularVelocity = new(F(10), F(11), F(12)),
             Blueprint = BE.U32(b, 4 + 13 * 4), Seq = BE.U32(b, 4 + 14 * 4), Design = BE.U32(b, 4 + 15 * 4),
+            BodyState = BE.U16(b, 4 + 16 * 4),
         };
     }
 }
 
 /// <summary>A remote player's latest state and how old it is (seconds since it left that player's game), with the
-/// vehicle design and damage they last sent (null = not received yet).</summary>
-public readonly record struct CoopRemote(CoopState State, float AgeSeconds, CoopDesign? Design = null, CoopDamage? Damage = null);
+/// vehicle design and damage they last sent (null = not received yet) and their measured acceleration (from the
+/// velocities of their last states: used to predict vertical flight).</summary>
+public readonly record struct CoopRemote(CoopState State, float AgeSeconds, CoopDesign? Design = null, CoopDamage? Damage = null, Vector3 Accel = default);
 
 /// <summary>
 /// Showdown Town co-op inside one running game: reads the local player's vehicle and drives "puppet" vehicles (AI
@@ -91,6 +100,9 @@ public sealed partial class CoopSync
     readonly Dictionary<long, uint> _assigned = new();
 
     public int PuppetCount { get; private set; }
+    /// <summary>Diagnostics: remote player -> puppet (design hash, hidden flag).</summary>
+    public string Assignments => string.Join(" ", _assigned.Select(kv => $"{kv.Key & 0xFFFF:X4}->{kv.Value:X8}/{_designOf.GetValueOrDefault(kv.Value):X8}/{_x.U32(kv.Value + 0x1C0)}"))
+        + $" free {string.Join(",", _free.Select(v => v.ToString("X8")))}";
     public string Status { get; private set; } = "";
 
     /// <param name="parkSpot">Where unused puppets wait (out of sight).</param>
@@ -106,15 +118,36 @@ public sealed partial class CoopSync
     static readonly HashSet<uint> TownLevels = new() { 0x1901D1B6, 0x19E00470, 0x196BD4A7, 0x193F0052 };
     const uint LoadingScene = 0x82FACBA4, LoadingTips = 0x005D0000;
 
+    /// <summary>Diagnostics: how long the last vehicle scan took (ms; it runs beside the 30 Hz loop, never in it).</summary>
+    public double LastScanMs { get; private set; }
+    Task<(List<uint> Found, double Ms)>? _scan;
+
     void Rescan(bool force = false)
     {
-        if (!force && DateTime.UtcNow - _lastScan < TimeSpan.FromSeconds(3) && _vehicles.Count > 0) return;
+        // A scan reads the whole guest heap (hundreds of MB, ~0.1-0.5 s): it runs on a worker thread and its result is
+        // taken here when it is ready, so the 30 Hz send / steering loop never stalls (a stalled loop let the puppets'
+        // AI drivers brake them and delayed every packet).
+        if (_scan is { IsCompleted: true } done)
+        {
+            _scan = null;
+            if (done.Status == TaskStatus.RanToCompletion) { LastScanMs = done.Result.Ms; ApplyScan(done.Result.Found); }
+        }
+        if (_scan != null || (!force && DateTime.UtcNow - _lastScan < TimeSpan.FromSeconds(3) && _vehicles.Count > 0)) return;
+        if (!force && _vehicles.Count == 0 && DateTime.UtcNow - _lastScan < TimeSpan.FromSeconds(0.5)) return;
         _lastScan = DateTime.UtcNow;
+        var x = _x;
+        _scan = Task.Run(() => { var sw = System.Diagnostics.Stopwatch.StartNew(); var f = x.FindU32(VehicleVtable); return (f, sw.Elapsed.TotalMilliseconds); });
+    }
+
+    void ApplyScan(List<uint> found)
+    {
         // only the puppets need a scan (the player's own vehicle is a pointer away); freed vehicles keep their vtable and
         // blueprint but lose their level (+0x4C)
-        // (a puppet the mailbox is rebuilding right now is kept: it is replaced when the rebuild returns)
-        _vehicles = _x.FindU32(VehicleVtable).Where(v => _x.U32(v + 0x18A4) == _puppetBlueprint && _x.U32(v + 0x4C) != 0 && BodyOf(_x, v) != 0)
-            .Union(_rebuilding).ToList();
+        // (a puppet the mailbox is rebuilding right now is kept: it is replaced when the rebuild returns; a rebuild that
+        // finished while the scan ran is in _vehicles already and is kept too - also in its first 150 ms, while the new
+        // vehicle may not have its body yet)
+        var fresh = found.Where(v => _x.U32(v) == VehicleVtable && _x.U32(v + 0x18A4) == _puppetBlueprint && _x.U32(v + 0x4C) != 0 && (BodyOf(_x, v) != 0 || _vehicles.Contains(v)));
+        _vehicles = fresh.Union(_rebuilding).Union(_vehicles.Where(v => Quiet(v) || (_designOf.ContainsKey(v) && !Gone(v)))).ToList();
         var puppets = _vehicles.ToHashSet();
         PuppetCount = puppets.Count;
         foreach (var k in _assigned.Where(kv => !puppets.Contains(kv.Value)).Select(kv => kv.Key).ToList()) _assigned.Remove(k);
@@ -124,6 +157,11 @@ public sealed partial class CoopSync
         foreach (var v in _hidden.Keys.Where(v => !puppets.Contains(v)).ToList()) _hidden.Remove(v);
         foreach (var k in _detachTries.Keys.Where(k => !puppets.Contains(k.Veh)).ToList()) _detachTries.Remove(k);
         foreach (var v in _quietUntil.Keys.Where(v => !puppets.Contains(v)).ToList()) _quietUntil.Remove(v);
+        foreach (var v in _apart.Keys.Where(v => !puppets.Contains(v)).ToList()) _apart.Remove(v);
+        foreach (var v in _offSince.Keys.Where(v => !puppets.Contains(v)).ToList()) _offSince.Remove(v);
+        foreach (var v in _noBody.Keys.Where(v => !puppets.Contains(v)).ToList()) _noBody.Remove(v);
+        foreach (var v in _origBlocks.Keys.Where(v => !puppets.Contains(v) && v != _designVeh).ToList()) _origBlocks.Remove(v);
+        ForgetPieces(puppets);
     }
     List<uint> _free = new();
 
@@ -135,6 +173,22 @@ public sealed partial class CoopSync
     bool Alive(uint veh) =>
         !_rebuilding.Contains(veh) && _x.U32(veh) == VehicleVtable && _x.U32(veh + 0x18A4) == _puppetBlueprint
         && _x.U32(veh + 0x4C) != 0 && BodyOf(_x, veh) != 0;
+
+    /// <summary>
+    /// Is the puppet gone for good? A part breaking off rebuilds the vehicle's rigid body: for a moment the vehicle has
+    /// no body (+0x7C0 = 0) although it is alive. Dropping it then (as "destroyed") gave its player another puppet,
+    /// rebuilt from the design, while the old one stood there split (seen with many parts breaking at once). A vehicle
+    /// without a body counts as gone only after 1 s (a destroyed one also loses its level +0x4C at once).
+    /// </summary>
+    bool Gone(uint veh)
+    {
+        if (_rebuilding.Contains(veh)) return false;
+        if (_x.U32(veh) != VehicleVtable || _x.U32(veh + 0x18A4) != _puppetBlueprint || _x.U32(veh + 0x4C) == 0) { _noBody.Remove(veh); return true; }
+        if (BodyOf(_x, veh) != 0) { _noBody.Remove(veh); return false; }
+        if (!_noBody.TryGetValue(veh, out var since)) { _noBody[veh] = DateTime.UtcNow; return false; }
+        return DateTime.UtcNow - since > TimeSpan.FromSeconds(1);
+    }
+    readonly Dictionary<uint, DateTime> _noBody = new();
 
     /// <summary>Puppets the game is changing right now (rebuild, a part breaking off): no writes into them until it is done.</summary>
     bool Quiet(uint veh) => _rebuilding.Contains(veh) || (_quietUntil.TryGetValue(veh, out var t) && DateTime.UtcNow < t);
@@ -152,25 +206,63 @@ public sealed partial class CoopSync
     {
         uint level = _x.Player;
         _localVeh = 0; _localBody = 0;
+        // Mumbo's garage (Build Vehicle from town; its own level): the others show where the player left town
+        if (Ptr(level) && _x.U32(level) == GarageLevel && _x.U32(LoadingScene) != LoadingTips && _lastTownAt != DateTime.MinValue)
+            return new CoopState { Mode = CoopMode.Garage, Position = _lastTownPos, Rotation = Quaternion.Identity };
         if (!Ptr(level) || !TownLevels.Contains(_x.U32(level)) || _x.U32(level + 0x58) != 1 || _x.U32(LoadingScene) == LoadingTips) return default;
         uint avatar = _x.U32(level + 0xA44);
         if (!Ptr(avatar) || _x.U32(avatar) != AvatarVtable) return default;
+        var town = ReadTown(avatar);
+        if (town.Shown && Finite(town)) { _lastTownPos = town.Position; _lastTownAt = DateTime.UtcNow; }
+        return town;
+    }
+
+    /// <summary>Script id of Mumbo's garage level (verified 2026-10-02: Build Vehicle from the town's pause menu).</summary>
+    const uint GarageLevel = 0x1920ABF9;
+    Vector3 _lastTownPos;
+    DateTime _lastTownAt = DateTime.MinValue;
+
+    /// <summary>Body states that belong to vehicles / summoning: never mirrored onto an on-foot puppet.</summary>
+    static bool VehicleBodyState(uint id) => id is >= 34 and <= 38 or >= 126 and <= 128;
+
+    CoopState ReadTown(uint avatar)
+    {
         Rescan();
         uint veh = _x.U32(avatar + 0xC3C);
         if (Ptr(veh) && _x.U32(veh) == VehicleVtable && _x.U32(veh + 0x4C) != 0) { _localVeh = veh; _localBody = BodyOf(_x, veh); }
         if (_localVeh != _localVehSeen) { _localVehSeen = _localVeh; _localVehSince = DateTime.UtcNow; }
-        var foot = new CoopState { Mode = CoopMode.OnFoot, Position = _x.PlayerPosition, Rotation = Quaternion.Identity };
+        // on foot (coop/research/onfoot/REPORT.txt): feet A+0x50, heading = forward A+0x110, velocity A+0xD0, body state
+        // [[A+0xAC8]+0x670] (vehicle / summon states are not mirrored: 0 = keep the last one)
+        var fw = _x.V3(avatar + 0x110);
+        float yaw = MathF.Atan2(fw.X, fw.Z);
+        uint bodyObj = _x.U32(avatar + 0xAC8), bs = Ptr(bodyObj) ? _x.U32(bodyObj + 0x670) : 0;
+        var foot = new CoopState
+        {
+            Mode = CoopMode.OnFoot, Position = _x.V3(avatar + 0x50), Velocity = _x.V3(avatar + 0xD0),
+            Rotation = float.IsFinite(yaw) ? Quaternion.CreateFromAxisAngle(Vector3.UnitY, yaw) : Quaternion.Identity,
+            BodyState = (ushort)(bs < 1000 && !VehicleBodyState(bs) ? bs : 0),
+        };
+        if (!Finite(foot)) foot = new CoopState { Mode = CoopMode.OnFoot, Position = _x.PlayerPosition, Rotation = Quaternion.Identity };
         if (_localBody == 0) return WithMenus(foot);
         var st = new CoopState
         {
             Mode = CoopMode.Vehicle, Position = _x.V3(_localBody), Rotation = Q(_localBody + 0x40),
             Velocity = _x.V3(_localBody + 0x90), AngularVelocity = _x.V3(_localBody + 0xA0),
         };
+        // a stalled game (Xenia hitch, loading a stream) keeps its last velocity: sent as moving, the others would push our
+        // puppet on and pull it back for as long as the stall lasts. A moving body whose position has not changed at all
+        // for 80 ms has not been stepped: it is sent standing still.
+        var now = DateTime.UtcNow;
+        if (st.Position != _lastPos || st.Velocity.Length() < 0.5f) { _lastPos = st.Position; _frameAt = now; }
+        else if (now - _frameAt > TimeSpan.FromMilliseconds(80)) { st.Velocity = Vector3.Zero; st.AngularVelocity = Vector3.Zero; }
         st.Blueprint = _localVeh != 0 ? _x.U32(_localVeh + 0x18A4) : 0;
         st.Design = LocalDesign != null && _designVeh == _localVeh ? LocalDesign.Hash : 0;
         var res = Finite(st) ? st : Finite(foot) ? foot : default;
         return WithMenus(res);
     }
+
+    Vector3 _lastPos;
+    DateTime _frameAt;
 
     // Menu scenes (coop/research/pause/REPORT.txt): handles are 0xFFFFFFFF while closed
     const uint PauseScene = 0x82E51BD0, ChangeVehicleScene = 0x82E51BD4;
@@ -202,37 +294,53 @@ public sealed partial class CoopSync
     public void Apply(IReadOnlyDictionary<long, CoopRemote> remotes)
     {
         Rescan();
-        foreach (var gone in _assigned.Keys.Where(k => !remotes.TryGetValue(k, out var r) || !r.State.Shown).ToList())
+        // a player who changes vehicle keeps his old vehicle standing (with the vehicle-edit icon) until the new one is here
+        static bool Kept(CoopState s) => s.Shown || s.Mode == CoopMode.Building;
+        foreach (var gone in _assigned.Keys.Where(k => !remotes.TryGetValue(k, out var r) || !Kept(r.State)).ToList())
         {
+            FootEnd(gone, _assigned[gone]);
             _free.Add(_assigned[gone]); _assigned.Remove(gone);
         }
+        foreach (var id in _walkers.Keys.Where(k => !_assigned.ContainsKey(k)).ToList()) FootEnd(id, 0);
         int shown = 0;
         foreach (var (id, r) in remotes.OrderBy(kv => kv.Key))
         {
             var st = r.State;
-            if (!st.Shown) continue;
+            if (!Kept(st)) continue;
             if (!_assigned.TryGetValue(id, out var veh))
             {
                 if (_free.Count == 0) continue;
                 veh = _free[0]; _free.RemoveAt(0); _assigned[id] = veh;
                 _hidden.Remove(veh);
-                if (!Quiet(veh) && Alive(veh) && Finite(st)) Teleport(BodyOf(_x, veh), Apart(st.Position) + new Vector3(0, 0.5f, 0));   // appears where the player is (beside us if that is here)
+                _apart.Remove(veh);
+                if (!Quiet(veh) && Alive(veh) && Finite(st)) Teleport(BodyOf(_x, veh), Apart(veh, st.Position, teleport: true) + new Vector3(0, 0.5f, 0));   // appears where the player is (beside us if that is here)
             }
             if (Quiet(veh)) { shown++; continue; }                                  // being rebuilt / splitting: hands off
-            if (!Alive(veh)) { _assigned.Remove(id); _lastScan = DateTime.MinValue; continue; }   // destroyed: rescan next tick
+            if (Gone(veh)) { _assigned.Remove(id); _lastScan = DateTime.MinValue; continue; }    // destroyed: rescan next tick
+            if (!Alive(veh)) { shown++; continue; }                                 // no body for a moment (splitting): hands off
             uint body = BodyOf(_x, veh);
             // the player's new vehicle design is on its way (or being built here): keep the old one out of sight meanwhile
             if (WaitingForDesign(id, veh, r)) { Hide(veh, body); continue; }
+            if (st.Mode == CoopMode.OnFoot && Finite(st))
+            {
+                // on foot: his Banjo walks where he is, the vehicle stands where he left it
+                if (FootTick(id, veh, st, r.AgeSeconds)) { SetHidden(veh, false); _hidden.Remove(veh); Hold(veh, body); }
+                else Hide(veh, body);
+                shown++; continue;
+            }
+            FootEnd(id, veh);
             SetHidden(veh, false);
             _hidden.Remove(veh);
-            if (st.Mode != CoopMode.Vehicle || !Finite(st)) { Hold(veh, body); shown++; continue; }   // on foot / paused: the vehicle stands
+            if (st.Mode != CoopMode.Vehicle || !Finite(st)) { Hold(veh, body); shown++; continue; }   // changing vehicle / paused: the vehicle stands
             _held.Remove(veh);
-            Drive(body, st, Math.Clamp(r.AgeSeconds, 0f, MaxLead));
+            Drive(veh, body, st, r.Accel, Math.Clamp(r.AgeSeconds, 0f, MaxLead));
             shown++;
         }
         foreach (var v in _free) if (!Quiet(v) && Alive(v)) Hide(v, BodyOf(_x, v));
         PostDamage();
         PumpVehicles(remotes);
+        SteerPieces();
+        Indicators(remotes);
         Status = $"{shown} player(s) shown, {PuppetCount} puppet vehicle(s) available";
     }
 
@@ -245,11 +353,15 @@ public sealed partial class CoopSync
         foreach (uint o in new uint[] { 0, 0x10, 0x20 }) _x.WV3(body + o, _x.V3(body + o) + d);
     }
 
-    void Drive(uint body, CoopState st, float lead)
+    void Drive(uint veh, uint body, CoopState st, Vector3 accel, float lead)
     {
         var cur = _x.V3(body);
-        // where the player is now: their last state is <lead> seconds old
-        var target = st.Position + st.Velocity * lead;
+        // where the player is now: their last state is <lead> seconds old. Vertically a vehicle in the air (spring, jump,
+        // propeller burst, falling) is ballistic between packets: its measured vertical acceleration (about -29 u/s² in
+        // free fall) bends the prediction, otherwise a spring launch overshoots its peak by up to 1.8 u at 0.35 s lead.
+        var a = new Vector3(0, Math.Clamp(accel.Y, -40f, 40f), 0);
+        var target = st.Position + st.Velocity * lead + 0.5f * lead * lead * a;
+        var tvel = st.Velocity + a * lead;
         var rot = st.Rotation;
         if (lead > 0 && st.AngularVelocity.LengthSquared() > 1e-6f)
         {
@@ -264,11 +376,30 @@ public sealed partial class CoopSync
             _x.WV3(body + 0x90, Vector3.Zero); _x.WV3(body + 0xA0, Vector3.Zero);
             return;
         }
-        target = Apart(target);
+        target = Apart(veh, target);
         var err = target - cur;
-        if (err.Length() > 25) { Teleport(body, target + new Vector3(0, 0.5f, 0)); return; }
-        var v = st.Velocity + 4f * err;
-        if (v.Length() > 80) v = Vector3.Normalize(v) * 80;
+        // stuck: a puppet that stays more than 3.5 units off for 0.75 s is wedged on something the player went past (a
+        // wall edge, a roof: the steering only pushes it harder into it) - it is put where the player is
+        var now = DateTime.UtcNow;
+        bool stuck = false;
+        var meNow = _localBody != 0 ? _x.V3(_localBody) : _x.PlayerPosition;
+        if (err.Length() > 3.5f && !_apart.ContainsKey(veh) && Vector3.Distance(cur, meNow) > 6f && Vector3.Distance(target, meNow) > 6f)
+        {
+            if (!_offSince.TryGetValue(veh, out var since)) _offSince[veh] = now;
+            else stuck = now - since > TimeSpan.FromSeconds(0.75);
+        }
+        else _offSince.Remove(veh);
+        if (err.Length() > 25 || stuck)
+        {
+            _offSince.Remove(veh);
+            Teleport(body, target + new Vector3(0, 0.5f, 0)); _x.WV3(body + 0x90, tvel);
+            Teleports++;
+            return;
+        }
+        var v = tvel + 4f * err;
+        // fast vehicles (jets, propellers) may go well beyond 80 u/s: the cap only stops absurd corrections
+        float cap = Math.Min(250f, MathF.Max(80f, tvel.Length() + 30f));
+        if (v.Length() > cap) v = Vector3.Normalize(v) * cap;
         _x.WV3(body + 0x90, v);
         var qe = rot * Quaternion.Conjugate(Q(body + 0x40));
         if (qe.W < 0) qe = Quaternion.Negate(qe);
@@ -278,20 +409,60 @@ public sealed partial class CoopSync
     }
 
     readonly Dictionary<uint, Vector3> _held = new();
+    readonly Dictionary<uint, DateTime> _offSince = new();
+    /// <summary>Diagnostics: puppets put back on their player (far off or stuck).</summary>
+    public int Teleports { get; private set; }
+
+    sealed class ApartState { public Vector2 Dir; public float R; public bool Active; public Vector3 Off; public DateTime At; }
+    readonly Dictionary<uint, ApartState> _apart = new();
+    const float ApartEnter = 2f, ApartEnterTeleport = 4.5f, ApartHeight = 2.5f;
 
     /// <summary>
-    /// Players start on the same spot (the same save resumes at the same place) and drive through each other's position:
-    /// a puppet target closer than 5 units to the local player is moved 5 units beside them, on the side it comes from,
-    /// so a puppet never lands inside or on top of the local vehicle (that flips it).
+    /// Keeps a puppet from being driven INTO the local vehicle. That happens when both players resume the same save at the
+    /// same spot, or when a prediction runs through us in a crash: a target whose centre is within 2 units (3D) of the
+    /// local vehicle's centre is held beside us (on the side the puppet is, 3-5 units out), at the target's OWN height,
+    /// until the player moves 3-5 units off horizontally or 2.5 units up or down; then the offset fades out in ~0.3 s.
+    /// Touching, bumping, landing on each other are left to the physics (the old rule kept every puppet 5 units away
+    /// horizontally and lifted it to the local player's height: flying up beside another player took their puppet up,
+    /// and it snapped back down when the two separated).
     /// </summary>
-    Vector3 Apart(Vector3 target)
+    Vector3 Apart(uint veh, Vector3 target, bool teleport = false)
     {
+        var now = DateTime.UtcNow;
         var me = _localBody != 0 ? _x.V3(_localBody) : _x.PlayerPosition;
-        if (!float.IsFinite(me.X) || me == Vector3.Zero) return target;
-        var away = new Vector3(target.X - me.X, 0, target.Z - me.Z);
-        if (away.Length() >= 5f) return target;
-        away = away.Length() < 0.5f ? Vector3.UnitX : Vector3.Normalize(away);
-        return new Vector3(me.X, Math.Max(me.Y, target.Y), me.Z) + away * 5f;
+        _apart.TryGetValue(veh, out var s);
+        if (!float.IsFinite(me.X) || !float.IsFinite(me.Y) || !float.IsFinite(me.Z) || me == Vector3.Zero) { _apart.Remove(veh); return target; }
+        float dt = s == null ? 0f : (float)Math.Min(0.1, (now - s.At).TotalSeconds);
+        var d = target - me;
+        var flat = new Vector2(d.X, d.Z);
+        if (s == null || !s.Active)
+        {
+            if (d.Length() < (teleport ? ApartEnterTeleport : ApartEnter))
+            {
+                uint b = BodyOf(_x, veh);
+                var pc = b != 0 && !teleport ? _x.V3(b) - me : Vector3.Zero;
+                var side = new Vector2(pc.X, pc.Z);
+                float dist = side.Length();
+                if (teleport || !float.IsFinite(dist) || dist < 0.5f) { side = flat.Length() > 0.3f ? flat : Vector2.UnitX; dist = 5f; }
+                s ??= new ApartState();
+                _apart[veh] = s;
+                s.Active = true; s.Dir = Vector2.Normalize(side); s.R = Math.Clamp(dist, 3f, 5f);
+            }
+        }
+        else if (flat.Length() >= s.R || MathF.Abs(d.Y) >= ApartHeight) s.Active = false;   // separated: hand back
+        if (s == null) return target;
+        s.At = now;
+        if (s.Active)
+        {
+            // follow the side the player's position is on, but not through the centre (no swinging around us)
+            if (flat.Length() > 1f) s.Dir = Vector2.Normalize(Vector2.Lerp(s.Dir, Vector2.Normalize(flat), 0.2f));
+            var pushed = new Vector3(me.X + s.Dir.X * s.R, target.Y, me.Z + s.Dir.Y * s.R);
+            s.Off = pushed - target;
+            return pushed;
+        }
+        s.Off *= MathF.Exp(-dt / 0.3f);
+        if (s.Off.Length() < 0.05f) { _apart.Remove(veh); return target; }
+        return target + s.Off;
     }
 
     // ------------------------------------------------------------------ damage between players
@@ -432,7 +603,11 @@ public sealed partial class CoopSync
         uint flag = hidden ? 1u : 0u;
         if (_x.U32(veh + DrawOff) != flag) W32(veh + DrawOff, flag);
         uint drv = _x.U32(veh + 0x48) - 0x40;                                 // the AI driver (Banjo) sitting in it
-        if (Ptr(drv) && _x.U32(drv) == AvatarVtable && _x.U32(drv + 0xC3C) == veh && _x.U32(drv + DrawOff) != flag) W32(drv + DrawOff, flag);
+        if (Ptr(drv) && _x.U32(drv) == AvatarVtable && _x.U32(drv + 0xC3C) == veh)
+        {
+            if (_x.U32(drv + DrawOff) != flag) W32(drv + DrawOff, flag);
+            SetTargetable(drv, !hidden);                                        // no torpedo locks on invisible puppets
+        }
         uint raw = _x.U32(veh + 0x7C0);
         if (Ptr(raw))
         {
@@ -441,5 +616,42 @@ public sealed partial class CoopSync
         }
     }
 
+    // ------------------------------------------------------------------ homing targets
+    // A homing projectile's target (+0xC58) is a "targetable" object whose first word is its avatar; every avatar has one
+    // at +0xA80 (verified: a torpedo locked on a puppet holds [driver+0xA80] of the puppet's AI Banjo; the local
+    // player's is [[L+0xA44]+0xA80]).
 
+    uint DriverOf(uint veh) { uint d = _x.U32(veh + 0x48) - 0x40; return Ptr(d) && _x.U32(d) == AvatarVtable ? d : 0; }
+
+    /// <summary>The remote player whose puppet a target object belongs to (0 = the local player, nobody or not a player).</summary>
+    public long PlayerOfTarget(uint target)
+    {
+        if (!Ptr(target)) return 0;
+        uint avatar = _x.U32(target);
+        if (!Ptr(avatar)) return 0;
+        foreach (var (id, veh) in _assigned) if (DriverOf(veh) == avatar) return id;
+        foreach (var (id, w) in _walkers) if (w.Out && w.R == avatar) return id;
+        return 0;
+    }
+
+    /// <summary>The target object of player <paramref name="player"/> in this game: the local avatar's for the local
+    /// player (<paramref name="myId"/>), their puppet's driver's for the others (0 = not here).</summary>
+    public uint TargetObjectOf(long player, long myId)
+    {
+        uint avatar;
+        if (player == myId)
+        {
+            uint level = _x.Player;
+            avatar = Ptr(level) ? _x.U32(level + 0xA44) : 0;
+            if (!Ptr(avatar) || _x.U32(avatar) != AvatarVtable) return 0;
+        }
+        else
+        {
+            avatar = WalkerOf(player);
+            if (avatar == 0) { uint veh = PuppetOf(player); avatar = veh != 0 ? DriverOf(veh) : 0; }
+            if (avatar == 0) return 0;
+        }
+        uint t = _x.U32(avatar + 0xA80);
+        return Ptr(t) && _x.U32(t) == avatar ? t : 0;
+    }
 }

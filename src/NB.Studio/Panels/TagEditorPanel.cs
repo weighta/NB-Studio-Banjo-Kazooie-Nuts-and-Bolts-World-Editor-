@@ -100,6 +100,8 @@ public sealed class TagEditorPanel : UserControl
             _labels = new(); _base = 0; _schema = null;
             if (e.Type == "objparams" && ObjParamsSchema.IsObjParams(_data)) _schema = SchemaFor(ws, ObjParamsSchema.ClassOf(_data));
             else if (e.Type == "vehicle") LabelVehicle();
+            else if (e.Type == "script" && LightSetup.FindFog(_data) is int fog && fog >= 0) LabelLightSetup(fog);
+            else if (e.Type == "gpuparticleeffect" && _data.Length >= 0x184) LabelParticle();
             if (TextureHeader.IsTexture(_data))
             {
                 _labels[0] = "tag \"texture\""; _labels[8] = "version string"; _labels[0x18] = "D3DFORMAT (format|endian<<6|tiled<<8)";
@@ -351,6 +353,29 @@ public sealed class TagEditorPanel : UserControl
             _values.Items.Add(string.IsNullOrEmpty(v) ? "(empty)" : v, null, (_, _) => { r.Cells[3].Value = val; EditField(r, f, val); });
         }
         _values.Show(Cursor.Position);
+    }
+
+    // ---------------- light setups and particle effects (also editable in the Atmosphere tab) ----------------
+
+    void LabelLightSetup(int fog)
+    {
+        _labels[0x08] = "ambient colour RGB0 (verified)"; _labels[0x0C] = "sun colour RGB0 (verified)";
+        _labels[0x10] = "sun elevation (rad)"; _labels[0x14] = "sun azimuth (rad)"; _labels[0x1C] = "sun intensity (verified)";
+        _labels[fog] = "fog command: size"; _labels[fog + 4] = "fog command: op 0x53";
+        _labels[fog + 0x08] = "fog on"; _labels[fog + 0x0C] = "fog start (verified)"; _labels[fog + 0x10] = "fog end (verified)";
+        _labels[fog + 0x14] = "fog max opacity 0..1 (verified)"; _labels[fog + 0x24] = "fog colour RGB0 (verified)";
+    }
+
+    void LabelParticle()
+    {
+        _labels[0x10] = "particle buffer size (max alive)"; _labels[0x34] = "texture id";
+        _labels[0x78] = "emitter box min x"; _labels[0x7C] = "emitter box min y"; _labels[0x80] = "emitter box min z";
+        _labels[0x84] = "emitter box max x"; _labels[0x88] = "emitter box max y"; _labels[0x8C] = "emitter box max z";
+        _labels[0xB8] = "size (start, min)"; _labels[0xBC] = "size (start, max)"; _labels[0xC0] = "size (end, min)"; _labels[0xC4] = "size (end, max)";
+        _labels[0xCC] = "fall term"; _labels[0xD0] = "fall term";
+        _labels[0x124] = "lifetime min (s)"; _labels[0x128] = "lifetime max (s)";
+        _labels[0x13C] = "emission rate (particles/s; do not change live)";
+        _labels[0x180] = "0x534E = follows the camera (exe mod snow-follows-camera)";
     }
 
     // ---------------- vehicles ----------------

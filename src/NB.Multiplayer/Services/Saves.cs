@@ -28,6 +28,20 @@ public static class Saves
             .OrderByDescending(Directory.GetLastWriteTimeUtc).ToList();
     }
 
+    /// <summary>The profile the game signs in: Xenia picks the lowest XUID among the profiles.</summary>
+    public static string? ActiveProfile() =>
+        Profiles().OrderBy(p => ulong.TryParse(Path.GetFileName(p), System.Globalization.NumberStyles.HexNumber, null, out var x) ? x : ulong.MaxValue).FirstOrDefault();
+
+    /// <summary>A content header for a blueprint package (the bundled save header with the display name "VEHICLE: name").</summary>
+    public static byte[] BlueprintHeaderTemplate(string name)
+    {
+        var hdr = File.ReadAllBytes(Path.Combine(Bundled, "savegame.header.template"));
+        Array.Clear(hdr, 0x411, 0x80);
+        var display = System.Text.Encoding.BigEndianUnicode.GetBytes(("VEHICLE: " + name).ToUpperInvariant());
+        Array.Copy(display, 0, hdr, 0x411, Math.Min(display.Length, 0x7E));
+        return hdr;
+    }
+
     static string SlotFile(string profile, string slot) => Path.Combine(profile, Title, SaveType, "0x" + slot, slot);
     static string HeaderFile(string profile, string slot) => Path.Combine(profile, Title, "Headers", SaveType, "0x" + slot + ".header");
 

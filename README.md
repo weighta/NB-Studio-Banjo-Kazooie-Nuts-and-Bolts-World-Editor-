@@ -17,6 +17,12 @@
   <img alt="Game" src="https://img.shields.io/badge/game-4D5307ED-4cd08a">
 </p>
 
+<p align="center">
+  <img src="docs/images/studio-start.png" alt="NB Studio start page" width="100%">
+</p>
+<p align="center"><i>The start page: a different photo from the game every time (here a custom flying vehicle by the
+Space Needle of the Seattle mod). First time? NB Studio offers a 2-minute tour that explains every part of the window.</i></p>
+
 ---
 
 ## Contents
@@ -45,6 +51,9 @@
 | **Vehicle parts** | Part Importer: build new garage parts (model, physics, stats, attach points, garage tier dialogs). |
 | **Text, audio, video** | Edit in-game text in all languages, replace music and sound effects (XWB banks), replace videos. |
 | **Executable mods** | Toggle researched game-code changes (vehicles and Change Vehicle in town, destructible town vehicles, 2000-part vehicles, bigger world and garage, longer draw distance, all parts unlocked, debug menus...) as Xenia patches or baked into the executable. |
+| **For beginners** | A guided tour on the first start (and from *Help > Take the Tour*): it spotlights each part of the window and explains it in plain words, then walks you through your first mod in 5 steps. Opening a workspace reopens the world you were last in. |
+| **3D view** | Wireframe, Solid, Textured and **Rendered** views (switch in the corner of the 3D view). Rendered lights the world with the level's real game lighting: sun, ambient, shadows, fog, normal and specular maps, reflections, sky dome and water; glass and see-through materials are drawn properly. Blender-style editing: **G** move, **R** rotate, **S** scale, then **X/Y/Z** to lock an axis (shown as a coloured line), typed values, one undo step per change. |
+| **Atmosphere & weather** | The *Atmosphere* tab edits each time of day's sky, light and fog with colour pickers and sliders (with a live preview in a running game); *World > Weather* adds falling snow. Everything Snowy Showdown Town needed can be done in NB Studio. |
 | **Testing** | Launch your modded game in Xenia with one key (F5), and tweak a running game live (teleport, gravity, camera). |
 | **Sharing** | Export a `.nbpatch` mod: a small differential patch with only your changes, plus its name, version, category (map, vehicle parts, gameplay, visuals, audio, tweak, co-op), tags and description. It contains no game data; others apply it to their own copy with one click (with backup and rollback) or add it to NB Multiplayer's mod library. |
 | **Mods from modded folders** | Build > *Create Patch from a Modified Game Folder*: a game folder modded by hand becomes a mod. NB Studio compares it with the original game (size and SHA-256 of every retail file, shipped with the tool), shows what changed per file and asset (textures, models, markers, scripts, parts), recognises known executable tweaks in an edited `default.xex`, and fills in the category and tags. *Try it* starts the result in Xenia. |
@@ -58,10 +67,15 @@ and keeps a history of every saved file.
 ## Screenshots
 
 <p align="center">
-  <img src="docs/images/studio-start.png" alt="Start page" width="49%">
-  <img src="docs/images/studio-showdown-town.png" alt="Showdown Town in the world editor" width="49%">
+  <img src="docs/images/studio-rendered.jpg" alt="Showdown Town in the Rendered view" width="49%">
+  <img src="docs/images/studio-atmosphere.jpg" alt="The Atmosphere tab" width="49%">
 </p>
-<p align="center"><i>Start page, and Showdown Town opened in the world editor (terrain, scenery, markers and the AI race route).</i></p>
+<p align="center"><i>Showdown Town in the Rendered view (game lighting, sky and water), and the Atmosphere tab: sky, light and fog for every time of day, plus weather.</i></p>
+
+<p align="center">
+  <img src="docs/images/studio-showdown-town.png" alt="Showdown Town in the world editor" width="60%">
+</p>
+<p align="center"><i>Showdown Town in the world editor (terrain, scenery, markers and the AI race route).</i></p>
 
 <p align="center">
   <img src="docs/images/studio-banjos-house.png" alt="Banjo's House" width="60%">
@@ -115,10 +129,12 @@ assets.
 
 **2. Open a world.** The *Worlds* list shows every world and Act. Double-click **Showdown Town**. The 3D view opens:
 right-drag to look around, WASD/QE to fly (Shift = fast), mouse wheel to dolly, middle-drag to pan, F to focus the selection.
+The buttons in the top-right corner switch between Wireframe, Solid, Textured and Rendered (game lighting).
 
-**3. Move something.** Click a piece of scenery (for example a café table near Mumbo's Motors). Press **Move (1)** and
-drag the arrows, or type exact numbers in *Properties* and press *Apply*. Rotate (2) and Scale (3) work the same way.
-Ctrl+Z undoes.
+**3. Move something.** Click a piece of scenery (for example a café table near Mumbo's Motors). Press **G** and move
+the mouse, then click to drop it; press **X**, **Y** or **Z** while moving to slide along one axis only, or type a number
+(G, Z, 3.5, Enter moves it 3.5 units up). **R** rotates and **S** scales the same way. You can also drag the gizmo's
+arrows (Move 1 / Rotate 2 / Scale 3), or type exact numbers in *Properties* and press *Apply*. Ctrl+Z undoes.
 
 **4. Change a texture.** Right-click the object and choose *Textures... (view / export / replace)*. The texture library shows every texture the
 model uses (*World > Texture Library* shows every texture of the world). Select one, *Export PNG*, paint over it, then *Replace...* with your image (tick *Only this model* to

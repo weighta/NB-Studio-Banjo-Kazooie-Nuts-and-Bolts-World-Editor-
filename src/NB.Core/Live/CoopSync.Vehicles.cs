@@ -46,6 +46,14 @@ public sealed partial class CoopSync
     uint _localVehSeen, _designVeh;
     DateTime _localVehSince, _serializeRetryAt;
     HashSet<uint> _localFull = new();
+    /// <summary>
+    /// Vehicle -> block object -> its grid word in the DESIGN. A split re-bases the grid words of every island (the piece
+    /// AND what stays: after heavy damage the remaining seat block of a Zapper read 0x0, its puppet's 0x1 / 0x400002...),
+    /// so grid words read later no longer name the same block in two games. Block objects survive splits (they move to
+    /// the new piece vehicles, block +0x46C = owner), so blocks are named by the grid word they had when the vehicle was
+    /// built from / serialized as its design.
+    /// </summary>
+    readonly Dictionary<uint, Dictionary<uint, uint>> _origBlocks = new();
 
     /// <summary>The local player's vehicle (0 on foot / not in town).</summary>
     public uint LocalVehicle => _localVeh;
@@ -114,7 +122,9 @@ public sealed partial class CoopSync
         foreach (var (id, veh) in _assigned)
         {
             if (!remotes.TryGetValue(id, out var r) || r.Damage is not { } dmg || dmg.Design == 0) continue;
-            if (_designOf.GetValueOrDefault(veh) != dmg.Design || dmg.Design != r.State.Design || Quiet(veh) || !Alive(veh)) continue;
+            // (not held back by the 150 ms after a split: DETACH / HEALTH go through the mailbox and the cave checks the
+            // block is still on the vehicle - a part breaking into several pieces is cut a frame at a time, not 0.17 s)
+            if (_designOf.GetValueOrDefault(veh) != dmg.Design || dmg.Design != r.State.Design || _rebuilding.Contains(veh) || Gone(veh) || BodyOf(_x, veh) == 0) continue;
             var map = BlockMap(veh);
             if (map.Count == 0) continue;
             if (dmg.Missing.Count > 0)
@@ -184,8 +194,11 @@ public sealed partial class CoopSync
                 CoopDesign? d = null;
                 if (Ptr(res) && _x.Read(res, 2) is { Length: 2 } h) { int n = BE.U16(h, 0); if (n is >= 1 and <= CoopDesign.MaxBlocks) d = CoopDesign.From(_x.Read(res, CoopDesign.HeaderSize + CoopDesign.BlockSize * n)); }
                 if (d == null) { _serializeRetryAt = now.AddSeconds(2); LastVehicleEvent = "serialize failed"; break; }
+                if (_designVeh != 0 && _designVeh != q.Veh) _origBlocks.Remove(_designVeh);
                 LocalDesign = d; _designVeh = q.Veh;
+                _origBlocks.Remove(q.Veh);
                 _localFull = BlockMap(q.Veh, force: true).Keys.ToHashSet();
+                _localPieces.Clear(); _localMissingSeen.Clear();
                 LastVehicleEvent = $"own design {d.Name} ({d.Blocks} blocks, {d.Hash:X8})";
                 break;
             case VOp.Alloc:
@@ -211,6 +224,7 @@ public sealed partial class CoopSync
                     foreach (var k in _assigned.Where(kv => kv.Value == q.Veh).Select(kv => kv.Key).ToList()) _assigned[k] = res;
                     _free.Remove(q.Veh);
                     _designOf[res] = q.Design!.Hash;
+                    _origBlocks.Remove(res);                                    // named from its first block read
                     _quietUntil[res] = now.AddMilliseconds(150);
                     LastVehicleEvent = $"puppet rebuilt as {q.Design.Name} ({q.Design.Blocks} blocks)";
                 }
@@ -234,7 +248,11 @@ public sealed partial class CoopSync
         LastVehicleEvent = what;
     }
 
-    /// <summary>Grid word -> block of a vehicle (block list +0x1488..+0x148C, 0xB0 per entry, block at entry +4).</summary>
+    /// <summary>
+    /// Design grid word -> block of a vehicle (block list +0x1488..+0x148C, 0xB0 per entry, block at entry +4). The first
+    /// read of a vehicle (right after it was built from or serialized as its design) records every block's grid word; later
+    /// reads name the blocks still on the vehicle by those (see <see cref="_origBlocks"/>).
+    /// </summary>
     Dictionary<uint, uint> BlockMap(uint veh, bool force = false)
     {
         uint lo = _x.U32(veh + 0x1488), hi = _x.U32(veh + 0x148C);
@@ -244,14 +262,28 @@ public sealed partial class CoopSync
         if (Ptr(lo) && hi >= lo && hi - lo <= 0xB0u * CoopDesign.MaxBlocks)
         {
             var raw = _x.Read(lo, (int)(hi - lo));
+            bool first = !_origBlocks.TryGetValue(veh, out var orig);
+            if (first) orig = new Dictionary<uint, uint>();
             for (int o = 0; o + 0xB0 <= raw.Length; o += 0xB0)
             {
                 uint b = BE.U32(raw, o + 4);
-                if (Ptr(b)) map.TryAdd(_x.U32(b + 0xEC), b);
+                if (!Ptr(b)) continue;
+                if (first) { uint g = _x.U32(b + 0xEC); if (orig!.TryAdd(b, g)) map.TryAdd(g, b); }
+                else if (orig!.TryGetValue(b, out var g)) map.TryAdd(g, b);
             }
+            if (first && map.Count > 0) _origBlocks[veh] = orig!;
         }
         _blockMaps[veh] = (now, lo, hi, map);
         return map;
+    }
+
+    /// <summary>Block object of design grid word <paramref name="grid"/> of vehicle <paramref name="veh"/> (0 = unknown),
+    /// wherever that block is now (on the vehicle or on a piece that broke off).</summary>
+    uint OrigBlock(uint veh, uint grid)
+    {
+        if (!_origBlocks.TryGetValue(veh, out var orig)) return 0;
+        foreach (var (b, g) in orig) if (g == grid) return b;
+        return 0;
     }
 
     /// <summary>

@@ -2510,6 +2510,26 @@ static class Program
                     }
                     return 0;
                 }
+                case "atmosphere":
+                {
+                    // atmosphere <workspace> <world bundle hex>: times of day (light, fog, skydome), skydomes and snow of a world
+                    // (the same reader as NB Studio's Atmosphere tab)
+                    var ws = NB.Core.Project.Workspace.Open(args[1]);
+                    var idx = NB.Core.Project.AssetIndex.LoadOrBuild(ws);
+                    uint wb = Convert.ToUInt32(args[2], 16);
+                    var at = NB.Core.World.WorldAtmosphere.Load(ws, idx, wb);
+                    foreach (var t in at.Times)
+                    {
+                        var dome = at.Domes.FirstOrDefault(d => d.Id == t.DomeId);
+                        Console.WriteLine($"{t.Display,-12} {t.Light.Name} ({t.Light.Bundle:x6}): {t.Light.Values}");
+                        if (t.PhaseScript != null) Console.WriteLine($"{"",-12} sky {(dome?.ShortName ?? "?")} {t.DomeId:X8} via {t.PhaseScript} ({t.PhaseBundle:x6} +0x{t.DomeOffset:X})");
+                    }
+                    foreach (var d in at.Domes) Console.WriteLine($"dome {d.ShortName} {d.Id:X8}: {string.Join(", ", d.Textures)}");
+                    var snow = NB.Core.World.Weather.Read(ws, idx, ws.LoadResident(wb));
+                    Console.WriteLine(snow == null ? "snow: none" : $"snow: {snow}");
+                    Console.WriteLine($"exe mods: {string.Join(", ", ws.Manifest.ExeMods)}");
+                    return 0;
+                }
                 case "obj-set":
                 {
                     // obj-set <workspace> <asset name> <offset hex> <f:float | u:uint | h:hex32 | s:string64> — edits .data in every bundle holding the asset

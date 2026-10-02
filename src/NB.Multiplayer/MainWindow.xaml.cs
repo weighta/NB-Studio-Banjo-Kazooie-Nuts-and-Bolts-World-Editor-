@@ -358,7 +358,7 @@ public partial class MainWindow : Window
         if (!Ready()) return;
         if (_game is { HasExited: false }) { MessageBox.Show(this, "The game is already running.", "NB Multiplayer"); return; }
         var ed = CurrentEdition;
-        if (_coopNet != null && _lastLaunch is { } room) { LaunchGame(room.Api, room.Code); return; }   // in a co-op room: the room's game
+        if (_coopNet != null && _lastLaunch is { } room) { _ = StartRoomGameAsync(room.Api, room.Code); return; }   // in a co-op room: the room's game
         try { _game = GameLauncher.StartSolo(S, ed.GameDir); }
         catch (Exception ex) { MessageBox.Show(this, "The game could not start:\n" + ex.Message, "NB Multiplayer"); }
     }
@@ -721,11 +721,10 @@ public partial class MainWindow : Window
                 return;
             }
             _roomCoop = room.Coop;
-            // play the host's edition
-            var mine = await HostEditionAsync(room, host, port);
-            if (mine == null) return;
-            if (mine.Name != S.Edition) { S.Edition = mine.Name; S.Save(); RefreshEditions(); }
-            if (room.Compat != null)
+            // the host's edition: if the selected one differs, the player decides (match / join anyway / cancel)
+            var choice = await ChooseEditionForRoomAsync(room, host, port);
+            if (choice == MatchHostDialog.Choice.Cancel) { ShowJoin("Join cancelled.", "Sub", false); return; }
+            if (room.Compat != null && choice != MatchHostDialog.Choice.JoinAnyway)
             {
                 ShowJoin($"Found {room.Name}. Comparing your game files with the host's (the first time takes a few minutes)...", "Sub", false);
                 var edition = CurrentEdition;
@@ -809,6 +808,84 @@ public partial class MainWindow : Window
         catch (Exception ex) { ShowJoin("The host's edition could not be built: " + ex.Message, "Bad", false); return null; }
     }
 
+    /// <summary>Does the selected edition carry the same mods as the room's (same recipe; rooms of hosts older than 1.2
+    /// only name their edition)?</summary>
+    bool MatchesRoom(RoomInfo room) =>
+        room.Recipe != null
+            ? CurrentEdition.RecipeKey == NB.Core.Project.ModStack.Key(room.Recipe.Select(r => r.Sha256))
+            : CurrentEdition.Name == room.Edition;
+
+    /// <summary>
+    /// Joining (or starting the room's game again): when the selected edition is not the host's, the player chooses:
+    /// match the host (their edition is found or built, missing mods downloaded from the room, and selected), join
+    /// anyway with their own, or cancel. Nothing is switched without asking.
+    /// </summary>
+    async Task<MatchHostDialog.Choice> ChooseEditionForRoomAsync(RoomInfo room, string host, int port)
+    {
+        if (MatchesRoom(room)) return MatchHostDialog.Choice.Match;
+        var mine = CurrentEdition;
+        var hostMods = room.Recipe?.Select(r => $"{r.Name} {r.Version}") ?? new[] { "(not listed by the host's NB Multiplayer)" };
+        var hostName = room.Players.FirstOrDefault(p => p.Xuid == room.HostXuid).Name is { Length: > 0 } hn ? hn : room.Name.Replace("'s room", "");
+        var dlg = new MatchHostDialog(this, hostName, room.Edition, hostMods,
+            mine.Name, mine.Mods.Select(m => $"{m.Name} {m.Version}"));
+        dlg.ShowDialog();
+        if (dlg.Result != MatchHostDialog.Choice.Match) return dlg.Result;
+        var theirs = await HostEditionAsync(room, host, port);
+        if (theirs == null) return MatchHostDialog.Choice.Cancel;   // the reason is shown
+        if (theirs.Name != S.Edition) { S.Edition = theirs.Name; S.Save(); RefreshEditions(); }
+        return MatchHostDialog.Choice.Match;
+    }
+
+    /// <summary>
+    /// "Start the game" / Play solo in a co-op room the player joined: the host may have changed mods since (and
+    /// started their game again), so the room is asked first; a different edition is offered again.
+    /// </summary>
+    async Task StartRoomGameAsync(string api, string code)
+    {
+        if (_server == null && _pendingJoin is { } j)
+        {
+            var room = await Net.GetRoomAsync(j.Host, j.Port, TimeSpan.FromSeconds(6));
+            if (room != null && !MatchesRoom(room))
+            {
+                var editionBefore = S.Edition;
+                var choice = await ChooseEditionForRoomAsync(room, j.Host, j.Port);
+                if (choice == MatchHostDialog.Choice.Cancel) return;
+                if (S.Edition != editionBefore)
+                {
+                    // another edition: connect co-op again for it (its game folder, its co-op settings)
+                    _roomCoop = room.Coop;
+                    StartJoined();
+                    return;
+                }
+            }
+            else if (room != null) _roomCoop = room.Coop;
+        }
+        LaunchGame(api, code);
+    }
+
+    /// <summary>
+    /// Host: the room advertises the edition the host's game runs now. A host who closes the game, picks other mods and
+    /// starts again (room still open) used to keep advertising the first edition, so joiners kept being switched back
+    /// to it. The fingerprint of the game files is computed in the background while the game boots.
+    /// </summary>
+    async Task RefreshRoomEditionAsync(Edition ed)
+    {
+        if (_server is not { } server) return;
+        if (server.Edition == ed.Name && server.Recipe != null && NB.Core.Project.ModStack.Key(server.Recipe.Select(r => r.Sha256)) == ed.RecipeKey) return;
+        server.Edition = ed.Name;
+        server.Recipe = ed.Mods.ToList();
+        HostAddressText.Text = System.Text.RegularExpressions.Regex.Replace(HostAddressText.Text, "edition: .*$", "edition: " + ed.Name);
+        try
+        {
+            var compat = await Task.Run(() => CompatProfile.FromGame(ed.GameDir));
+            var hostBase = ed.IsVanilla ? compat : await Task.Run(() => CompatProfile.FromGame(S.GameDir));
+            if (_server != server) return;
+            server.HostCompat = compat;
+            server.HostBaseModified = NB.Core.Project.GameDiff.NotRetail(hostBase);
+        }
+        catch (Exception) { }
+    }
+
     void JoinAnyway_Click(object sender, RoutedEventArgs e) { if (_pendingJoin != null) StartJoined(); }
 
     void StartJoined()
@@ -853,6 +930,7 @@ public partial class MainWindow : Window
             // co-op: the room's all-unlocked save applies to everyone (on top of the player's own setting)
             _game = GameLauncher.Start(S, ed, api, code, coop && _coopNet!.AllUnlocked ? true : null);
             _lastLaunch = (api, code);
+            if (_server != null) _ = RefreshRoomEditionAsync(ed);   // host: the room now carries this edition
             if (coop)
                 _coop ??= new CoopService(_coopNet!, () => _game, Path.Combine(ed.GameDir, "default.xex"), ed.PuppetBlueprintId, ed.ParkVector);
         }
@@ -884,7 +962,7 @@ public partial class MainWindow : Window
             CoopMode.Vehicle or CoopMode.OnFoot when st.Flags.HasFlag(CoopFlags.Photo) => "taking photos",
             CoopMode.Vehicle or CoopMode.OnFoot when st.Flags.HasFlag(CoopFlags.Menu) => "in the pause menu",
             CoopMode.Vehicle => "in town", CoopMode.OnFoot => "on foot", CoopMode.Building => "changing vehicle",
-            CoopMode.Paused => "paused", _ => "not in town",
+            CoopMode.Paused => "paused", CoopMode.Garage => "in Mumbo's garage", _ => "not in town",
         };
         // the vehicle each player drives (its design's name, e.g. "Trolley Mk. 6")
         static string Veh(string? name, CoopState st) => st.Mode == CoopMode.Vehicle && !string.IsNullOrWhiteSpace(name)
@@ -905,7 +983,7 @@ public partial class MainWindow : Window
         if (_game is not { HasExited: false } && _lastLaunch is { } again)
         {
             var start = new Button { Style = (Style)FindResource("Primary"), Content = "Start the game", HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 4, 0, 8) };
-            start.Click += (_, _) => { LaunchGame(again.Api, again.Code); ShowCoopRoom(); };
+            start.Click += async (_, _) => { await StartRoomGameAsync(again.Api, again.Code); ShowCoopRoom(); };
             RoomPlayers.Items.Add(start);
         }
         RoomPlayers.Items.Add(new TextBlock { Text = _coop?.Status ?? "Start the game to sync.", Style = (Style)FindResource("SubText"), Margin = new Thickness(0, 8, 0, 0) });
@@ -946,9 +1024,14 @@ public partial class MainWindow : Window
         RoomStatus.Text = $"Co-op ({names.Count} player{(names.Count == 1 ? "" : "s")})";
     }
 
+    bool _gameWasRunning;
+
     async Task TickAsync()
     {
         bool running = _game is { HasExited: false };
+        // the game just closed: keep copies of the blueprints saved in it (BlueprintVault)
+        if (_gameWasRunning && !running) _ = Task.Run(() => { try { BlueprintVault.Harvest(GameLauncher.StudioContentRoots()); } catch (Exception) { } });
+        _gameWasRunning = running;
         GameDot.Fill = running ? B("Good") : B("Sub");
         GameStatus.Text = running ? "Game running" : "Game not running";
         if (_polling) return;
@@ -1113,13 +1196,31 @@ public partial class MainWindow : Window
         UpdateStatus.Text = $"Version {_release.Version} is available (you have {Updater.Current}).";
         if (!manual && S.SkippedVersion == _release.Tag) return;
         UpdateText.Text = $"NB Multiplayer {_release.Version} is available (you have {Updater.Current}).";
+        ShowBanner(studio: false);
+    }
+
+    /// <summary>What the update banner offers: NB Multiplayer itself, or NB Studio (Projects page).</summary>
+    bool _bannerForStudio;
+
+    /// <summary>The update banner drops down from the top (a second chance to decide: Update now / What's new / Later).</summary>
+    void ShowBanner(bool studio)
+    {
+        _bannerForStudio = studio;
+        UpdateSkipButton.Visibility = studio ? Visibility.Collapsed : Visibility.Visible;
+        UpdateNowButton.IsEnabled = true;
+        UpdateProgress.Visibility = Visibility.Collapsed;
         UpdateBanner.Visibility = Visibility.Visible;
+        UpdateBanner.UpdateLayout();
+        var drop = new System.Windows.Media.Animation.DoubleAnimation(-Math.Max(40, UpdateBanner.ActualHeight), 0, TimeSpan.FromMilliseconds(260))
+        { EasingFunction = new System.Windows.Media.Animation.CubicEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut } };
+        UpdateBannerSlide.BeginAnimation(System.Windows.Media.TranslateTransform.YProperty, drop);
     }
 
     async void CheckUpdates_Click(object sender, RoutedEventArgs e) => await CheckUpdatesAsync(manual: true);
 
     async void UpdateNow_Click(object sender, RoutedEventArgs e)
     {
+        if (_bannerForStudio) { await InstallStudioFromBannerAsync(); return; }
         if (_release == null) return;
         if ((_server != null || _game is { HasExited: false }) &&
             MessageBox.Show(this, "Updating restarts NB Multiplayer and closes your room. Continue?", "NB Multiplayer", MessageBoxButton.YesNo) != MessageBoxResult.Yes) return;
@@ -1140,7 +1241,7 @@ public partial class MainWindow : Window
         }
     }
 
-    void WhatsNew_Click(object sender, RoutedEventArgs e) => OpenUrl(_release?.PageUrl ?? Updater.ReleasesPage);
+    void WhatsNew_Click(object sender, RoutedEventArgs e) => OpenUrl(_bannerForStudio ? (_studioLatest?.PageUrl ?? StudioManager.ReleasesPage) : (_release?.PageUrl ?? Updater.ReleasesPage));
     void UpdateLater_Click(object sender, RoutedEventArgs e) => UpdateBanner.Visibility = Visibility.Collapsed;
     void UpdateSkip_Click(object sender, RoutedEventArgs e)
     {
