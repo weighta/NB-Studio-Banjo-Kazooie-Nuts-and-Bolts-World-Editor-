@@ -81,11 +81,9 @@ public partial class MainWindow : Window
         {
             if (_server != null && MessageBox.Show(this, "Closing NB Multiplayer closes your room: players in it are disconnected. Close anyway?",
                     "NB Multiplayer", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) { e.Cancel = true; return; }
-            try { _server?.Stop(); } catch (Exception) { }
-            try { _steamHost?.Stop(); } catch (Exception) { }
-            try { _steamClient?.Stop(); } catch (Exception) { }
-            try { StopCoop(); } catch (Exception) { }
-            SteamNet.Shutdown();
+            // never hang on exit: the same shutdown off the UI thread, at most 8 seconds
+            try { Task.Run(() => ShutdownRoomAsync(client: true)).Wait(TimeSpan.FromSeconds(8)); } catch (Exception) { }
+            try { Task.Run(SteamNet.Shutdown).Wait(TimeSpan.FromSeconds(3)); } catch (Exception) { }
         };
     }
 
@@ -98,6 +96,7 @@ public partial class MainWindow : Window
         PageEditions.Visibility = NavEditions.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
         PageProjects.Visibility = NavProjects.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
         if (NavProjects.IsChecked == true) RefreshProjects();
+        if (NavSettings.IsChecked == true) _ = CheckStorageAsync();
         PageSettings.Visibility = NavSettings.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
         PageAbout.Visibility = NavAbout.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
     }
@@ -554,9 +553,12 @@ public partial class MainWindow : Window
         try
         {
             var compat = await Task.Run(() => CompatProfile.FromGame(edition.GameDir));
+            // is the host's own game folder the original game? (joiners whose files differ are told whose folder is modified)
+            var hostBase = edition.IsVanilla ? compat : await Task.Run(() => CompatProfile.FromGame(S.GameDir));
+            var baseModified = NB.Core.Project.GameDiff.NotRetail(hostBase);
             _server = new RoomServer
             {
-                RoomName = $"{S.PlayerName}'s room", HostCompat = compat, Edition = edition.Name,
+                RoomName = $"{S.PlayerName}'s room", HostCompat = compat, Edition = edition.Name, HostBaseModified = baseModified,
                 Recipe = edition.Mods.ToList(), ModFile = ModLibrary.Find,
             };
             _server.Start(Net.Port, "0.0.0.0");
@@ -629,15 +631,40 @@ public partial class MainWindow : Window
 
     void HostLaunch_Click(object sender, RoutedEventArgs e) => LaunchGame("127.0.0.1:" + Net.Port, _roomCode);
 
-    void StopHost_Click(object sender, RoutedEventArgs e)
+    async void StopHost_Click(object sender, RoutedEventArgs e)
     {
         if (MessageBox.Show(this, "Close the room? Players in it are disconnected.", "NB Multiplayer", MessageBoxButton.YesNo) != MessageBoxResult.Yes) return;
-        _server?.Stop(); _server = null; _room = null;
-        _steamHost?.Stop(); _steamHost = null;
-        StopCoop();
         HostRunning.Visibility = Visibility.Collapsed;
         HostSetup.Visibility = Visibility.Visible;
         RoomCard.Visibility = Visibility.Collapsed;
+        HostButton.IsEnabled = false; HostButton.Content = "Closing the room...";
+        await ShutdownRoomAsync(client: false);
+        HostButton.IsEnabled = true; HostButton.Content = "Start hosting";
+    }
+
+    /// <summary>
+    /// Stops the room server, the Steam sockets and co-op off the UI thread (each step may wait for sockets and threads;
+    /// on the UI thread a stuck step froze the whole app), each with a time limit, logged to data\shutdown.log.
+    /// </summary>
+    async Task ShutdownRoomAsync(bool client)
+    {
+        var server = _server; var steamHost = _steamHost; var steamClient = client ? _steamClient : null;
+        var coop = _coop; var coopNet = _coopNet;
+        _server = null; _room = null; _steamHost = null; if (client) _steamClient = null; _coop = null; _coopNet = null;
+        var log = Path.Combine(AppSettings.DataDir, "shutdown.log");
+        async Task Step(string what, Action a)
+        {
+            var sw = Stopwatch.StartNew();
+            var t = Task.Run(a);
+            bool done = await Task.WhenAny(t, Task.Delay(TimeSpan.FromSeconds(6))) == t;
+            try { File.AppendAllText(log, $"{DateTime.Now:HH:mm:ss.fff} {what}: {(done ? (t.IsFaulted ? "failed " + t.Exception?.InnerException?.Message : "ok") : "still running after 6 s, left behind")} ({sw.ElapsedMilliseconds} ms){Environment.NewLine}"); }
+            catch (Exception) { }
+        }
+        await Step("co-op", () => coop?.Dispose());
+        await Step("co-op network", () => coopNet?.Dispose());
+        await Step("room server", () => server?.Stop());
+        await Step("Steam host", () => steamHost?.Stop());
+        await Step("Steam client", () => steamClient?.Stop());
     }
 
     void CopyCode_Click(object sender, RoutedEventArgs e) { try { Clipboard.SetText(_roomCode); } catch (Exception) { } }
@@ -707,7 +734,19 @@ public partial class MainWindow : Window
                 {
                     var diff = mineCompat.CompareTo(room.Compat);
                     var areas = string.Join("\n", diff.GroupBy(d => d.Area).Select(g => $"  - {g.Key}: {g.Count()} file(s)"));
-                    ShowJoin($"Your game files differ from the host's:\n{areas}\nYou may not be able to join, or the game may go out of sync.", "Warn", true);
+                    // whose game folder is not the original game? (editions are built on each player's own game folder)
+                    var mineBase = await Task.Run(() => CompatProfile.FromGame(S.GameDir));
+                    var mineMod = NB.Core.Project.GameDiff.NotRetail(mineBase);
+                    var hostMod = room.HostBaseModified;
+                    string Files(List<string> l) => string.Join(", ", l.Take(4)) + (l.Count > 4 ? $" and {l.Count - 4} more" : "");
+                    string why = mineMod.Count > 0
+                        ? $"Your game folder is not the original game ({mineMod.Count} changed file(s): {Files(mineMod)}). Point Settings at an unmodified copy of the game; your changes can become a mod with Mods & editions > Add a modded game folder."
+                        : hostMod is { Count: > 0 }
+                            ? $"The host's game folder is not the original game ({hostMod.Count} changed file(s): {Files(hostMod)}). The host should point Settings at an unmodified copy (their changes can become a mod with Add a modded game folder)."
+                            : hostMod != null
+                                ? "Both game folders are the original game, so the difference is in the built edition: delete the edition in Mods & editions on both PCs and join again (it is rebuilt)."
+                                : "Your game folder is the original game; the host's could not be checked (older NB Multiplayer).";
+                    ShowJoin($"Your game files differ from the host's:\n{areas}\n{why}\nYou may not be able to join, or the game may go out of sync.", "Warn", true);
                     return;
                 }
             }
@@ -990,6 +1029,48 @@ public partial class MainWindow : Window
             }
         }
         catch (Exception ex) { SaveStatus.Text = "The save could not be changed: " + ex.Message; }
+    }
+
+    // ------------------------------------------------------------------ disk space
+
+    async void StorageCheck_Click(object sender, RoutedEventArgs e) => await CheckStorageAsync();
+
+    /// <summary>What the editions really take (files that are not hard links to the game), and whether some are full
+    /// copies on another drive than the game (then "Free up space" rebuilds them next to the game as links).</summary>
+    async Task CheckStorageAsync()
+    {
+        StorageText.Text = "Measuring...";
+        var s = S;
+        var (eds, own, copies) = await Task.Run(() =>
+        {
+            var list = Editions.List(s).Where(x => !x.IsVanilla).ToList();
+            var target = s.EditionsDirFor(s.GameDir);
+            long total = list.Sum(Editions.OwnSize);
+            int far = list.Count(x => !Path.GetFullPath(x.GameDir).StartsWith(Path.GetFullPath(target), StringComparison.OrdinalIgnoreCase));
+            return (list.Count, total, far);
+        });
+        StorageText.Text = $"{eds} edition(s) use {own / 1073741824.0:N1} GB of their own (unchanged game files are shared with your game folder as links)." +
+            (copies > 0 ? $" {copies} of them are full copies of the game because they were made on another drive than your game folder: \"Free up space\" rebuilds them next to your game ({s.EditionsDirFor(s.GameDir)}), where they share its files." : "");
+        CompactButton.Visibility = copies > 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    async void Compact_Click(object sender, RoutedEventArgs e)
+    {
+        if (_game is { HasExited: false }) { MessageBox.Show(this, "Close the game first.", "NB Multiplayer"); return; }
+        CompactButton.IsEnabled = false;
+        var prog = new Progress<(string Text, double Fraction)>(p => StorageText.Text = $"{p.Text} ({p.Fraction:P0})");
+        string result;
+        try
+        {
+            long freed = await Task.Run(() => Editions.Compact(S, prog));
+            result = $"Done: {Math.Max(0, freed) / 1073741824.0:N1} GB freed.";
+            RefreshEditions();
+        }
+        catch (Exception ex) { result = "Could not rebuild the editions: " + ex.Message; }
+        try { File.AppendAllText(Path.Combine(AppSettings.DataDir, "storage.log"), $"{DateTime.Now:u} {result}{Environment.NewLine}"); } catch (Exception) { }
+        CompactButton.IsEnabled = true;
+        await CheckStorageAsync();
+        StorageText.Text = result + " " + StorageText.Text;
     }
 
     void Shortcut_Click(object sender, RoutedEventArgs e) { CreateShortcut(); MessageBox.Show(this, "Shortcut created on the desktop.", "NB Multiplayer"); }

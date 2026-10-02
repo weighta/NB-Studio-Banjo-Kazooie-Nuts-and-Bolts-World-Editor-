@@ -50,8 +50,7 @@ public static class Editions
     public static List<Edition> List(AppSettings s)
     {
         var list = new List<Edition> { new() { Name = VanillaName, GameDir = s.GameDir } };
-        if (!Directory.Exists(AppSettings.EditionsDir)) return list;
-        foreach (var d in Directory.GetDirectories(AppSettings.EditionsDir))
+        foreach (var d in s.AllEditionDirs().SelectMany(Directory.GetDirectories))
         {
             var f = Path.Combine(d, "edition.json");
             if (!File.Exists(f)) continue;
@@ -89,7 +88,7 @@ public static class Editions
     public static string FreeName(AppSettings s, string name)
     {
         var taken = List(s).Select(e => e.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        bool Free(string n) => !taken.Contains(n) && !Directory.Exists(Path.Combine(AppSettings.EditionsDir, Safe(n)));
+        bool Free(string n) => !taken.Contains(n) && !s.AllEditionDirs().Append(s.EditionsDirFor(s.GameDir)).Any(d => Directory.Exists(Path.Combine(d, Safe(n))));
         if (Free(name)) return name;
         for (int i = 2; ; i++) if (Free($"{name} ({i})")) return $"{name} ({i})";
     }
@@ -127,7 +126,7 @@ public static class Editions
         var existing = Find(s, name);
         if (existing != null && existing.RecipeKey == key) Delete(existing);       // rebuilding the same recipe
         else if (existing != null) name = FreeName(s, name);
-        var root = Path.Combine(AppSettings.EditionsDir, Safe(name));
+        var root = Path.Combine(s.EditionsDirFor(s.GameDir), Safe(name));   // same drive as the game: hard links, no copies
         var game = Path.Combine(root, "game");
         if (Directory.Exists(root)) DeleteTree(root);
         Directory.CreateDirectory(game);
@@ -158,7 +157,7 @@ public static class Editions
     {
         var oldRoot = Path.GetDirectoryName(e.GameDir)!;
         name = FreeName(s, name);
-        var newRoot = Path.Combine(AppSettings.EditionsDir, Safe(name));
+        var newRoot = Path.Combine(Path.GetDirectoryName(oldRoot)!, Safe(name));
         Directory.Move(oldRoot, newRoot);
         e.Name = name;
         e.GameDir = Path.Combine(newRoot, "game");
@@ -166,11 +165,48 @@ public static class Editions
         return e;
     }
 
+    /// <summary>Disk space an edition really uses: its files that are not hard links to the game (bytes).</summary>
+    public static long OwnSize(Edition e)
+    {
+        long n = 0;
+        if (e.IsVanilla || !Directory.Exists(e.GameDir)) return 0;
+        foreach (var f in Directory.EnumerateFiles(e.GameDir, "*", SearchOption.AllDirectories))
+            try { if (NB.Core.IO.FileLinks.LinkCount(f) <= 1) n += new FileInfo(f).Length; } catch (Exception) { }
+        return n;
+    }
+
+    /// <summary>
+    /// Editions that are full copies because they were built on another drive than the game (NB Multiplayer 1.7 and
+    /// older put every edition in %LOCALAPPDATA%): rebuilt next to the game as hard links. Returns the bytes freed.
+    /// </summary>
+    public static long Compact(AppSettings s, IProgress<(string Text, double Fraction)> progress)
+    {
+        var target = s.EditionsDirFor(s.GameDir);
+        var todo = List(s).Where(e => !e.IsVanilla && !Path.GetFullPath(e.GameDir).StartsWith(Path.GetFullPath(target), StringComparison.OrdinalIgnoreCase)).ToList();
+        long freed = 0;
+        for (int i = 0; i < todo.Count; i++)
+        {
+            var e = todo[i];
+            var mods = e.Mods.Select(m => ModLibrary.Get(m.Sha256)).ToList();
+            if (mods.Any(m => m == null)) continue;                 // a mod is missing: leave this edition alone
+            long before = OwnSize(e);
+            progress.Report(($"Rebuilding \"{e.Name}\" next to your game ({i + 1}/{todo.Count})", (double)i / todo.Count));
+            var name = e.Name;
+            Delete(e);
+            var built = Create(s, mods!, name, new Progress<(string Text, double Fraction)>(p => progress.Report((p.Text, (i + p.Fraction) / todo.Count))));
+            freed += before - OwnSize(built);
+        }
+        return freed;
+    }
+
     public static void Delete(Edition e)
     {
         if (e.IsVanilla) return;
         var root = Path.GetDirectoryName(e.GameDir)!;
-        if (!Path.GetFullPath(root).StartsWith(Path.GetFullPath(AppSettings.EditionsDir), StringComparison.OrdinalIgnoreCase)) return;
+        var parent = Path.GetDirectoryName(Path.GetFullPath(root))!;
+        bool ours = string.Equals(parent, Path.GetFullPath(AppSettings.EditionsDir), StringComparison.OrdinalIgnoreCase)
+                    || Path.GetFileName(parent).Equals("NB-Multiplayer Editions", StringComparison.OrdinalIgnoreCase);
+        if (!ours || !File.Exists(Path.Combine(root, "edition.json"))) return;   // only folders NB Multiplayer made
         // Hard links share the original's (read-only) attributes; clearing them would change the player's game
         // folder, so each link is deleted with "ignore read-only" instead.
         DeleteTree(root);

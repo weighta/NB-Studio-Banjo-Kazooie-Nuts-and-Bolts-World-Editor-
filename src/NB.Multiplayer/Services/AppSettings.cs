@@ -33,6 +33,39 @@ public sealed class AppSettings
         : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NB-Multiplayer");
     public static string DataDir => Path.Combine(Root, "data");
     public static string EditionsDir => Path.Combine(Root, "editions");
+
+    /// <summary>Edition folders on other drives (next to the game folder), so the editions there are found again.</summary>
+    public List<string> EditionRoots { get; set; } = new();
+
+    static bool SameVolume(string a, string b) =>
+        string.Equals(Path.GetPathRoot(Path.GetFullPath(a)), Path.GetPathRoot(Path.GetFullPath(b)), StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Where editions of <paramref name="gameDir"/> are built. Editions are hard links to the game's files, which only works
+    /// on the same drive: when the game is on another drive than %LOCALAPPDATA%, every edition would be a full copy of the
+    /// game (6.6 GB). Then they go next to the game folder instead ("NB-Multiplayer Editions" beside it), if that is
+    /// writable.
+    /// </summary>
+    public string EditionsDirFor(string gameDir)
+    {
+        if (string.IsNullOrWhiteSpace(gameDir) || SameVolume(gameDir, Root)) return EditionsDir;
+        var full = Path.GetFullPath(gameDir).TrimEnd('\\', '/');
+        var parent = Path.GetDirectoryName(full) ?? Path.GetPathRoot(full)!;
+        var dir = Path.Combine(parent, "NB-Multiplayer Editions");
+        try
+        {
+            Directory.CreateDirectory(dir);
+            var probe = Path.Combine(dir, ".write-test");
+            File.WriteAllText(probe, "ok"); File.Delete(probe);
+            if (!EditionRoots.Contains(dir, StringComparer.OrdinalIgnoreCase)) { EditionRoots.Add(dir); Save(); }
+            return dir;
+        }
+        catch (Exception) { return EditionsDir; }   // not writable: copies in %LOCALAPPDATA% as before
+    }
+
+    /// <summary>Every folder that may hold editions.</summary>
+    public IEnumerable<string> AllEditionDirs() =>
+        new[] { EditionsDir }.Concat(EditionRoots).Distinct(StringComparer.OrdinalIgnoreCase).Where(Directory.Exists);
     static string FilePath => Path.Combine(Root, "settings.json");
 
     public static AppSettings Load()

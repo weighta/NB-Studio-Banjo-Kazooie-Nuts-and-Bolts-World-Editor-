@@ -89,6 +89,14 @@ public static class GameDiff
         return res.OrderBy(r => r.Path, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
+    /// <summary>
+    /// The files of a game folder's compatibility profile (default.xex and every bundle, hashed and cached by
+    /// <see cref="Net.CompatProfile"/>) that are not the retail game's: a quick "is this the original game?" check.
+    /// </summary>
+    public static List<string> NotRetail(Net.CompatProfile profile) =>
+        profile.Files.Where(kv => !Retail.TryGetValue(kv.Key, out var fp) || !fp.Sha256.Equals(kv.Value, StringComparison.OrdinalIgnoreCase))
+            .Select(kv => kv.Key).OrderBy(k => k, StringComparer.OrdinalIgnoreCase).ToList();
+
     /// <summary>Whether <paramref name="dir"/> has the retail version of every file in <paramref name="paths"/> (empty list = yes).</summary>
     public static List<string> NotRetail(string dir, IEnumerable<string> paths)
     {

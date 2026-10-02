@@ -69,6 +69,9 @@ public sealed class RoomServer : IDisposable
     public List<NB.Core.Project.RecipeMod>? Recipe { get; set; }
     /// <summary>The host's .nbpatch file for a SHA-256 of the recipe (null = not available).</summary>
     public Func<string, string?>? ModFile { get; set; }
+    /// <summary>Files of the host's own game folder that are not the original game (null = not checked): joiners whose
+    /// files differ are told whose game folder is modified.</summary>
+    public List<string>? HostBaseModified { get; set; }
     /// <summary>Showdown Town co-op rooms: the settings every player's game uses (null = not a co-op room).</summary>
     public CoopRoomSettings? Coop { get; set; }
 
@@ -325,6 +328,7 @@ public sealed class RoomServer : IDisposable
                 fingerprint = HostCompat?.Fingerprint ?? "", files = HostCompat?.Files ?? new Dictionary<string, string>(),
                 recipe = Recipe?.Select(m => new { id = m.Id, name = m.Name, version = m.Version, sha256 = m.Sha256, size = m.Size }).ToList(),
                 coop = Coop == null ? null : new { protocol = Coop.Protocol, timeOfDay = Coop.TimeOfDay, allUnlocked = Coop.AllUnlockedSave },
+                baseModified = HostBaseModified,
             };
         return Json(c, 200, dto);
     }

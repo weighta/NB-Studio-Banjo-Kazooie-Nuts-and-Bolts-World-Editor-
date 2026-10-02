@@ -25,12 +25,20 @@ public static class FileLinks
         public uint Volume, SizeHigh, SizeLow, Links, IndexHigh, IndexLow;
     }
 
-    public static bool TryLink(string link, string existing) => CreateHardLink(link, existing, IntPtr.Zero);
+    public static bool TryLink(string link, string existing) => CreateHardLink(Long(link), Long(existing), IntPtr.Zero);
+
+    /// <summary>The Win32 calls here take the "\\?\" form for paths longer than MAX_PATH (deep folders).</summary>
+    static string Long(string path)
+    {
+        var full = Path.GetFullPath(path);
+        if (full.Length < 240 || full.StartsWith(@"\\?\")) return full;
+        return full.StartsWith(@"\\") ? @"\\?\UNC\" + full[2..] : @"\\?\" + full;
+    }
 
     /// <summary>Number of names the file has (1 = not a hard link).</summary>
     public static int LinkCount(string path)
     {
-        using var h = CreateFileW(path, 0x80, 7, IntPtr.Zero, 3, 0x02000000, IntPtr.Zero);   // FILE_READ_ATTRIBUTES; FILE_FLAG_BACKUP_SEMANTICS
+        using var h = CreateFileW(Long(path), 0x80, 7, IntPtr.Zero, 3, 0x02000000, IntPtr.Zero);   // FILE_READ_ATTRIBUTES; FILE_FLAG_BACKUP_SEMANTICS
         return !h.IsInvalid && GetFileInformationByHandle(h, out var i) ? (int)i.Links : -1;   // -1 = unknown
     }
 
@@ -40,7 +48,7 @@ public static class FileLinks
         const uint DELETE = 0x00010000, SHARE_ALL = 7, OPEN_EXISTING = 3, OPEN_REPARSE_POINT = 0x00200000;
         const int FileDispositionInfoEx = 21;
         uint flags = 0x1 | 0x2 | 0x10;   // DELETE | POSIX_SEMANTICS | IGNORE_READONLY_ATTRIBUTE
-        using var h = CreateFileW(path, DELETE, SHARE_ALL, IntPtr.Zero, OPEN_EXISTING, OPEN_REPARSE_POINT, IntPtr.Zero);
+        using var h = CreateFileW(Long(path), DELETE, SHARE_ALL, IntPtr.Zero, OPEN_EXISTING, OPEN_REPARSE_POINT, IntPtr.Zero);
         if (h.IsInvalid || !SetFileInformationByHandle(h, FileDispositionInfoEx, ref flags, 4))
             throw new IOException($"cannot delete {path} (error {Marshal.GetLastWin32Error()})");
     }

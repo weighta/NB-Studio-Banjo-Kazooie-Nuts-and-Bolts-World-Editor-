@@ -125,7 +125,7 @@ public static class GameLauncher
 /// <param name="Recipe">The mods of the host's edition (empty = Vanilla); null from hosts older than NB Multiplayer 1.2.</param>
 /// <param name="Coop">Co-op room settings (null: not a co-op room, or a host older than NB Multiplayer 1.7).</param>
 public sealed record RoomInfo(string Name, string HostXuid, string Edition, List<(string Xuid, string Name)> Players, CompatProfile? Compat,
-    List<NB.Core.Project.RecipeMod>? Recipe = null, CoopRoomSettings? Coop = null);
+    List<NB.Core.Project.RecipeMod>? Recipe = null, CoopRoomSettings? Coop = null, List<string>? HostBaseModified = null);
 
 public static class Net
 {
@@ -198,8 +198,9 @@ public static class Net
             if (j["coop"] is JsonObject co)
                 coop = new CoopRoomSettings { Protocol = co["protocol"]?.GetValue<int>() ?? 0, TimeOfDay = co["timeOfDay"]?.GetValue<int>() ?? 0,
                                               AllUnlockedSave = co["allUnlocked"]?.GetValue<bool>() ?? false };
+            List<string>? baseMod = j["baseModified"] is JsonArray bm ? bm.Select(x => x?.GetValue<string>() ?? "").ToList() : null;
             return new RoomInfo(j["name"]?.GetValue<string>() ?? "", j["host"]?.GetValue<string>() ?? "",
-                j["edition"]?.GetValue<string>() ?? Editions.VanillaName, players, compat, recipe, coop);
+                j["edition"]?.GetValue<string>() ?? Editions.VanillaName, players, compat, recipe, coop, baseMod);
         }
         catch (Exception) { return null; }
     }
