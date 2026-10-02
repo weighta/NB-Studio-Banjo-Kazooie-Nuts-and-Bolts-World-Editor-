@@ -886,8 +886,12 @@ public partial class MainWindow : Window
             CoopMode.Vehicle => "in town", CoopMode.OnFoot => "on foot", CoopMode.Building => "changing vehicle",
             CoopMode.Paused => "paused", _ => "not in town",
         };
-        var names = new List<(string Name, bool Me, string Doing)> { (S.PlayerName, true, _game is { HasExited: false } ? Doing(_coop?.Local ?? default) : "game not running") };
-        if (_coopNet != null) names.AddRange(_coopNet.Remotes.Values.Select(r => (r.Name, false, Doing(r.State))));
+        // the vehicle each player drives (its design's name, e.g. "Trolley Mk. 6")
+        static string Veh(string? name, CoopState st) => st.Mode == CoopMode.Vehicle && !string.IsNullOrWhiteSpace(name)
+            ? ", " + System.Globalization.CultureInfo.InvariantCulture.TextInfo.ToTitleCase(name.ToLowerInvariant()) : "";
+        var names = new List<(string Name, bool Me, string Doing)> { (S.PlayerName, true, _game is { HasExited: false } ? Doing(_coop?.Local ?? default) + Veh(_coop?.LocalVehicle, _coop?.Local ?? default) : "game not running") };
+        if (_coopNet != null) names.AddRange(_coopNet.Remotes.Select(kv => (kv.Value.Name, false, Doing(kv.Value.State)
+            + Veh(_coopNet.Designs.TryGetValue(kv.Key, out var d) && d.Hash == kv.Value.State.Design ? d.Name : null, kv.Value.State))));
         foreach (var (name, me, doing) in names)
         {
             var chip = new Border { CornerRadius = new CornerRadius(16), Padding = new Thickness(14, 7, 14, 7), Margin = new Thickness(0, 0, 8, 8),

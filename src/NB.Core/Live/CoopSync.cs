@@ -20,7 +20,7 @@ public enum CoopMode : byte
 [Flags]
 public enum CoopFlags : byte { None = 0, Menu = 1, Photo = 2 }
 
-/// <summary>One player's state, as sent 30 times a second in Showdown Town co-op (protocol 2).</summary>
+/// <summary>One player's state, as sent 30 times a second in Showdown Town co-op (protocol 3).</summary>
 public struct CoopState
 {
     public CoopMode Mode;
@@ -33,12 +33,14 @@ public struct CoopState
     /// <summary>The sender's one-way delay to the host in milliseconds (0 for the host): receivers add their own and
     /// predict the position that far ahead.</summary>
     public ushort DelayMs;
+    /// <summary>Hash of the vehicle design the player drives (<see cref="CoopDesign"/>; 0 = not known / no exe mod).</summary>
+    public uint Design;
 
     public bool InVehicle => Mode == CoopMode.Vehicle;
     /// <summary>In Showdown Town and visible to the others.</summary>
     public bool Shown => Mode is CoopMode.Vehicle or CoopMode.OnFoot or CoopMode.Paused;
 
-    public const int Size = 4 + 13 * 4 + 4 + 4;
+    public const int Size = 4 + 13 * 4 + 4 + 4 + 4;
     public byte[] Write()
     {
         var b = new byte[Size];
@@ -48,7 +50,7 @@ public struct CoopState
         foreach (var f in new[] { Position.X, Position.Y, Position.Z, Rotation.X, Rotation.Y, Rotation.Z, Rotation.W,
                                   Velocity.X, Velocity.Y, Velocity.Z, AngularVelocity.X, AngularVelocity.Y, AngularVelocity.Z })
         { BE.WF32(b, o, f); o += 4; }
-        BE.W32(b, o, Blueprint); BE.W32(b, o + 4, Seq);
+        BE.W32(b, o, Blueprint); BE.W32(b, o + 4, Seq); BE.W32(b, o + 8, Design);
         return b;
     }
     public static CoopState Read(byte[] b)
@@ -59,13 +61,14 @@ public struct CoopState
             Mode = b[0] <= 4 ? (CoopMode)b[0] : CoopMode.Absent, Flags = (CoopFlags)(b[1] & 3), DelayMs = BE.U16(b, 2),
             Position = new(F(0), F(1), F(2)), Rotation = new(F(3), F(4), F(5), F(6)),
             Velocity = new(F(7), F(8), F(9)), AngularVelocity = new(F(10), F(11), F(12)),
-            Blueprint = BE.U32(b, 4 + 13 * 4), Seq = BE.U32(b, 4 + 14 * 4),
+            Blueprint = BE.U32(b, 4 + 13 * 4), Seq = BE.U32(b, 4 + 14 * 4), Design = BE.U32(b, 4 + 15 * 4),
         };
     }
 }
 
-/// <summary>A remote player's latest state and how old it is (seconds since it left that player's game).</summary>
-public readonly record struct CoopRemote(CoopState State, float AgeSeconds);
+/// <summary>A remote player's latest state and how old it is (seconds since it left that player's game), with the
+/// vehicle design and damage they last sent (null = not received yet).</summary>
+public readonly record struct CoopRemote(CoopState State, float AgeSeconds, CoopDesign? Design = null, CoopDamage? Damage = null);
 
 /// <summary>
 /// Showdown Town co-op inside one running game: reads the local player's vehicle and drives "puppet" vehicles (AI
@@ -75,16 +78,17 @@ public readonly record struct CoopRemote(CoopState State, float AgeSeconds);
 /// before it, centres of mass +0x10/+0x20, quaternions (x,y,z,w) +0x30/+0x40, linear velocity +0x90 and angular velocity +0xA0.
 /// Puppets are steered by velocity (target velocity + 4 × position error), so collisions with them behave physically.
 /// </summary>
-public sealed class CoopSync
+public sealed partial class CoopSync
 {
     public const uint VehicleVtable = 0x82FB7F78;
     readonly XeniaLive _x;
     readonly uint _puppetBlueprint;
     readonly Vector3 _parkSpot;
-    List<uint> _vehicles = new();
+    List<uint> _vehicles = new();                         // puppet vehicle objects
     DateTime _lastScan = DateTime.MinValue;
     uint _localBody, _localVeh;
-    readonly Dictionary<long, uint> _assigned = new();   // remote player id -> puppet body (motion-state position address)
+    // remote player id -> puppet vehicle object (not its body: a part breaking off gives the vehicle a new body)
+    readonly Dictionary<long, uint> _assigned = new();
 
     public int PuppetCount { get; private set; }
     public string Status { get; private set; } = "";
@@ -108,25 +112,32 @@ public sealed class CoopSync
         _lastScan = DateTime.UtcNow;
         // only the puppets need a scan (the player's own vehicle is a pointer away); freed vehicles keep their vtable and
         // blueprint but lose their level (+0x4C)
-        _vehicles = _x.FindU32(VehicleVtable).Where(v => _x.U32(v + 0x18A4) == _puppetBlueprint && _x.U32(v + 0x4C) != 0).ToList();
-        _vehOf.Clear();
-        foreach (var v in _vehicles) { var b = BodyOf(_x, v); if (b != 0) _vehOf[b] = v; }
-        var puppets = _vehOf.Keys.ToHashSet();
+        // (a puppet the mailbox is rebuilding right now is kept: it is replaced when the rebuild returns)
+        _vehicles = _x.FindU32(VehicleVtable).Where(v => _x.U32(v + 0x18A4) == _puppetBlueprint && _x.U32(v + 0x4C) != 0 && BodyOf(_x, v) != 0)
+            .Union(_rebuilding).ToList();
+        var puppets = _vehicles.ToHashSet();
         PuppetCount = puppets.Count;
         foreach (var k in _assigned.Where(kv => !puppets.Contains(kv.Value)).Select(kv => kv.Key).ToList()) _assigned.Remove(k);
         _free = puppets.Except(_assigned.Values).ToList();
+        foreach (var v in _designOf.Keys.Where(v => !puppets.Contains(v)).ToList()) { _designOf.Remove(v); _applied.Remove(v); _blockMaps.Remove(v); }
+        foreach (var v in _held.Keys.Where(v => !puppets.Contains(v)).ToList()) _held.Remove(v);
+        foreach (var v in _hidden.Keys.Where(v => !puppets.Contains(v)).ToList()) _hidden.Remove(v);
+        foreach (var k in _detachTries.Keys.Where(k => !puppets.Contains(k.Veh)).ToList()) _detachTries.Remove(k);
+        foreach (var v in _quietUntil.Keys.Where(v => !puppets.Contains(v)).ToList()) _quietUntil.Remove(v);
     }
     List<uint> _free = new();
-    readonly Dictionary<uint, uint> _vehOf = new();   // puppet body -> its vehicle object
 
     /// <summary>
     /// Is the puppet still the live vehicle it was? Change Vehicle (and break-ups) destroy every vehicle in the level; the
     /// destroyed object loses its body pointer (+0x7C0). Writing into a destroyed body would corrupt the game's memory, so
     /// every write is checked first and a rescan picks up the new vehicles.
     /// </summary>
-    bool Alive(uint body) =>
-        _vehOf.TryGetValue(body, out var v) && _x.U32(v) == VehicleVtable && _x.U32(v + 0x18A4) == _puppetBlueprint
-        && _x.U32(v + 0x4C) != 0 && BodyOf(_x, v) == body;
+    bool Alive(uint veh) =>
+        !_rebuilding.Contains(veh) && _x.U32(veh) == VehicleVtable && _x.U32(veh + 0x18A4) == _puppetBlueprint
+        && _x.U32(veh + 0x4C) != 0 && BodyOf(_x, veh) != 0;
+
+    /// <summary>Puppets the game is changing right now (rebuild, a part breaking off): no writes into them until it is done.</summary>
+    bool Quiet(uint veh) => _rebuilding.Contains(veh) || (_quietUntil.TryGetValue(veh, out var t) && DateTime.UtcNow < t);
 
     Quaternion Q(uint a) { var b = _x.Read(a, 16); return b.Length == 16 ? new(BE.F32(b, 0), BE.F32(b, 4), BE.F32(b, 8), BE.F32(b, 12)) : Quaternion.Identity; }
 
@@ -147,6 +158,7 @@ public sealed class CoopSync
         Rescan();
         uint veh = _x.U32(avatar + 0xC3C);
         if (Ptr(veh) && _x.U32(veh) == VehicleVtable && _x.U32(veh + 0x4C) != 0) { _localVeh = veh; _localBody = BodyOf(_x, veh); }
+        if (_localVeh != _localVehSeen) { _localVehSeen = _localVeh; _localVehSince = DateTime.UtcNow; }
         var foot = new CoopState { Mode = CoopMode.OnFoot, Position = _x.PlayerPosition, Rotation = Quaternion.Identity };
         if (_localBody == 0) return WithMenus(foot);
         var st = new CoopState
@@ -155,6 +167,7 @@ public sealed class CoopSync
             Velocity = _x.V3(_localBody + 0x90), AngularVelocity = _x.V3(_localBody + 0xA0),
         };
         st.Blueprint = _localVeh != 0 ? _x.U32(_localVeh + 0x18A4) : 0;
+        st.Design = LocalDesign != null && _designVeh == _localVeh ? LocalDesign.Hash : 0;
         var res = Finite(st) ? st : Finite(foot) ? foot : default;
         return WithMenus(res);
     }
@@ -198,22 +211,28 @@ public sealed class CoopSync
         {
             var st = r.State;
             if (!st.Shown) continue;
-            if (!_assigned.TryGetValue(id, out var body))
+            if (!_assigned.TryGetValue(id, out var veh))
             {
                 if (_free.Count == 0) continue;
-                body = _free[0]; _free.RemoveAt(0); _assigned[id] = body;
-                _hidden.Remove(body);
-                if (Alive(body) && Finite(st)) Teleport(body, Apart(st.Position) + new Vector3(0, 0.5f, 0));   // appears where the player is (beside us if that is here)
+                veh = _free[0]; _free.RemoveAt(0); _assigned[id] = veh;
+                _hidden.Remove(veh);
+                if (!Quiet(veh) && Alive(veh) && Finite(st)) Teleport(BodyOf(_x, veh), Apart(st.Position) + new Vector3(0, 0.5f, 0));   // appears where the player is (beside us if that is here)
             }
-            if (Alive(body)) SetHidden(body, false);
-            if (!Alive(body)) { _assigned.Remove(id); _lastScan = DateTime.MinValue; continue; }   // destroyed: rescan next tick
-            if (st.Mode != CoopMode.Vehicle || !Finite(st)) { Hold(body); shown++; continue; }   // on foot / paused: the vehicle stands
-            _held.Remove(body);
+            if (Quiet(veh)) { shown++; continue; }                                  // being rebuilt / splitting: hands off
+            if (!Alive(veh)) { _assigned.Remove(id); _lastScan = DateTime.MinValue; continue; }   // destroyed: rescan next tick
+            uint body = BodyOf(_x, veh);
+            // the player's new vehicle design is on its way (or being built here): keep the old one out of sight meanwhile
+            if (WaitingForDesign(id, veh, r)) { Hide(veh, body); continue; }
+            SetHidden(veh, false);
+            _hidden.Remove(veh);
+            if (st.Mode != CoopMode.Vehicle || !Finite(st)) { Hold(veh, body); shown++; continue; }   // on foot / paused: the vehicle stands
+            _held.Remove(veh);
             Drive(body, st, Math.Clamp(r.AgeSeconds, 0f, MaxLead));
             shown++;
         }
-        foreach (var b in _free) if (Alive(b)) Hide(b);
+        foreach (var v in _free) if (!Quiet(v) && Alive(v)) Hide(v, BodyOf(_x, v));
         PostDamage();
+        PumpVehicles(remotes);
         Status = $"{shown} player(s) shown, {PuppetCount} puppet vehicle(s) available";
     }
 
@@ -321,7 +340,7 @@ public sealed class CoopSync
         if (_hitsRead == uint.MaxValue) _hitsRead = count;              // first look: older hits are not ours to send
         else if (count - _hitsRead > 8) _hitsRead = count - 8;            // fell behind: the ring keeps the last 8
         var ring = _hitsRead == count ? Array.Empty<byte>() : _x.Read(HitRing, 8 * 16);
-        var byVeh = _assigned.Where(kv => _vehOf.ContainsKey(kv.Value)).ToDictionary(kv => _vehOf[kv.Value], kv => kv.Key);
+        var byVeh = _assigned.ToDictionary(kv => kv.Value, kv => kv.Key);
         for (uint i = _hitsRead; i != count && ring.Length == 128; i++)
         {
             int o = (int)(i & 7) * 16;                                    // vehicle, damage, other material (-1: explosion)
@@ -375,10 +394,10 @@ public sealed class CoopSync
     }
 
     /// <summary>Keeps a puppet standing where it is (its AI driver would otherwise drive it off).</summary>
-    void Hold(uint body)
+    void Hold(uint veh, uint body)
     {
         var cur = _x.V3(body);
-        if (!_held.TryGetValue(body, out var spot)) _held[body] = spot = cur;
+        if (!_held.TryGetValue(veh, out var spot)) _held[veh] = spot = cur;
         else if (Vector3.Distance(cur, spot) > 1.5f) Teleport(body, spot);
         var v = _x.V3(body + 0x90);
         _x.WV3(body + 0x90, new Vector3(0, Math.Min(v.Y, 0), 0));   // keep falling, so it settles on the ground
@@ -394,10 +413,10 @@ public sealed class CoopSync
     /// and characters pass through it, its wheels still stand on the ground. Re-applied every tick (a break-up gives it a
     /// new body; new puppets after Change Vehicle start visible). It also stands still, so it is where it was.
     /// </summary>
-    void Hide(uint body)
+    void Hide(uint veh, uint body)
     {
-        SetHidden(body, true);
-        if (!_hidden.TryGetValue(body, out var spot)) _hidden[body] = spot = _x.V3(body);
+        SetHidden(veh, true);
+        if (!_hidden.TryGetValue(veh, out var spot)) _hidden[veh] = spot = _x.V3(body);
         var cur = _x.V3(body);
         if (new Vector2(cur.X - spot.X, cur.Z - spot.Z).Length() > 1.5f) Teleport(body, spot);
         var v = _x.V3(body + 0x90);
@@ -407,9 +426,8 @@ public sealed class CoopSync
 
     const uint DrawOff = 0x1C0, LayerMask = 0x3F, HiddenLayer = 9, VehicleLayer = 7;
 
-    void SetHidden(uint body, bool hidden)
+    void SetHidden(uint veh, bool hidden)
     {
-        if (!_vehOf.TryGetValue(body, out var veh)) return;
         void W32(uint a, uint v) { var b = new byte[4]; BE.W32(b, 0, v); _x.Write(a, b); }
         uint flag = hidden ? 1u : 0u;
         if (_x.U32(veh + DrawOff) != flag) W32(veh + DrawOff, flag);
