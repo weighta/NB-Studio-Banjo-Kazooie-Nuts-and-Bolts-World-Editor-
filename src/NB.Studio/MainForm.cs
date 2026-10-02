@@ -240,6 +240,7 @@ public sealed class MainForm : Form
         startIn.DropDownItems.Add("(open a workspace first)");
         tools.DropDownItems.Add(startIn);
         tools.DropDownItems.Add("Rebuild Asset Index", null, async (_, _) => { if (_ws != null) await LoadIndex(true); });
+        tools.DropDownItems.Add("Xbox 360 Photo Viewer (drop console photo packages)…", null, (_, _) => new Panels.PhotoViewerForm().Show(this));
         tools.DropDownItems.Add("Decompress an xcompress (0FF512ED) File…", null, (_, _) => DecompressFile());
         tools.DropDownItems.Add("Executable (default.xex) Info / Extract PE…", null, (_, _) => XexInfo());
         tools.DropDownItems.Add("Bulk Export Assets (current Asset filter)…", null, async (_, _) => { _busy = true; try { await _assets.BulkExport(this, _ws, Log, SetProgress); } finally { _busy = false; SetProgress(null, 0); } });

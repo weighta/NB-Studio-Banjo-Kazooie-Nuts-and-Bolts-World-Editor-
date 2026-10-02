@@ -49,7 +49,8 @@
 | **Sharing** | Export a `.nbpatch` mod: a small differential patch with only your changes, plus its name, version, category (map, vehicle parts, gameplay, visuals, audio, tweak, co-op), tags and description. It contains no game data; others apply it to their own copy with one click (with backup and rollback) or add it to NB Multiplayer's mod library. |
 | **Mods from modded folders** | Build > *Create Patch from a Modified Game Folder*: a game folder modded by hand becomes a mod. NB Studio compares it with the original game (size and SHA-256 of every retail file, shipped with the tool), shows what changed per file and asset (textures, models, markers, scripts, parts), recognises known executable tweaks in an edited `default.xex`, and fills in the category and tags. *Try it* starts the result in Xenia. |
 | **Combining mods** | Mods that change the same bundle are merged asset by asset; real conflicts are named down to the asset. Mods can carry *world edits* that are replayed on top of other mods (Showdown Town co-op works on any town this way). |
-| **Command line** | `cli/NB.Cli.exe`: every format tool, patch building and applying, combining mods (`stack-check`, `stack-apply`), mods from modded folders (`game-verify`, `game-diff`, `patch-from-folder`), world edits (`ops-apply`), the tick-box tweak mods, AI routes and vehicles, scripted Xenia tests. |
+| **Xbox 360 photos** | Tools > *Xbox 360 Photo Viewer*: drop the photo packages your console saves with *Take Photo* (one or many) and the photo pops up: save it as PNG / JPEG / BMP, copy it (Ctrl+C) or drag it out. *Auto-extract* writes every dropped package's photo as a JPEG next to it. *Import Image into Package* (Ctrl+I) puts your own picture into a photo package (1280×720 JPEG and thumbnail, all package hashes recomputed); the game's Photo Album shows it. Dropping packages on `NBModStudio.exe` opens just the viewer. |
+| **Command line** | `cli/NB.Cli.exe`: every format tool, patch building and applying, combining mods (`stack-check`, `stack-apply`), mods from modded folders (`game-verify`, `game-diff`, `patch-from-folder`), world edits (`ops-apply`), Xbox 360 photos (`photo-extract`, `photo-import`), the tick-box tweak mods, AI routes and vehicles, scripted Xenia tests. |
 
 Everything is non-destructive: NB Studio works on a **workspace** (a copy of your game), never on your original files,
 and keeps a history of every saved file.
@@ -216,6 +217,11 @@ inversion), where the name drops the `aid_<type>_` prefix. Bundles are named the
   the target part). Rebuilding regenerates all of it: **1,756/1,756 files round-trip byte-identically**.
   Each bundle has a `manifest` asset listing (asset id, ordinal) pairs and the **dependency bundles**; the game finds
   assets only through the manifest, and a level's bundle pulls in its world through these dependencies.
+* **Xbox 360 STFS packages** (`CON ` / `LIVE` / `PIRS`, the console's save, photo and download containers): metadata
+  (display name, title and profile ids, thumbnail), file table, 4 KB blocks with SHA-1 hash tables. Read and rewritten
+  (header hash, top hash, block hashes and chains recomputed; single-level packages); the console signature needs a
+  resign (Horizon / Velocity) for a real console. A Nuts & Bolts photo is one file in such a package: a 32-byte game
+  header (owner XUID at +0x10: the Photo Album lists only the playing profile's photos) and a 1280×720 JPEG.
 * **Streaming archive `0x438CB47C`** (Bundle/50): entry table (asset id, offset, size) and dependencies; **151/151
   round-trip**.
 

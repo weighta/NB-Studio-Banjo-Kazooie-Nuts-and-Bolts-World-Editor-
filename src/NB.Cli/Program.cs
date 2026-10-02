@@ -2050,6 +2050,45 @@ static class Program
                     Console.WriteLine($"wrote {args[2]} ({new FileInfo(args[2]).Length:N0} bytes) in {sw.Elapsed.TotalSeconds:F0}s");
                     return 0;
                 }
+                case "photo-import":
+                {
+                    // photo-import <photo package> <image> [out package] [--fit] [--owner XUID]: the image becomes the package's photo
+                    // (1280x720 JPEG + thumbnail), integrity hashes recomputed; without [out] the package is replaced
+                    // (the original is kept once as <package>.original)
+                    var pos = args.Skip(1).Where((a, i) => !a.StartsWith("--") && args[i] != "--owner").ToList();
+                    var photo = NB.Core.Formats.NbPhoto.Read(pos[0]).First();
+                    var (jpg, thumb) = NB.Core.Formats.NbPhoto.PrepareImage(File.ReadAllBytes(pos[1]), crop: !args.Contains("--fit"));
+                    int oi = Array.IndexOf(args, "--owner");
+                    ulong? owner = oi > 0 ? Convert.ToUInt64(args[oi + 1], 16) : null;
+                    var bytes = NB.Core.Formats.NbPhoto.Import(photo, jpg, thumb, owner);
+                    var outPath = pos.Count > 2 ? pos[2] : pos[0];
+                    if (outPath == pos[0] && !File.Exists(pos[0] + ".original")) File.Copy(pos[0], pos[0] + ".original");
+                    File.WriteAllBytes(outPath, bytes);
+                    Console.WriteLine($"{outPath}: \"{photo.Name}\" now holds {Path.GetFileName(pos[1])} ({jpg.Length:N0} byte JPEG), package {bytes.Length:N0} bytes");
+                    return 0;
+                }
+                case "photo-extract":
+                {
+                    // photo-extract <package or folder> [out dir]: the photos in Xbox 360 Nuts & Bolts photo packages, as JPEG files
+                    var outDir = args.Length > 2 ? args[2] : ".";
+                    Directory.CreateDirectory(outDir);
+                    var inputs = Directory.Exists(args[1]) ? Directory.GetFiles(args[1], "*", SearchOption.AllDirectories) : new[] { args[1] };
+                    foreach (var f in inputs)
+                    {
+                        try
+                        {
+                            foreach (var ph in NB.Core.Formats.NbPhoto.Read(f))
+                            {
+                                var name = new string(ph.Name.Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '-' : c).ToArray());
+                                var path = Path.Combine(outDir, name + ".jpg");
+                                File.WriteAllBytes(path, ph.Jpeg);
+                                Console.WriteLine($"{f}: \"{ph.Name}\" ({ph.FileInside}, title {ph.Package?.TitleId:X8}) -> {path} ({ph.Jpeg.Length:N0} bytes)");
+                            }
+                        }
+                        catch (InvalidDataException e) { Console.WriteLine($"{f}: {e.Message}"); }
+                    }
+                    return 0;
+                }
                 case "xex-poke":
                 {
                     // xex-poke <in default.xex> <out default.xex> [--mod <exe mod id>]... [address=value]...: write words into the
