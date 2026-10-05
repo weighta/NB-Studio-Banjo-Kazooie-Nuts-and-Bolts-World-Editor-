@@ -361,6 +361,23 @@ static class Program
                     Console.WriteLine($"saved ({hits} reference(s) changed)");
                     return 0;
                 }
+                case "renut-layer":
+                {
+                    // renut-layer <renut source dir> <untouched default.xex>: before codegen, add NB's exe-mod hooks (config/nb_hooks.toml)
+                    if (args.Length < 3) { Console.WriteLine("usage: renut-layer <reNut source folder> <untouched default.xex>"); return 1; }
+                    var sites = NB.Core.Mods.RenutLayer.WriteHooks(args[1], args[2]);
+                    Console.WriteLine($"{sites.Count} sites of {sites.Select(s => s.Mod).Distinct().Count()} mods, {sites.Count(s => s.Exits.Count > 1)} with several continuations, " +
+                                      $"{sites.SelectMany(s => s.Exits).Distinct().Count()} continuation points -> config/nb_hooks.toml, config/nb_layer.json");
+                    return 0;
+                }
+                case "renut-layer-apply":
+                {
+                    // renut-layer-apply <renut source dir>: after codegen, turn the hooks into the NB interpreter check
+                    if (args.Length < 2) { Console.WriteLine("usage: renut-layer-apply <reNut source folder>"); return 1; }
+                    int n = NB.Core.Mods.RenutLayer.ApplyToGenerated(args[1]);
+                    Console.WriteLine($"{n} sites converted in generated code");
+                    return 0;
+                }
                 case "xex-patch":
                 {
                     // xex-patch <in default.xex> <out default.xex> <mod id> [mod id...]: bake executable mods into a decrypted XEX (for consoles)

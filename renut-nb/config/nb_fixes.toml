@@ -1,0 +1,10 @@
+# NB fixes for reNut (game races that reNut's timing exposes). See src/nb/nb_fixes.cpp.
+
+# 0x82364250 looks a handle up in a locked slot table and reads slot+0x24 without checking that the slot is in use
+# (r31 = 0). Under reNut it can run before the slot is filled while the title screen loads (null read, crash). An empty
+# slot now goes straight to the unlock at the end, skipping the slot work and the table save/restore pair around it.
+[[midasm_hook]]
+address = 0x823642D8
+name = "nbfix_empty_slot"
+registers = ["r31"]
+jump_address_on_true = 0x82364340

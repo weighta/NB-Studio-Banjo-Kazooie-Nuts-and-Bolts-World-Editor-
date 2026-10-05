@@ -352,6 +352,7 @@ The editor is `src/NB.Studio/bin/Release/net9.0-windows/NBModStudio.exe`, and th
 | `src/NB.Multiplayer` | NB Multiplayer (WPF): rooms, Steam, editions, mod library, co-op, Character Select |
 | `src/NB.Studio` | NB Studio (WinForms + OpenGL): the world editor |
 | `src/NB.Cli` | `NB.Cli.exe`, the command-line tool used by the build scripts and tests |
+| `renut-nb/` | NB's mod layer for [reNut](https://github.com/masterspike52/reNut) (the game recompiled to native PC code): NB Multiplayer's *Launch with reNut* option uses a reNut built with it |
 | `coop/`, `charsel/`, `snow/` | Recipes that rebuild the bundled mods from your own copy of the game (`sh coop/build.sh`, `sh charsel/build.sh`, `sh snow/build.sh`; they need NB.Cli built in Release and Python). Set `NB_GAME` to your untouched game folder. Their output in `*/dist/` is bundled into NB Multiplayer when present. |
 | `research-tools/`, `docs/` | The Python probes used to work out the file formats, and the format documentation |
 

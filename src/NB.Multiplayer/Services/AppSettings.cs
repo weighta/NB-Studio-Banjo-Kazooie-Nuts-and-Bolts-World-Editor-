@@ -29,6 +29,12 @@ public sealed class AppSettings
     public bool UseAllUnlockedSave { get; set; }
     /// <summary>Showdown Town co-op: the time of day the host's room plays in (0 = random each session, 1..4 = morning..night).</summary>
     public int CoopTimeOfDay { get; set; }
+    /// <summary>What runs the game: "xenia" (the NB Xenia build, default) or "renut" (reNut, the native PC recompilation;
+    /// see Services/Renut). Xbox LIVE rooms always use Xenia (reNut has no LIVE networking).</summary>
+    public string Engine { get; set; } = "xenia";
+    /// <summary>The reNut build to use (renut.exe built with NB's mod layer); "" = renut\renut.exe next to NB Multiplayer.</summary>
+    public string RenutPath { get; set; } = "";
+    public bool UseRenut => string.Equals(Engine, "renut", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>%LOCALAPPDATA%\NB-Multiplayer, or NB_MP_ROOT (tests: a separate settings/profile folder).</summary>
     public static string Root => Environment.GetEnvironmentVariable("NB_MP_ROOT") is { Length: > 0 } r ? r

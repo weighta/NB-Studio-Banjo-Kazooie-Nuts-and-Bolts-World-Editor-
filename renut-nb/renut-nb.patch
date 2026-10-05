@@ -1,0 +1,74 @@
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -20,6 +20,10 @@
+ 	src/renut_engine/perf/frame_stats.cpp
+ 	src/renut_engine/game/frontend_debug_menu.cpp
+ 	src/renut_engine/app/crash_dump.cpp
++    src/nb/msvc_compat.cpp
++    src/nb/nbpatch.cpp
++    src/nb/nb_remote_pad.cpp
++    src/nb/nb_fixes.cpp
+ )
+ 
+ if(WIN32)
+--- a/renut_config.toml
++++ b/renut_config.toml
+@@ -3,6 +3,8 @@
+ # See README.md for full configuration reference.
+ 
+ includes = [
++"config/nb_hooks.toml",
++"config/nb_fixes.toml",
+ "config/renut_funcs.toml",
+ "config/renut_hooks.toml",
+ "config/renut_gpu_funcs.toml"
+--- a/src/renut_app.h
++++ b/src/renut_app.h
+@@ -7,6 +7,7 @@
+ #include "renut_engine/gpu/overlay/app_integration.h"
+ #include "renut_engine/app/crash_dump.h"
+ #include "renut_engine/app/app_paths.h"
++#include "nb/nb_remote_pad.h"
+ #include <rex/ui/window.h>
+ //#include <rex/discord_rpc.h>
+ #include <functional>
+@@ -53,6 +54,11 @@
+     //     rex::cvar::LoadConfig("renut.toml"); 
+     // }
+ 
++    // NB: the virtual controller of NB's tools / NB Multiplayer (--nb_remote_input_port).
++    void OnPostSetup() override {
++        nb::InstallRemotePad(runtime(), window());
++    }
++
+     // reNut's dialogs live in its own overlay (gpu/overlay_ui.h); the SDK's
+     // drawer keeps only its own menus.
+     void OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) override {
+--- a/src/renut_engine/ui/path_setup_wizard.h
++++ b/src/renut_engine/ui/path_setup_wizard.h
+@@ -1,5 +1,6 @@
+ #pragma once
+ #include <rex/rex_app.h>
++#include <rex/runtime.h>
+ #include "imgui.h"
+ #include "renut_engine/app/path_config_store.h"
+ #include "renut_engine/gpu/overlay/overlay_ui.h"
+@@ -27,6 +28,18 @@
+     {
+         app_name_ = app_name;
+ 
++        // NB Multiplayer (and other launchers) pass the folders on the command line
++        // (--game_data_root, --user_data_root): use them as they are, without the
++        // wizard or the saved file, so every edition can have its own game folder.
++        if (!REXCVAR_GET(game_data_root).empty()) {
++            rex::PathConfig cfg = defaults;
++            cfg.game_data_root = REXCVAR_GET(game_data_root);
++            if (!REXCVAR_GET(user_data_root).empty())
++                cfg.user_data_root = REXCVAR_GET(user_data_root);
++            on_complete(cfg);
++            return true;
++        }
++
+         // First-run check — if a valid saved config exists, skip the wizard entirely
+         if (auto saved = PathConfigStore::TryLoad(app_name)) {
+             rex::PathConfig cfg;

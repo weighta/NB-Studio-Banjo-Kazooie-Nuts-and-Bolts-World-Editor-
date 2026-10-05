@@ -7,7 +7,8 @@ namespace NB.Multiplayer.Services;
 /// (data\content\&lt;profile&gt;\4D5307ED\00000001\0x0b0a5c5c and 0x0b0d6cca) get the bundled all-unlocked save, so
 /// "Resume Saved Game" goes straight to Showdown Town with everything unlocked. The player's own save is copied to
 /// data\save_backup\original once and put back when the option is turned off. A slot without a header (a new profile)
-/// gets one from a template with no profile id or icon (Xenia reads the slot through its header).
+/// gets one from a template with no profile id or icon (Xenia reads the slot through its header). With reNut the same
+/// happens in its profile folder (data\renut\B13EBABEBABEBABE), with reNut's own short headers.
 /// </summary>
 public static class Saves
 {
@@ -17,9 +18,11 @@ public static class Saves
     public static bool Available => File.Exists(Path.Combine(Bundled, "AllUnlocked.sav")) && File.Exists(Path.Combine(Bundled, "savegame.header.template"));
     static string BackupDir => Path.Combine(AppSettings.DataDir, "save_backup", "original");
 
-    /// <summary>The Xenia profile folders (data\content\&lt;16 hex digits&gt; with an account), newest first.</summary>
-    public static List<string> Profiles()
+    /// <summary>The Xenia profile folders (data\content\&lt;16 hex digits&gt; with an account), newest first; with reNut its one
+    /// profile folder (data\renut\B13EBABEBABEBABE).</summary>
+    public static List<string> Profiles(bool renut = false)
     {
+        if (renut) { Directory.CreateDirectory(Renut.ProfileDir); return new() { Renut.ProfileDir }; }
         var root = Path.Combine(AppSettings.DataDir, "content");
         if (!Directory.Exists(root)) return new();
         return Directory.GetDirectories(root)
@@ -46,13 +49,13 @@ public static class Saves
     static string HeaderFile(string profile, string slot) => Path.Combine(profile, Title, "Headers", SaveType, "0x" + slot + ".header");
 
     /// <summary>Puts the all-unlocked save into every profile's slots (backing up the player's own save once). Returns the profile count.</summary>
-    public static int Install()
+    public static int Install(bool renut = false)
     {
         if (!Available) return 0;
         var save = File.ReadAllBytes(Path.Combine(Bundled, "AllUnlocked.sav"));
         var template = File.ReadAllBytes(Path.Combine(Bundled, "savegame.header.template"));
         int n = 0;
-        foreach (var profile in Profiles())
+        foreach (var profile in Profiles(renut))
         {
             BackupOnce(profile);
             foreach (var slot in Slots)
@@ -61,7 +64,13 @@ public static class Saves
                 Directory.CreateDirectory(Path.GetDirectoryName(f)!);
                 File.WriteAllBytes(f, save);
                 var h = HeaderFile(profile, slot);
-                if (!File.Exists(h))
+                if (!File.Exists(h) && renut)
+                {
+                    // reNut reads a slot through its short content header
+                    Directory.CreateDirectory(Path.GetDirectoryName(h)!);
+                    File.WriteAllBytes(h, Renut.ContentHeader("0x" + slot, "BANJO SAVE GAME"));
+                }
+                else if (!File.Exists(h))
                 {
                     var hdr = (byte[])template.Clone();
                     var name = System.Text.Encoding.ASCII.GetBytes(slot);
@@ -98,7 +107,8 @@ public static class Saves
         foreach (var dir in Directory.GetDirectories(BackupDir))
         {
             if (!File.Exists(Path.Combine(dir, "done.txt"))) continue;
-            var profile = Path.Combine(AppSettings.DataDir, "content", Path.GetFileName(dir));
+            var name = Path.GetFileName(dir);
+            var profile = name == Renut.ProfileXuid ? Renut.ProfileDir : Path.Combine(AppSettings.DataDir, "content", name);
             foreach (var slot in Slots)
             {
                 var f = SlotFile(profile, slot); var h = HeaderFile(profile, slot);
@@ -121,7 +131,7 @@ public static class Saves
     /// <param name="useAllUnlocked">Install the all-unlocked save for this launch. A co-op room can ask for it although the
     /// player's own setting is off: then it is installed for that game only, and the player's own save comes back at the
     /// next launch without it (data\save_backup\room.txt marks such an install).</param>
-    public static void PrepareLaunch(bool useAllUnlocked, bool forRoom = false)
+    public static void PrepareLaunch(bool useAllUnlocked, bool forRoom = false, bool renut = false)
     {
         var marker = Path.Combine(AppSettings.DataDir, "save_backup", "room.txt");
         if (!useAllUnlocked)
@@ -132,6 +142,7 @@ public static class Saves
         if (!Available) return;
         if (forRoom) { Directory.CreateDirectory(Path.GetDirectoryName(marker)!); File.WriteAllText(marker, "installed for a co-op room"); }
         else if (File.Exists(marker)) File.Delete(marker);
+        if (renut) { try { Install(renut: true); } catch (Exception) { } return; }   // reNut's profile folder is fixed
         var before = Profiles().Select(Path.GetFileName).ToHashSet();
         try { Install(); } catch (Exception) { }
         _ = Task.Run(async () =>

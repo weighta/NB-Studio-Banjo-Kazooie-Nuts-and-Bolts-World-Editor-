@@ -20,6 +20,7 @@ public sealed class XeniaLive : IDisposable
     [DllImport("kernel32", SetLastError = true)] static extern bool ReadProcessMemory(IntPtr h, IntPtr addr, byte[] buf, IntPtr size, out IntPtr read);
     [DllImport("kernel32", SetLastError = true)] static extern bool WriteProcessMemory(IntPtr h, IntPtr addr, byte[] buf, IntPtr size, out IntPtr written);
     [DllImport("kernel32", SetLastError = true)] static extern IntPtr VirtualQueryEx(IntPtr h, IntPtr addr, out MemInfo info, IntPtr len);
+    [DllImport("kernel32", SetLastError = true)] static extern bool VirtualProtectEx(IntPtr h, IntPtr addr, IntPtr size, uint newProtect, out uint oldProtect);
     [StructLayout(LayoutKind.Sequential)]
     struct MemInfo { public IntPtr BaseAddress, AllocationBase; public uint AllocationProtect, _a; public IntPtr RegionSize; public uint State, Protect, Type, _b; }
 
@@ -60,6 +61,17 @@ public sealed class XeniaLive : IDisposable
         return ReadProcessMemory(_h, (IntPtr)(Base + va), b, n, out var got) ? b[..(int)got] : Array.Empty<byte>();
     }
     public void Write(uint va, byte[] d) { if (!WriteProcessMemory(_h, (IntPtr)(Base + va), d, d.Length, out _)) throw new InvalidOperationException($"write 0x{va:X8} failed"); }
+
+    /// <summary>Writes into guest code (reNut keeps the game's code pages read-only): the page is made writable for the
+    /// write and its protection put back.</summary>
+    public void WriteCode(uint va, byte[] d)
+    {
+        var at = (IntPtr)(Base + va);
+        if (WriteProcessMemory(_h, at, d, d.Length, out _)) return;
+        if (!VirtualProtectEx(_h, at, d.Length, 0x04 /* PAGE_READWRITE */, out uint old)) throw new InvalidOperationException($"unprotect 0x{va:X8} failed");
+        try { if (!WriteProcessMemory(_h, at, d, d.Length, out _)) throw new InvalidOperationException($"write 0x{va:X8} failed"); }
+        finally { VirtualProtectEx(_h, at, d.Length, old, out _); }
+    }
     public uint U32(uint va) { var b = Read(va, 4); return b.Length == 4 ? BE.U32(b, 0) : 0; }
     public Vector3 V3(uint va) { var b = Read(va, 12); return b.Length == 12 ? new(BE.F32(b, 0), BE.F32(b, 4), BE.F32(b, 8)) : default; }
     public void WV3(uint va, Vector3 v) { var b = new byte[12]; BE.WF32(b, 0, v.X); BE.WF32(b, 4, v.Y); BE.WF32(b, 8, v.Z); Write(va, b); }

@@ -19,6 +19,18 @@ public static class GameLauncher
     /// player's own setting says; null = the player's setting.</param>
     public static Process Start(AppSettings s, Edition edition, string apiHostPort, string roomCode, bool? allUnlocked = null)
     {
+        Notice = null;
+        // reNut (Settings > Game engine) runs co-op rooms; the game's own Xbox LIVE modes need Xenia's networking
+        if (s.UseRenut && edition.IsCoop)
+        {
+            if (Renut.Problem(s) is { } why) throw new InvalidOperationException(why);
+            Directory.CreateDirectory(AppSettings.DataDir);
+            KeepBlueprints(renut: true);
+            Editions.EnsureSafety(edition.GameDir);
+            Saves.PrepareLaunch(allUnlocked ?? s.UseAllUnlockedSave, forRoom: allUnlocked == true && !s.UseAllUnlockedSave, renut: true);
+            return Renut.Start(s, edition.GameDir, AlwaysOn);
+        }
+        if (s.UseRenut) Notice = "This room plays the game's own Xbox LIVE modes, which need Xenia's networking: it runs in Xenia (reNut is used for co-op rooms and solo games).";
         if (!File.Exists(XeniaExe)) throw new FileNotFoundException("The Xenia build is missing next to NB Multiplayer (xenia folder). Reinstall.", XeniaExe);
         Directory.CreateDirectory(AppSettings.DataDir);
         KeepBlueprints();
@@ -53,6 +65,17 @@ public static class GameLauncher
     /// </summary>
     public static Process StartSolo(AppSettings s, string gameDir, IReadOnlyList<string>? projectExeMods = null)
     {
+        Notice = null;
+        if (s.UseRenut)
+        {
+            if (Renut.Problem(s) is { } why) throw new InvalidOperationException(why);
+            Directory.CreateDirectory(AppSettings.DataDir);
+            KeepBlueprints(renut: true);
+            Editions.EnsureSafety(gameDir);   // only NB Multiplayer's own editions are changed
+            Saves.PrepareLaunch(s.UseAllUnlockedSave, renut: true);
+            // a project's tweaks (and the always-on fixes) go into the running game; editions already carry theirs
+            return Renut.Start(s, gameDir, (projectExeMods ?? Array.Empty<string>()).Concat(AlwaysOn).Distinct().ToList());
+        }
         if (!File.Exists(XeniaExe)) throw new FileNotFoundException("The Xenia build is missing next to NB Multiplayer (xenia folder). Reinstall.", XeniaExe);
         Directory.CreateDirectory(AppSettings.DataDir);
         var xex = Path.Combine(gameDir, "default.xex");
@@ -82,15 +105,19 @@ public static class GameLauncher
     /// The player's blueprint library is kept safe (BlueprintVault): every blueprint seen is copied into the vault, and
     /// ones missing from the profile the game will sign in are put back. Never blocks a launch.
     /// </summary>
-    public static void KeepBlueprints()
+    public static void KeepBlueprints(bool renut = false)
     {
         try
         {
             BlueprintVault.Harvest(StudioContentRoots());
-            if (Saves.ActiveProfile() is { } p) BlueprintVault.RestoreInto(p);
+            if (renut) { Directory.CreateDirectory(Renut.ProfileDir); BlueprintVault.RestoreInto(Renut.ProfileDir); }
+            else if (Saves.ActiveProfile() is { } p) BlueprintVault.RestoreInto(p);
         }
         catch (Exception) { }
     }
+
+    /// <summary>A note for the player about the last launch (e.g. a room that had to use Xenia), or null.</summary>
+    public static string? Notice { get; private set; }
 
     /// <summary>NB Studio's Xenia content folder (its F5 / Try it launches use that Xenia's own storage), read only.</summary>
     public static IEnumerable<string> StudioContentRoots()
@@ -139,6 +166,8 @@ public static class GameLauncher
     }
 
     /// <summary>Windows command-line quoting for one argument.</summary>
+    public static string QuoteArg(string a) => Quote(a);
+
     static string Quote(string a)
     {
         if (a.Length > 0 && a.IndexOfAny(new[] { ' ', '\t', '"' }) < 0) return a;
@@ -153,10 +182,10 @@ public static class GameLauncher
         return sb.Append('\\', slashes * 2).Append('"').ToString();
     }
 
-    public static bool IsRunning() => Process.GetProcessesByName("xenia_canary_netplay").Any(p =>
+    public static bool IsRunning(AppSettings? s = null) => Process.GetProcessesByName("xenia_canary_netplay").Any(p =>
     {
         try { return string.Equals(p.MainModule?.FileName, XeniaExe, StringComparison.OrdinalIgnoreCase); } catch (Exception) { return false; }
-    });
+    }) || (s != null && Renut.IsRunning(s));
 }
 
 /// <summary>What a room server reports (GET /nb/room).</summary>

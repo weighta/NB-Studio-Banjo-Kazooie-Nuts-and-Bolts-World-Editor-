@@ -110,7 +110,9 @@ public partial class MainWindow : Window
         UpdatesCheck.IsChecked = S.CheckForUpdates;
         _loadingSettings = true;
         AllUnlockedCheck.IsChecked = S.UseAllUnlockedSave;
+        (S.UseRenut ? EngineRenut : EngineXenia).IsChecked = true;
         _loadingSettings = false;
+        RefreshEngine();
         SaveCard.Visibility = Saves.Available ? Visibility.Visible : Visibility.Collapsed;
         JoinBox.Text = S.LastJoin;
         BuildAddressOptions();
@@ -126,6 +128,8 @@ public partial class MainWindow : Window
         _charWriter = new CharacterWriter(() => _game, () => NB.Core.Mods.Characters.Get(S.Character),
             () => _gameXex ?? Path.Combine(CurrentEdition.GameDir, "default.xex"));
         Closed += (_, _) => _charWriter.Dispose();
+        // reNut restarted after a crash while starting: co-op and Character Select follow the new game process
+        Renut.Restarted += p => Dispatcher.BeginInvoke(() => { if (_game == null || _game.HasExited) _game = p; });
         Loaded += async (_, _) =>
         {
             if (!S.ShortcutOffered)
@@ -413,6 +417,8 @@ public partial class MainWindow : Window
     }
 
     // ------------------------------------------------------------------ play solo
+
+    bool _engineNoticeShown;
 
     void Solo_Click(object sender, RoutedEventArgs e)
     {
@@ -993,6 +999,7 @@ public partial class MainWindow : Window
             // co-op: the room's all-unlocked save applies to everyone (on top of the player's own setting)
             _game = GameLauncher.Start(S, ed, api, code, coop && _coopNet!.AllUnlocked ? true : null);
             _gameXex = Path.Combine(ed.GameDir, "default.xex");
+            if (GameLauncher.Notice is { } note && !_engineNoticeShown) { _engineNoticeShown = true; MessageBox.Show(this, note, "NB Multiplayer"); }
             _lastLaunch = (api, code);
             if (_server != null) _ = RefreshRoomEditionAsync(ed);   // host: the room now carries this edition
             if (coop)
@@ -1159,6 +1166,33 @@ public partial class MainWindow : Window
 
     void UpdatesCheck_Changed(object sender, RoutedEventArgs e) { S.CheckForUpdates = UpdatesCheck.IsChecked == true; S.Save(); }
 
+    // ------------------------------------------------------------------ game engine (Xenia / reNut)
+
+    void Engine_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_loadingSettings) return;
+        S.Engine = EngineRenut.IsChecked == true ? "renut" : "xenia"; S.Save();
+        RefreshEngine();
+    }
+
+    void BrowseRenut_Click(object sender, RoutedEventArgs e)
+    {
+        var dlg = new Microsoft.Win32.OpenFileDialog { Title = "Choose renut.exe (reNut built with NB's mod layer)", Filter = "reNut (renut.exe)|renut.exe|Programs (*.exe)|*.exe" };
+        if (Renut.Exe(S) is { } cur) dlg.InitialDirectory = Path.GetDirectoryName(cur);
+        if (dlg.ShowDialog(this) != true) return;
+        S.RenutPath = dlg.FileName; S.Save();
+        RefreshEngine();
+    }
+
+    void RefreshEngine()
+    {
+        var exe = Renut.Exe(S);
+        RenutPathBox.Text = exe ?? "(not set)";
+        var why = Renut.Problem(S);
+        RenutStatus.Foreground = (Brush)FindResource(why == null ? (S.UseRenut ? "Good" : "Sub") : (S.UseRenut ? "Bad" : "Sub"));
+        RenutStatus.Text = why ?? (S.UseRenut ? "reNut is ready: co-op rooms and solo games start in reNut." : "reNut is ready. Choose it above to use it.");
+    }
+
     bool _loadingSettings;
 
     void AllUnlocked_Changed(object sender, RoutedEventArgs e)
@@ -1171,7 +1205,7 @@ public partial class MainWindow : Window
         {
             if (S.UseAllUnlockedSave)
             {
-                int n = Saves.Install();
+                int n = Saves.Install(renut: S.UseRenut);
                 SaveStatus.Text = n > 0 ? "The all-unlocked save is in place. Your own save is set aside." : "It is put in place when the game starts (your profile is created then).";
             }
             else

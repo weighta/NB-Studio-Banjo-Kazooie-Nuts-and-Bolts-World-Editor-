@@ -390,6 +390,27 @@
                                 <TextBlock x:Name="SaveStatus" Style="{StaticResource SubText}" FontSize="12.5" Margin="24,6,0,0" TextWrapping="Wrap"/>
                             </StackPanel>
                         </Border>
+                        <Border x:Name="EngineCard" Style="{StaticResource CardBorder}" Margin="0,16,0,0">
+                            <StackPanel>
+                                <TextBlock Text="Game engine" Style="{StaticResource H2}" FontSize="16"/>
+                                <TextBlock Style="{StaticResource SubText}" FontSize="12.5" Margin="0,4,0,0" TextWrapping="Wrap"
+                                           Text="What runs the game. Your editions, mods, co-op, Character Select, saves and blueprints work with both."/>
+                                <RadioButton x:Name="EngineXenia" GroupName="engine" Margin="0,12,0,0" Checked="Engine_Changed"
+                                             Content="Launch with Xenia (recommended)"/>
+                                <TextBlock Style="{StaticResource SubText}" FontSize="12.5" Margin="24,2,0,0" TextWrapping="Wrap"
+                                           Text="The NB build of the Xenia emulator. Every mode: Xbox LIVE online races and sports, co-op rooms and solo games."/>
+                                <RadioButton x:Name="EngineRenut" GroupName="engine" Margin="0,10,0,0" Checked="Engine_Changed"
+                                             Content="Launch with reNut (native PC version, experimental)"/>
+                                <TextBlock Style="{StaticResource SubText}" FontSize="12.5" Margin="24,2,0,0" TextWrapping="Wrap"
+                                           Text="The game recompiled to native PC code with its own renderer: no emulation. Used for Showdown Town co-op rooms and solo games (Play, Play solo, projects). Rooms for the game's own Xbox LIVE modes still start in Xenia, because reNut has no Xbox LIVE networking."/>
+                                <TextBlock Text="reNut program (renut.exe built with NB's mod layer)" FontWeight="SemiBold" Margin="24,12,0,6"/>
+                                <DockPanel Margin="24,0,0,0">
+                                    <Button DockPanel.Dock="Right" Content="Browse..." Margin="8,0,0,0" Click="BrowseRenut_Click"/>
+                                    <TextBox x:Name="RenutPathBox" IsReadOnly="True"/>
+                                </DockPanel>
+                                <TextBlock x:Name="RenutStatus" Style="{StaticResource SubText}" FontSize="12.5" Margin="24,6,0,0" TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </Border>
                         <Border Style="{StaticResource CardBorder}" Margin="0,16,0,0">
                             <StackPanel>
                                 <TextBlock Text="Disk space" Style="{StaticResource H2}" FontSize="16"/>

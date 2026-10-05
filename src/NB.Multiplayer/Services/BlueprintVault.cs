@@ -53,6 +53,7 @@ public static class BlueprintVault
     static IEnumerable<string> ContentRoots(IEnumerable<string>? extra)
     {
         yield return Path.Combine(AppSettings.DataDir, "content");
+        yield return Renut.UserRoot;   // reNut's profile (Settings > Game engine)
         foreach (var e in extra ?? Array.Empty<string>()) if (Directory.Exists(e)) yield return e;
     }
 
@@ -61,7 +62,7 @@ public static class BlueprintVault
     public static void Harvest(IEnumerable<string>? extraContentRoots = null)
     {
         var v = Load();
-        var ownRoot = Path.Combine(AppSettings.DataDir, "content");
+        var ownRoots = new[] { Path.Combine(AppSettings.DataDir, "content"), Renut.UserRoot };
         foreach (var root in ContentRoots(extraContentRoots))
         {
             if (!Directory.Exists(root)) continue;
@@ -89,9 +90,9 @@ public static class BlueprintVault
                             if (File.Exists(header)) File.Copy(header, Path.Combine(Dir, hash + ".header"), true);
                         }
                         e.Deleted = false;
-                        if (root == ownRoot) e.SeenAt[xuid] = idx;
+                        if (ownRoots.Contains(root)) e.SeenAt[xuid] = idx;
                     }
-                if (root != ownRoot) continue;
+                if (!ownRoots.Contains(root)) continue;
                 // seen in this profile at the last harvest and gone now: the player deleted it in the game
                 foreach (var e in v.Values)
                     if (e.SeenAt.ContainsKey(xuid) && !present.Contains(e.Hash)) { e.Deleted = true; e.SeenAt.Remove(xuid); }
@@ -128,10 +129,16 @@ public static class BlueprintVault
             string name = $"0x{next:x8}";
             Directory.CreateDirectory(Path.Combine(pkgRoot, name));
             File.Copy(src, Path.Combine(pkgRoot, name, name[2..]), true);
-            var hdr = File.Exists(Path.Combine(Dir, e.Hash + ".header")) ? File.ReadAllBytes(Path.Combine(Dir, e.Hash + ".header"))
-                                                                         : Saves.BlueprintHeaderTemplate(e.Name);
-            var fn = System.Text.Encoding.ASCII.GetBytes(name);
-            Array.Clear(hdr, NameField, 42); fn.CopyTo(hdr, NameField);
+            byte[] hdr;
+            if (xuid == Renut.ProfileXuid)
+                hdr = Renut.ContentHeader(name, ("VEHICLE: " + e.Name).ToUpperInvariant());   // reNut's short header
+            else
+            {
+                var kept = Path.Combine(Dir, e.Hash + ".header");
+                hdr = File.Exists(kept) && new FileInfo(kept).Length > NameField + 42 ? File.ReadAllBytes(kept) : Saves.BlueprintHeaderTemplate(e.Name);
+                var fn = System.Text.Encoding.ASCII.GetBytes(name);
+                Array.Clear(hdr, NameField, 42); fn.CopyTo(hdr, NameField);
+            }
             File.WriteAllBytes(Path.Combine(hdrRoot, name + ".header"), hdr);
             e.SeenAt[xuid] = next; used.Add(next); restored++;
         }
