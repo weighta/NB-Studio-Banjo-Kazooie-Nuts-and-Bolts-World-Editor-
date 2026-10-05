@@ -19,6 +19,13 @@
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
   </PropertyGroup>
 
+  <PropertyGroup>
+    <!-- mod recipes (coop/, charsel/, snow/, ultra/) and saves: beside NBModTool in the project folder, or at the top of a
+         GitHub checkout. Mods that were not built (dist/ missing) are simply not bundled. -->
+    <ModsRoot>$(MSBuildThisFileDirectory)..\..\..\</ModsRoot>
+    <ModsRoot Condition="!Exists('$(ModsRoot)coop\saves')">$(MSBuildThisFileDirectory)..\..\</ModsRoot>
+  </PropertyGroup>
+
   <ItemGroup>
     <Using Remove="System.Windows.Forms" />
     <Using Remove="System.Drawing" />
@@ -26,15 +33,18 @@
     <Resource Include="Assets\Characters\*.png" />
     <Resource Include="Assets\app.ico" />
     <!-- the Showdown Town co-op edition (built by coop/build.sh), offered on the Editions page -->
-    <None Include="..\..\..\coop\dist\ShowdownTownCoop.nbpatch" Link="patches\ShowdownTownCoop.nbpatch" Condition="Exists('..\..\..\coop\dist\ShowdownTownCoop.nbpatch')"
+    <None Include="$(ModsRoot)coop\dist\ShowdownTownCoop.nbpatch" Link="patches\ShowdownTownCoop.nbpatch" Condition="Exists('$(ModsRoot)coop\dist\ShowdownTownCoop.nbpatch')"
           CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
-    <None Include="..\..\..\ultra\dist\UltraParts.nbpatch" Link="patches\UltraParts.nbpatch" Condition="Exists('..\..\..\ultra\dist\UltraParts.nbpatch')"
+    <!-- Character Select (charsel/build.sh) -->
+    <None Include="$(ModsRoot)charsel\dist\CharacterSelect.nbpatch" Link="patches\CharacterSelect.nbpatch" Condition="Exists('$(ModsRoot)charsel\dist\CharacterSelect.nbpatch')"
+          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
+    <None Include="$(ModsRoot)ultra\dist\UltraParts.nbpatch" Link="patches\UltraParts.nbpatch" Condition="Exists('$(ModsRoot)ultra\dist\UltraParts.nbpatch')"
           CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
     <!-- official map mod: Snowy Showdown Town (snow/build.sh) -->
-    <None Include="..\..\..\snow\dist\SnowyShowdownTown.nbpatch" Link="patches\SnowyShowdownTown.nbpatch" Condition="Exists('..\..\..\snow\dist\SnowyShowdownTown.nbpatch')"
+    <None Include="$(ModsRoot)snow\dist\SnowyShowdownTown.nbpatch" Link="patches\SnowyShowdownTown.nbpatch" Condition="Exists('$(ModsRoot)snow\dist\SnowyShowdownTown.nbpatch')"
           CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
-    <None Include="..\..\..\coop\saves\AllUnlocked.sav" Link="saves\AllUnlocked.sav" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
-    <None Include="..\..\..\coop\saves\savegame.header.template" Link="saves\savegame.header.template" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
+    <None Include="$(ModsRoot)coop\saves\AllUnlocked.sav" Link="saves\AllUnlocked.sav" Condition="Exists('$(ModsRoot)coop\saves\AllUnlocked.sav')" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
+    <None Include="$(ModsRoot)coop\saves\savegame.header.template" Link="saves\savegame.header.template" Condition="Exists('$(ModsRoot)coop\saves\savegame.header.template')" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
     <!-- Valve's redistributable Steam API (Steamworks SDK), next to the exe -->
     <None Include="$(NuGetPackageRoot)facepunch.steamworks\2.3.3\content\steam_api64.dll" Link="steam_api64.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
   </ItemGroup>

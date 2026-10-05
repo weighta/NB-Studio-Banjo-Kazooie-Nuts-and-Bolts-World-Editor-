@@ -1,0 +1,4 @@
+{"steps": [
+ {"op": "u32", "bundle": "234cec", "asset": "aid_objparams_banjox_actor_banjoai", "off": 192, "val": "041F87F1"},
+ {"op": "u32", "bundle": "234cec", "asset": "aid_objparams_banjox_actor_banjoai", "off": 208, "val": "203E7E7F"}
+]}

@@ -9,9 +9,10 @@
 #     and the Change Vehicle NPC pathfinding crash fix
 set -e
 cd "$(dirname "$0")/.."
-CLI=NBModTool/src/NB.Cli/bin/Release/net9.0-windows/NB.Cli.exe
+# NB_CLI / NB_GAME override the command-line tool and the untouched game folder (the GitHub repositories keep src/ at the top)
+CLI=${NB_CLI:-NBModTool/src/NB.Cli/bin/Release/net9.0-windows/NB.Cli.exe}; [ -f "$CLI" ] || CLI=src/NB.Cli/bin/Release/net9.0-windows/NB.Cli.exe
 WS=${COOP_WS:-Workspaces/coop}
-FRESH="Banjo Kazooie Nuts & Bolts (FRESH)"
+FRESH=${NB_GAME:-"Banjo Kazooie Nuts & Bolts (FRESH)"}
 PUPPET=aid_vehicle_banjox_coop_puppet
 
 echo "== workspace $WS (fresh copy of the game)"
@@ -22,7 +23,7 @@ echo "== executable mods"
 python - "$WS/workspace.json" <<'EOF'
 import json, sys
 p = sys.argv[1]; m = json.load(open(p))
-m['ExeMods'] = ['town-vehicles-normal-rules', 'change-vehicle-town', 'town-ai-restart-on-change-vehicle', 'town-npc-path-guard', 'coop-remote-damage', 'coop-shared-time', 'coop-world-runs']
+m['ExeMods'] = ['town-vehicles-normal-rules', 'change-vehicle-town', 'town-ai-restart-on-change-vehicle', 'town-npc-path-guard', 'coop-remote-damage', 'coop-shared-time', 'coop-world-runs', 'coop-remote-vehicle', 'coop-projectiles', 'coop-onfoot', 'town-garage-return-vehicle', 'unknown-parts-safe']
 json.dump(m, open(p, 'w'), indent=2)
 print('  ' + ', '.join(m['ExeMods']))
 EOF
@@ -33,20 +34,25 @@ python - coop/town_route.txt coop/ops.json <<'PY'
 import json, sys
 route = open(sys.argv[1]).read().strip()
 P = 'aid_vehicle_banjox_coop_puppet'
-AI = ['--driver', 'actor_banjoai', '--keep-strategy', '--mask', '00010000', '--vehicle-template', 'aid_vehicle_banjox_general_golfcartcomplete']
+AI = ['--keep-strategy', '--mask', '00010000', '--vehicle-template', 'aid_vehicle_banjox_general_golfcartcomplete']
 ops = [
     # puppet driver and strategy: the title screen's AI Banjo and Jogger strategy, copied into the town
     ['objparams-copy', '757c4b', 'actorstrategy_locococo', '234cec', 'actorstrategy_showdowntown_mrfit', 'actorstrategy_coop_puppet'],
     # cruising speed 0: puppets only move when NB Multiplayer steers them (an AI throttle fought the sync: ~10 u overshoot)
     ['objparams-set', 'aid_objparams_banjox_actorstrategy_coop_puppet', '2AC', '00000000', '--bundle', '234cec'],
-    ['objparams-copy', '757c4b', 'actor_banjoai', '234cec', 'actor_npc_thomas'],
+    # one AI driver per puppet route (the title screen's AI Banjo), so each puppet can show its player's character
+    # (character select: NB Multiplayer writes model +0xC0 / animtable +0xD0 of the right copy in memory). The copies
+    # are told apart by +0x104 (0.5 plus k units in the last place: invisible) - objparams carry no id in memory.
     # puppet vehicle blueprint, kept in the town's own bundle so vehicle-part mods (685374) combine with co-op
     ['asset-copy', '685374', 'aid_vehicle_banjox_general_golfcartcomplete', '234cec', P],
 ]
 # three puppet trolleys on the town's road loop (101-node AI path of the town, every 2nd node)
-for tag, node in ((20, 0), (21, 17), (22, 34)):
+for k in (1, 2, 3):
+    ops.append(['objparams-copy', '757c4b', 'actor_banjoai', '234cec', 'actor_npc_thomas', 'actor_coop_driver%d' % k])
+    ops.append(['objparams-set', 'aid_objparams_banjox_actor_coop_driver%d' % k, '104', '%08X' % (0x3F000000 + k), '--bundle', '234cec'])
+for k, (tag, node) in enumerate(((20, 0), (21, 17), (22, 34)), 1):
     ops.append(['ai-route', '234cec', 'aid_marker_banjox_showdowntown_main', '--points', route, '--width', '12', '--tag', str(tag),
-                '--spawn-node', str(node), '--vehicle', P, '--strategy', 'actorstrategy_coop_puppet'] + AI)
+                '--spawn-node', str(node), '--vehicle', P, '--strategy', 'actorstrategy_coop_puppet', '--driver', 'actor_coop_driver%d' % k] + AI)
 # spawned by a command right after the town's trolley command (opcode 0x8D, found by content): spawned at level load, an
 # AI car would be taken as the player's vehicle (ULTRA U29/U31)
 ops.append(['script-insert', '234cec', 'aid_script_banjox_showdowntown_general', 'op:8D', '0000000C', '00000065', '00010000'])
@@ -63,6 +69,6 @@ BP=$(python -c "import zlib; print('%08x' % ((zlib.crc32(b'banjox_coop_puppet') 
 echo "== patch (puppet blueprint id $BP)"
 mkdir -p coop/dist
 $CLI patch-build $WS ${COOP_OUT:-coop/dist/ShowdownTownCoop.nbpatch} --name "Showdown Town Co-op" --author weighta \
-     --version 1.3 --category coop --ops coop/ops.json --multiplayer coop --tags "Showdown Town" \
+     --version 1.6 --category coop --ops coop/ops.json --multiplayer coop --tags "Showdown Town" \
      --desc "Play the single-player game together in NB Multiplayer: other players drive through your Showdown Town. Town vehicles are destructible and can be changed in town." \
      --extra mode=coop --extra puppetBlueprint=$BP --extra parkSpot=0,0,0

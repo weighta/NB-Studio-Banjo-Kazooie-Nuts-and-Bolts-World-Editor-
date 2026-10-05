@@ -1,0 +1,182 @@
+[
+ {
+  "index": 0,
+  "key": "banjo",
+  "name": "Banjo",
+  "actor": "1F041D5E",
+  "model": "04041D5E",
+  "animtable": "20041D5E",
+  "bundle": "685374",
+  "slot": "any"
+ },
+ {
+  "index": 1,
+  "key": "tux",
+  "name": "Tuxedo Banjo",
+  "actor": "1F4D1FA1",
+  "model": "040DDF84",
+  "animtable": "20041D5E",
+  "bundle": "685374",
+  "slot": "any"
+ },
+ {
+  "index": 2,
+  "key": "robot",
+  "name": "Robot Banjo",
+  "actor": "1F915116",
+  "model": "044CE7A0",
+  "animtable": "20041D5E",
+  "bundle": "685374",
+  "slot": "any"
+ },
+ {
+  "index": 3,
+  "key": "kazooie",
+  "name": "Kazooie (floating backpack)",
+  "actor": "1F0526D0",
+  "model": "040526D0",
+  "animtable": "20041D5E",
+  "bundle": "685374",
+  "slot": "any"
+ },
+ {
+  "index": 4,
+  "key": "mumbo",
+  "name": "Mumbo Jumbo",
+  "actor": "1FA07D33",
+  "model": "04B07E16",
+  "animtable": "20A09A7E",
+  "bundle": "685374",
+  "slot": "any"
+ },
+ {
+  "index": 5,
+  "key": "grunty",
+  "name": "Gruntilda",
+  "actor": "1FDEBA0B",
+  "model": "048F7E4F",
+  "animtable": "20AE87C1",
+  "bundle": "685374",
+  "slot": "any"
+ },
+ {
+  "index": 6,
+  "key": "log",
+  "name": "L.O.G.",
+  "actor": "1F6EE147",
+  "model": "04491F1A",
+  "animtable": "201BCA39",
+  "bundle": "685374",
+  "slot": "any"
+ },
+ {
+  "index": 7,
+  "key": "thomas",
+  "name": "Trophy Thomas",
+  "actor": "1F4E43B5",
+  "model": "041F87F1",
+  "animtable": "203E7E7F",
+  "bundle": "234cec",
+  "slot": "town"
+ },
+ {
+  "index": 8,
+  "key": "klungo",
+  "name": "Klungo",
+  "actor": "1FF7A750",
+  "model": "04A66314",
+  "animtable": "20879A9A",
+  "bundle": "234cec",
+  "slot": "town"
+ },
+ {
+  "index": 9,
+  "key": "mrfit",
+  "name": "Mr. Fit",
+  "actor": "1FB3BA4C",
+  "model": "04A3B969",
+  "animtable": "20B35D01",
+  "bundle": "234cec",
+  "slot": "town"
+ },
+ {
+  "index": 10,
+  "key": "humba",
+  "name": "Humba Wumba",
+  "actor": "1FF8DF44",
+  "model": "04E8DC61",
+  "animtable": "20F83809",
+  "bundle": "234cec",
+  "slot": "town"
+ },
+ {
+  "index": 11,
+  "key": "bottles",
+  "name": "Bottles",
+  "actor": "1F982888",
+  "model": "0462FCC5",
+  "animtable": "2021731B",
+  "bundle": "234cec",
+  "slot": "town"
+ },
+ {
+  "index": 12,
+  "key": "boggy",
+  "name": "Boggy",
+  "actor": "1F6099DB",
+  "model": "04709AFE",
+  "animtable": "20607E96",
+  "bundle": "234cec",
+  "slot": "town"
+ },
+ {
+  "index": 13,
+  "key": "jinjoking",
+  "name": "King Jingaling",
+  "actor": "1F4C6D42",
+  "model": "04253B3D",
+  "animtable": "2099475E",
+  "bundle": "234cec",
+  "slot": "town"
+ },
+ {
+  "index": 14,
+  "key": "jolly",
+  "name": "Jolly Dodger",
+  "actor": "1FB1E430",
+  "model": "04A1E715",
+  "animtable": "20B1037D",
+  "bundle": "234cec",
+  "slot": "town"
+ },
+ {
+  "index": 15,
+  "key": "blubber",
+  "name": "Captain Blubber",
+  "actor": "1F876649",
+  "model": "047DB204",
+  "animtable": "203E3DDA",
+  "bundle": "234cec",
+  "slot": "town"
+ },
+ {
+  "index": 16,
+  "key": "piddles",
+  "name": "Piddles",
+  "actor": "1F79866F",
+  "model": "04835222",
+  "animtable": "20C0DDFC",
+  "bundle": "234cec",
+  "slot": "town"
+ },
+ {
+  "index": 17,
+  "key": "jinjo",
+  "name": "Jinjo",
+  "actor": "1FD07D55",
+  "model": "04C07E70",
+  "animtable": "20D09A18",
+  "bundle": "234cec",
+  "slot": "town"
+ }
+]

@@ -9,8 +9,9 @@
 # Research: snow/research/fx/REPORT.md (falling snow), snow/research/light/REPORT.md (light, fog, sky).
 set -e
 cd "$(dirname "$0")/.."
-CLI=NBModTool/src/NB.Cli/bin/Release/net9.0-windows/NB.Cli.exe
-FRESH="Banjo Kazooie Nuts & Bolts (FRESH)"
+# NB_CLI / NB_GAME override the command-line tool and the untouched game folder (the GitHub repositories keep src/ at the top)
+CLI=${NB_CLI:-NBModTool/src/NB.Cli/bin/Release/net9.0-windows/NB.Cli.exe}; [ -f "$CLI" ] || CLI=src/NB.Cli/bin/Release/net9.0-windows/NB.Cli.exe
+FRESH=${NB_GAME:-"Banjo Kazooie Nuts & Bolts (FRESH)"}
 WS=${SNOW_WS:-Workspaces/snowy}
 DIR="work/Snowy Showdown Town"
 

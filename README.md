@@ -18,6 +18,11 @@
 </p>
 
 <p align="center">
+  <a href="../../releases/latest"><img alt="Download" src="https://img.shields.io/badge/download-latest%20release-f5a623?style=for-the-badge"></a>
+  <a href="src"><img alt="Source code" src="https://img.shields.io/badge/source-C%23%20%2F%20.NET%209-512bd4?style=for-the-badge"></a>
+</p>
+
+<p align="center">
   <img src="docs/images/studio-start.png" alt="NB Studio start page" width="100%">
 </p>
 <p align="center"><i>The start page: a different photo from the game every time (here a custom flying vehicle by the
@@ -340,6 +345,15 @@ dotnet build NBModTool.sln -c Release
 
 The editor is `src/NB.Studio/bin/Release/net9.0-windows/NBModStudio.exe`, and the command-line tool is
 `src/NB.Cli/bin/Release/net9.0-windows/NB.Cli.exe` (run it without arguments for the command list).
+
+| Folder | What it is |
+|---|---|
+| `src/NB.Core` | The shared library: every game file format (CAFF bundles, xcompress, textures, models, markers, scripts, Havok collision, XEX), workspaces, patches and mod merging, executable mods, the room server and co-op sync |
+| `src/NB.Multiplayer` | NB Multiplayer (WPF): rooms, Steam, editions, mod library, co-op, Character Select |
+| `src/NB.Studio` | NB Studio (WinForms + OpenGL): the world editor |
+| `src/NB.Cli` | `NB.Cli.exe`, the command-line tool used by the build scripts and tests |
+| `coop/`, `charsel/`, `snow/` | Recipes that rebuild the bundled mods from your own copy of the game (`sh coop/build.sh`, `sh charsel/build.sh`, `sh snow/build.sh`; they need NB.Cli built in Release and Python). Set `NB_GAME` to your untouched game folder. Their output in `*/dist/` is bundled into NB Multiplayer when present. |
+| `research-tools/`, `docs/` | The Python probes used to work out the file formats, and the format documentation |
 
 ## Related: NB Multiplayer
 
