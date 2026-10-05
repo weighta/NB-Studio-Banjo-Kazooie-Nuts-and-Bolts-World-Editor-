@@ -60,8 +60,50 @@ public static class Renut
     {
         var exe = Exe(s);
         if (exe == null) return "reNut is not set up: choose renut.exe in Settings > Game engine.";
-        if (!HasNbLayer(exe)) return $"{Path.GetFileName(exe)} was built without NB's mod layer, so executable mods (co-op, Character Select, tweaks) would not run. Build it with NB's renut kit (renut-nb) or switch to Xenia.";
         return null;
+    }
+
+    /// <summary>Executable mods a game folder carries in its default.xex, or will get written into the game
+    /// (<paramref name="extra"/>), that need NB's mod layer in reNut. The always-on safety fix is left out: without the
+    /// layer the game simply runs without it.</summary>
+    public static List<string> ModsNeedingLayer(string gameDir, IEnumerable<string>? extra = null)
+    {
+        var ids = new HashSet<string>(extra ?? Array.Empty<string>());
+        try
+        {
+            var xex = NB.Core.Formats.XexFile.Read(File.ReadAllBytes(Path.Combine(gameDir, "default.xex")));
+            var img = xex.GetImage();
+            foreach (var m in ExePatches.All)
+            {
+                var sites = m.Words.Where(w => w.Original != 0).ToList();
+                if (sites.Count == 0) continue;
+                bool baked = sites.All(w =>
+                {
+                    int o = (int)(w.Address - xex.ImageBase);
+                    return o >= 0 && o + 4 <= img.Length && NB.Core.IO.BE.U32(img, o) == w.Patched;
+                });
+                if (baked) ids.Add(m.Id);
+            }
+        }
+        catch (Exception) { }
+        foreach (var a in GameLauncher.AlwaysOn) ids.Remove(a);
+        return ids.Select(id => ExePatches.All.FirstOrDefault(m => m.Id == id)?.Name ?? id).OrderBy(n => n).ToList();
+    }
+
+    /// <summary>
+    /// A reNut build without NB's mod layer (e.g. a reNut release): it plays the game folder it is given through renut.cfg
+    /// next to it (its path setup reads that file; the player's own one is kept as renut.cfg.before-nb).
+    /// </summary>
+    static void WritePathConfig(string exe, string gameDir)
+    {
+        var cfg = Path.Combine(Path.GetDirectoryName(exe)!, "renut.cfg");
+        var keep = cfg + ".before-nb";
+        if (File.Exists(cfg) && !File.Exists(keep) && !File.ReadAllText(cfg).Contains("written by NB Multiplayer")) File.Copy(cfg, keep);
+        File.WriteAllText(cfg,
+            "# renut path configuration (written by NB Multiplayer for each game it starts)\n" +
+            $"game_data_root   = \"{gameDir}\"\n" +
+            $"user_data_root   = \"{UserRoot}\"\n" +
+            "update_data_root = \"\"\n");
     }
 
     /// <summary>Starts reNut on a game folder. <paramref name="liveMods"/>: executable mods to write into the running game
@@ -71,6 +113,20 @@ public static class Renut
         var exe = Exe(s) ?? throw new FileNotFoundException("reNut is not set up: choose renut.exe in Settings > Game engine.");
         if (Problem(s) is { } why) throw new InvalidOperationException(why);
         Directory.CreateDirectory(ProfileDir);
+        bool layer = HasNbLayer(exe);
+        if (!layer)
+        {
+            // a plain reNut runs the game as it is: fine for Vanilla and editions without game-code mods
+            var need = ModsNeedingLayer(gameDir, liveMods);
+            if (need.Count > 0)
+                throw new InvalidOperationException(
+                    $"This game uses game-code mods that your reNut cannot run: {string.Join("; ", need.Take(3))}" +
+                    (need.Count > 3 ? $" and {need.Count - 3} more" : "") + ".\n\n" +
+                    "They need reNut built with NB's mod layer (the renut-nb kit on NB Multiplayer's GitHub). Vanilla and editions " +
+                    "with only world, texture, part or sound mods play with your reNut as it is; or switch to Xenia in Settings > Game engine.");
+            WritePathConfig(exe, gameDir);
+            liveMods = Array.Empty<string>();
+        }
         var args = new List<string> { "--game_data_root", gameDir, "--user_data_root", UserRoot };
         var extra = Environment.GetEnvironmentVariable("NB_RENUT_EXTRA");   // testing: extra reNut options
         if (!string.IsNullOrWhiteSpace(extra)) args.AddRange(extra.Split(' ', StringSplitOptions.RemoveEmptyEntries));

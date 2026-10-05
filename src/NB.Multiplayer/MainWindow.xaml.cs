@@ -1190,7 +1190,11 @@ public partial class MainWindow : Window
         RenutPathBox.Text = exe ?? "(not set)";
         var why = Renut.Problem(S);
         RenutStatus.Foreground = (Brush)FindResource(why == null ? (S.UseRenut ? "Good" : "Sub") : (S.UseRenut ? "Bad" : "Sub"));
-        RenutStatus.Text = why ?? (S.UseRenut ? "reNut is ready: co-op rooms and solo games start in reNut." : "reNut is ready. Choose it above to use it.");
+        bool layer = exe != null && Renut.HasNbLayer(exe);
+        RenutStatus.Text = why ?? (layer
+            ? "reNut with NB's mod layer: co-op rooms and solo games start in reNut, with all your mods."
+            : "This reNut has no NB mod layer (like the reNut releases): Vanilla and editions with only world, texture, part or sound mods play in it. " +
+              "Co-op, Character Select and the tweaks need reNut built with NB's renut-nb kit.");
     }
 
     bool _loadingSettings;
