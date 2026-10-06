@@ -48,9 +48,21 @@ public static class FileLinks
         const uint DELETE = 0x00010000, SHARE_ALL = 7, OPEN_EXISTING = 3, OPEN_REPARSE_POINT = 0x00200000;
         const int FileDispositionInfoEx = 21;
         uint flags = 0x1 | 0x2 | 0x10;   // DELETE | POSIX_SEMANTICS | IGNORE_READONLY_ATTRIBUTE
-        using var h = CreateFileW(Long(path), DELETE, SHARE_ALL, IntPtr.Zero, OPEN_EXISTING, OPEN_REPARSE_POINT, IntPtr.Zero);
-        if (h.IsInvalid || !SetFileInformationByHandle(h, FileDispositionInfoEx, ref flags, 4))
-            throw new IOException($"cannot delete {path} (error {Marshal.GetLastWin32Error()})");
+        int err;
+        using (var h = CreateFileW(Long(path), DELETE, SHARE_ALL, IntPtr.Zero, OPEN_EXISTING, OPEN_REPARSE_POINT, IntPtr.Zero))
+        {
+            if (!h.IsInvalid && SetFileInformationByHandle(h, FileDispositionInfoEx, ref flags, 4)) return;
+            err = Marshal.GetLastWin32Error();
+        }
+        // FAT32 / exFAT drives (USB sticks) and some network shares don't support the extended delete (error 87 or 50).
+        // They have no hard links either, so the file is its own: clearing its read-only attribute can't touch another copy.
+        if ((err == 87 || err == 50 || err == 1) && File.Exists(path) && LinkCount(path) <= 1)
+        {
+            File.SetAttributes(path, File.GetAttributes(path) & ~FileAttributes.ReadOnly);
+            File.Delete(path);
+            return;
+        }
+        throw new IOException($"cannot delete {path} (error {err})");
     }
 
     /// <summary>
