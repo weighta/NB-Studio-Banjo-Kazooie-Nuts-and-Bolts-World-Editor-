@@ -96,7 +96,7 @@ public static class QuickTest
 
         // the start-of-game script of the copy: rebuilt only when the workspace's common bundle or the target changed
         var srcCommon = new FileInfo(Path.Combine(src, commonRel));
-        string key = $"v1|{srcCommon.Length}|{srcCommon.LastWriteTimeUtc.Ticks}|{t.Script}";
+        string key = $"v3|{srcCommon.Length}|{srcCommon.LastWriteTimeUtc.Ticks}|{t.Script}|{FirstTimeFlags.Length}";
         string keyFile = Path.Combine(dir, "common.key"), dstCommon = Path.Combine(dst, commonRel);
         if (File.Exists(keyFile) && File.ReadAllText(keyFile) == key && File.Exists(dstCommon) && FileLinks.LinkCount(dstCommon) == 1)
             return Path.Combine(dst, "default.xex");
@@ -111,6 +111,7 @@ public static class QuickTest
             {
                 log("  " + NB.Core.World.TestMode.SkipStartOfGame(fw, keepShowdownTownIntro: false));
                 log("  " + NB.Core.World.TestMode.PresetTownIntro(fw));
+                log("  first-visit tutorials and cut-scenes: " + NB.Core.World.TestMode.PresetFlags(fw, FirstTimeFlags.Concat(PartSeenFlags(ws.Game.Xex)).Distinct()));
                 log("  start script " + NB.Core.World.TestMode.StartIn(fw, t.Script));
             }
         }
@@ -119,15 +120,110 @@ public static class QuickTest
         return Path.Combine(dst, "default.xex");
     }
 
-    /// <summary>Empties the test storage's save games (the profile stays), so SINGLE PLAYER starts a new game.</summary>
-    public static void ClearSaves(string contentRoot)
+    /// <summary>
+    /// Game flags every test game starts with (set by the test start script, like the Showdown Town intro steps), so the
+    /// first-visit tutorials and cut-scenes don't block quick testing: Mumbo's garage tutorial (the 7
+    /// Garage_Tutorial_* steps, docs/FORMATS.md §14) and its first-entry talk, the workshop / blueprint bench guides,
+    /// the world intro cut-scenes of the Acts, the first meetings with the town's characters and the first-time
+    /// explanations in town. Not set: story progress (game globe, world doors, SphereDocked flags: one froze the game,
+    /// Seattle B18), unlocks and the garage warnings that help building (too heavy, no fuel …).
+    /// </summary>
+    public static readonly string[] FirstTimeFlags =
+    {
+        "gameFlag_Normal_Garage_Tutorial_AdvancedSettings", "gameFlag_Normal_Garage_Tutorial_BuildPart1", "gameFlag_Normal_Garage_Tutorial_BuildPart2",
+        "gameFlag_Normal_Garage_Tutorial_BuildShoppingTrolley", "gameFlag_Normal_Garage_Tutorial_BuildTips", "gameFlag_Normal_Garage_Tutorial_VehicleInfo",
+        "gameFlag_Normal_Garage_Tutorial_VehicleMaintenance", "gameFlag_Normal_Garage_EnteringGarageForFirstTime", "gameFlag_Normal_Garage_EnteringGarageForSecondTime",
+        "gameFlag_Normal_Garage_Instruction_Guides_Advanced", "gameFlag_Normal_Garage_Instruction_Guides_BuildPart1", "gameFlag_Normal_Garage_Instruction_Guides_BuildPart2",
+        "gameFlag_Normal_Garage_Instruction_Guides_BuildTips", "gameFlag_Normal_Garage_Instruction_Guides_VehicleInfo", "gameFlag_Normal_Garage_Instruction_Guides_VehicleMaintenance",
+        "gameFlag_Normal_Garage_Instruction_ChooseBench_Workshop", "gameFlag_Normal_Garage_Instruction_ChooseBench_Paints", "gameFlag_Normal_Garage_Instruction_ChooseBench_Database",
+        "gameFlag_Normal_Garage_Instruction_ChooseBench_TestTrack", "gameFlag_Normal_Garage_Instruction_ChooseBench_Exit",
+        "gameFlag_Normal_Garage_Instruction_Blueprints_Load", "gameFlag_Normal_Garage_Instruction_Blueprints_Save", "gameFlag_Normal_Garage_Instruction_Blueprints_New",
+        "gameFlag_Normal_Garage_Instruction_Blueprints_Delete", "gameFlag_Normal_Garage_Instruction_Blueprints_Templates", "gameFlag_Normal_Garage_Instruction_Blueprints_Guides",
+        "gameFlag_Normal_Garage_Instruction_Paint_EnteredPaintShop", "gameFlag_Normal_Garage_Instruction_Edit_EnteredPickup", "gameFlag_Normal_Garage_Instruction_PartsShop_EnterModifyMode",
+        "gameFlag_Normal_Cutscene_Intro_NuttyAcres", "gameFlag_Normal_Cutscene_Intro_Banjoland", "gameFlag_Normal_Cutscene_Intro_CPU",
+        "gameFlag_Normal_Cutscene_Intro_Terrorium", "gameFlag_Normal_Cutscene_Intro_WorldOfSport", "gameFlag_Normal_Cutscene_Intro_WeirdWest",
+        "gameFlag_Normal_Cutscene_First_JiggyBanked",
+        "gameFlag_Normal_ShowdownTown_MetMumbo", "gameFlag_Normal_ShowdownTown_MetHumba", "gameFlag_Normal_ShowdownTown_MetBottles", "gameFlag_Normal_ShowdownTown_MetJolly",
+        "gameFlag_Normal_ShowdownTown_MetMrFit", "gameFlag_Normal_ShowdownTown_MetKlungo", "gameFlag_Normal_ShowdownTown_MetPikelet", "gameFlag_Normal_ShowdownTown_MetBoggy",
+        "gameFlag_Normal_ShowdownTown_MetBlubber", "gameFlag_Normal_ShowdownTown_MetKingJingaling", "gameFlag_Normal_ShowdownTown_MetThomas",
+        "gameFlag_Normal_ShowdownTown_Jigovend_FirstTimeLockedOnDlg", "gameFlag_Normal_ShowdownTown_Jigovend_FirstTimeWithinRangeDlg",
+        "gameFlag_Normal_PlayerInstructions_FirstComponentsInCrate", "gameFlag_Normal_PlayerInstructions_InGameEditorFirstUse", "gameFlag_Normal_PlayerInstructions_InVehicleRepair",
+    };
+
+    /// <summary>
+    /// The garage's "first time you see this part / part group" flags (gameFlag_Normal_Garage_Group_Seen_* and
+    /// _PartsShop_Seen_*: Mumbo explains every part the first time the cursor reaches it), read from the executable's
+    /// flag-name table (about 200 names), so the test garage is quiet.
+    /// </summary>
+    static IEnumerable<string> PartSeenFlags(string xexPath)
+    {
+        byte[] img;
+        try { img = NB.Core.Formats.XexFile.Read(File.ReadAllBytes(xexPath)).GetImage(); }
+        catch (Exception) { yield break; }
+        var text = System.Text.Encoding.Latin1.GetString(img);
+        foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(text, @"gameFlag_Normal_Garage_(?:Group_Seen|PartsShop_Seen)_[A-Za-z0-9_]+(?=\0)"))
+            if (m.Value.Length < 64) yield return m.Value;
+    }
+
+    /// <summary>The two game save slots (the blueprints are separate packages 0x00000001…: docs, nb-garage-research).</summary>
+    static readonly string[] SaveSlots = { "0b0a5c5c", "0b0d6cca" };
+
+    /// <summary>
+    /// Before a test: removes the test storage's game save (the two save slots), so SINGLE PLAYER starts a NEW game that
+    /// the test start script sends to the open world. Blueprints saved in Mumbo's garage during earlier tests are their
+    /// own content packages and stay (<paramref name="keepBlueprints"/> false, Settings "Fresh save for every test",
+    /// removes them too). Only the test storage is touched, never NB Multiplayer's or Xenia's normal saves.
+    /// </summary>
+    public static void ClearSaves(string contentRoot, bool keepBlueprints = true)
     {
         if (!Directory.Exists(contentRoot)) return;
         foreach (var user in Directory.GetDirectories(contentRoot))
         {
             var game = Path.Combine(user, NB.Core.Mods.ExePatches.TitleId.ToString("X8"));
-            if (Directory.Exists(game)) Directory.Delete(game, true);
+            if (!Directory.Exists(game)) continue;
+            if (!keepBlueprints) { Directory.Delete(game, true); continue; }
+            foreach (var slot in SaveSlots)
+            {
+                var pkg = Path.Combine(game, "00000001", "0x" + slot);
+                if (Directory.Exists(pkg)) Directory.Delete(pkg, true);
+                var hdr = Path.Combine(game, "Headers", "00000001", "0x" + slot + ".header");
+                if (File.Exists(hdr)) File.Delete(hdr);
+            }
         }
+    }
+
+    /// <summary>Blueprints saved in the test storage (their display names, from the package headers: "VEHICLE: NAME").</summary>
+    public static List<string> TestBlueprints(string contentRoot)
+    {
+        var res = new List<string>();
+        if (!Directory.Exists(contentRoot)) return res;
+        foreach (var user in Directory.GetDirectories(contentRoot))
+        {
+            var root = Path.Combine(user, NB.Core.Mods.ExePatches.TitleId.ToString("X8"), "00000001");
+            if (!Directory.Exists(root)) continue;
+            foreach (var pkg in Directory.GetDirectories(root))
+            {
+                var name = Path.GetFileName(pkg);
+                if (name.Length != 10 || SaveSlots.Contains(name[2..]) || !File.Exists(Path.Combine(pkg, name[2..]))) continue;
+                var hdr = Path.Combine(user, NB.Core.Mods.ExePatches.TitleId.ToString("X8"), "Headers", "00000001", name + ".header");
+                string display = name;
+                try
+                {
+                    if (File.Exists(hdr)) { var h = File.ReadAllBytes(hdr); if (h.Length > 0x411 + 0x80) display = System.Text.Encoding.BigEndianUnicode.GetString(h, 0x411, 0x80).TrimEnd('\0'); }
+                }
+                catch (IOException) { }
+                res.Add(display);
+            }
+        }
+        return res;
+    }
+
+    /// <summary>Build > Reset Test Save: removes everything the test games saved for this workspace (save and blueprints);
+    /// the test profile and Xenia settings stay.</summary>
+    public static void ResetTestSave(Workspace ws)
+    {
+        ClearSaves(Path.Combine(Folder(ws), "xenia", "content"), keepBlueprints: false);
+        ClearSaves(Path.Combine(Folder(ws), "content"), keepBlueprints: false);
     }
 
     public static int FreeUdpPort()

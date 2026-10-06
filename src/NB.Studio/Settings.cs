@@ -21,6 +21,10 @@ public sealed class Settings
     public List<string>? NewWorkspaceMods { get; set; }
     public IReadOnlyList<string> NewWorkspaceModsOrDefault => NewWorkspaceMods ?? NB.Core.Mods.ExePatches.RecommendedForNewWorkspaces;
 
+    /// <summary>Test in Xenia (F5): start every test with an empty test save, blueprints included. Off (default): vehicles
+    /// saved in Mumbo's garage during a test are there in the next test of the same workspace.</summary>
+    public bool QuickTestFreshSave { get; set; }
+
     /// <summary>How many steps Ctrl+Z can go back.</summary>
     public int UndoSteps { get; set; } = 100;
     /// <summary>3D view: S scales the selection (Blender style). Off: S always flies backwards.</summary>

@@ -443,6 +443,8 @@ public sealed class MainForm : Form
         build.DropDownItems.Add(new ToolStripMenuItem("Test in Xenia from the 3D-View &Camera", null, async (_, _) => await QuickTestXenia(true), Keys.Shift | Keys.F5)
             { ToolTipText = "Like F5, then moves Banjo (or his vehicle) to the ground below the 3D view's camera." });
         build.DropDownItems.Add(new ToolStripMenuItem("&Launch Workspace in Xenia (title screen)", null, (_, _) => LaunchXenia(), Keys.Control | Keys.F5));
+        build.DropDownItems.Add(new ToolStripMenuItem("Reset Test Save (vehicles saved during tests)…", null, async (_, _) => await ResetTestSave())
+            { ToolTipText = "Test in Xenia keeps its own save per workspace: vehicles you save in Mumbo's garage during a test are there in the next test. This empties it (your NB Multiplayer and Xenia saves are never touched)." });
         build.DropDownItems.Add("Set Xenia Executable…", null, (_, _) => PickXenia());
 
         var tools = new ToolStripMenuItem("&Tools");
@@ -1942,7 +1944,7 @@ public sealed class MainForm : Form
         {
             if (!_scripted && MessageBox.Show(this, "The test game NB Studio started is still running. Close it and start the new test?", "Test in Xenia", MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK) return;
             _qtCts?.Cancel();
-            try { old.Kill(); old.WaitForExit(8000); } catch (Exception) { }
+            await CloseTestGame(old);
         }
         _qtBoot = null;
         var fork = QuickTest.FindForkXenia(_settings.XeniaPath);
@@ -1982,9 +1984,12 @@ public sealed class MainForm : Form
                     File.Copy(cfg, Path.Combine(storage, Path.GetFileName(cfg)), true);
                     Log($"  Xenia settings (controls, graphics) from {cfg}");
                 }
-                QuickTest.ClearSaves(Path.Combine(storage, "content"));
+                var content = Path.Combine(storage, "content");
+                QuickTest.ClearSaves(content, keepBlueprints: !_settings.QuickTestFreshSave);
+                var bps = QuickTest.TestBlueprints(content);
+                Log(_settings.QuickTestFreshSave ? "  fresh test save (File > Settings)" : bps.Count > 0 ? $"  vehicles saved in earlier tests: {string.Join(", ", bps)} (Build > Reset Test Save forgets them)" : "  no vehicles saved in earlier tests yet");
                 WriteExeModsFor(storage);
-                port = _qtPort = QuickTest.FreeUdpPort();
+                port = _qtPort = int.TryParse(Environment.GetEnvironmentVariable("NB_STUDIO_PAD_PORT"), out var fixedPort) ? fixedPort : QuickTest.FreeUdpPort();   // env: test harnesses
                 foreach (var a in new[] { $"--storage_root={storage}", $"--content_root={Path.Combine(storage, "content")}", $"--log_file={Path.Combine(storage, "xenia.log")}", "--network_mode=0",
                                           $"--nb_remote_input_port={port}", "--nb_create_profile=NBStudio", "--readback_resolve=fast" }) psi.ArgumentList.Add(a);
             }
@@ -1993,7 +1998,7 @@ public sealed class MainForm : Form
                 // any other Xenia: its own settings, but a separate content folder (an empty save, the user's saves untouched)
                 string content = Path.Combine(dir, "content");
                 Directory.CreateDirectory(content);
-                QuickTest.ClearSaves(content);
+                QuickTest.ClearSaves(content, keepBlueprints: !_settings.QuickTestFreshSave);
                 ApplyExeMods(askForXenia: true);
                 psi.ArgumentList.Add($"--content_root={content}");
             }
@@ -2026,6 +2031,33 @@ public sealed class MainForm : Form
         _qtBoot = Task.Run(() => QuickTest.AutoBoot(proc, port, probe, t, spawn, s => Log("  " + s), ct));
         var res = await _qtBoot;
         Log($"Test in Xenia: {t.Display}: {res}");
+    }
+
+    /// <summary>Closes the test game Studio started like its window's close button (the game finishes writing a save it is
+    /// in the middle of); only if it does not exit within 10 s is it ended.</summary>
+    static async Task CloseTestGame(Process p)
+    {
+        try
+        {
+            if (p.HasExited) return;
+            p.CloseMainWindow();
+            for (int i = 0; i < 100 && !p.HasExited; i++) await Task.Delay(100);
+            if (!p.HasExited) { p.Kill(); p.WaitForExit(8000); }
+        }
+        catch (Exception) { }
+    }
+
+    /// <summary>Build > Reset Test Save: empties this workspace's test save (game save and vehicles saved during tests).</summary>
+    async Task ResetTestSave()
+    {
+        if (_ws == null) { Log("Reset Test Save: open a workspace first."); return; }
+        var content = Path.Combine(QuickTest.Folder(_ws), "xenia", "content");
+        var bps = QuickTest.TestBlueprints(content);
+        if (!_scripted && MessageBox.Show(this, "Forget everything Test in Xenia saved for this workspace?" + (bps.Count > 0 ? "\n\nVehicles: " + string.Join(", ", bps) : "") +
+                "\n\nYour NB Multiplayer and Xenia saves are not touched.", "Reset Test Save", MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK) return;
+        if (_qtProcess is { HasExited: false } p) await CloseTestGame(p);
+        try { QuickTest.ResetTestSave(_ws); Log($"Test save reset ({bps.Count} vehicle(s) forgotten); the next test starts with an empty save."); }
+        catch (Exception e) { Error("Reset Test Save failed", e); }
     }
 
     /// <summary>The workspace's executable mods as a Xenia patch file in <paramref name="storage"/>\patches (NB's Xenia reads
@@ -2402,6 +2434,8 @@ public sealed class MainForm : Form
                         for (int k = 0; k < 600 && _qtBoot == null; k++) await Task.Delay(100);
                         L($"script: quick test started: pid {_qtProcess?.Id}"); break;
                     }
+                    case "--quicktest-reset": await ResetTestSave(); L("script: test save reset"); break;
+                    case "--quicktest-blueprints": L("script: test blueprints: " + string.Join(", ", QuickTest.TestBlueprints(Path.Combine(QuickTest.Folder(_ws!), "xenia", "content")))); break;
                     case "--quicktest-wait": { if (_qtBoot != null) L("script: quick test: " + await _qtBoot); break; }
                     case "--quicktest-pid": { var f = Next(); File.WriteAllText(f, _qtProcess?.Id.ToString() ?? ""); L($"script: quick test pid {_qtProcess?.Id} -> {f}"); break; }
                     case "--import-collision":

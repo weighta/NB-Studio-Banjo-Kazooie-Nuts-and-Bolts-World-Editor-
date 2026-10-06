@@ -13,6 +13,7 @@ public sealed class SettingsDialog : Form
     readonly NumericUpDown _undo = new() { Minimum = 1, Maximum = 1000, Width = 90, BackColor = Color.FromArgb(46, 49, 60), ForeColor = Text1, BorderStyle = BorderStyle.FixedSingle, Font = new Font("Segoe UI", 10.5f) };
     readonly CheckBox _sScales = Check("S scales the selected object (Blender style)");
     readonly CheckBox _autoOpen = Check("Open the last workspace when NB Studio starts");
+    readonly CheckBox _freshSave = Check("Fresh save for every test (also forgets vehicles saved in the garage)");
     readonly TextBox _xenia = new() { BackColor = Color.FromArgb(46, 49, 60), ForeColor = Text1, BorderStyle = BorderStyle.FixedSingle, Font = new Font("Segoe UI", 9.5f) };
 
     readonly CheckedListBox _mods = new() { CheckOnClick = true, BorderStyle = BorderStyle.FixedSingle, BackColor = Color.FromArgb(46, 49, 60), ForeColor = Color.FromArgb(236, 236, 242), Font = new Font("Segoe UI", 9f), IntegralHeight = false };
@@ -39,7 +40,7 @@ public sealed class SettingsDialog : Form
         Text = "Settings";
         FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = false; MinimizeBox = false; ShowInTaskbar = false;
         StartPosition = FormStartPosition.CenterParent; BackColor = Bg; ForeColor = Text1; Font = new Font("Segoe UI", 10f);
-        ClientSize = new Size(600, 832);
+        ClientSize = new Size(600, 862);
         AutoScaleMode = AutoScaleMode.Dpi;
 
         var title = new Label { UseMnemonic = false, Text = "Settings", Font = new Font("Segoe UI Semibold", 16f), ForeColor = Accent, AutoSize = true, Location = new Point(22, 16) };
@@ -71,7 +72,9 @@ public sealed class SettingsDialog : Form
         startCard.Controls.Add(_autoOpen);
 
         // ---- xenia
-        var xCard = Section("Xenia (Build > Launch in Xenia, F5)", ref y, 84);
+        var xCard = Section("Xenia (Build > Test in Xenia, F5)", ref y, 114);
+        _freshSave.Location = new Point(16, 78); _freshSave.Checked = s.QuickTestFreshSave;
+        xCard.Controls.Add(_freshSave);
         _xenia.Location = new Point(16, 40); _xenia.Width = 420; _xenia.Text = s.XeniaPath ?? "";
         var browse = Btn("Browse…");
         browse.Location = new Point(446, 37);
@@ -108,6 +111,7 @@ public sealed class SettingsDialog : Form
             _s.UndoSteps = (int)_undo.Value;
             _s.SScales = _sScales.Checked;
             _s.AutoOpenLast = _autoOpen.Checked;
+            _s.QuickTestFreshSave = _freshSave.Checked;
             var list = _modIds.Where((_, i) => _mods.GetItemChecked(i)).ToList();
             // the recommended set is stored as "not customised", so later NB Studio versions can extend it
             bool same = list.Count == NB.Core.Mods.ExePatches.RecommendedForNewWorkspaces.Count && !list.Except(NB.Core.Mods.ExePatches.RecommendedForNewWorkspaces).Any();
