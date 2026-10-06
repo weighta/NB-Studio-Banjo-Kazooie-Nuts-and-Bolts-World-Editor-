@@ -2,6 +2,7 @@ using System.IO.Compression;
 using System.Security.Cryptography;
 using NB.Core.Compression;
 using NB.Core.Formats;
+using NB.Core.IO;
 
 namespace NB.Core.Project;
 
@@ -169,6 +170,7 @@ public static class ModMerge
                 if (inO && os == shape) continue;                       // this mod leaves it alone
                 if (sr.TryGetValue(name, out var rs) && rs == shape) continue;   // same change as an earlier mod
                 string who = owner.GetValueOrDefault(name) ?? "";
+                if (inO && who.Length > 0 && RecordList(name) is int rec && MergeRecords(o, res, c, name, rec)) { owner[name] = who + "\" and \"" + v.ModName; continue; }
                 if (inO && who.Length > 0) { conflicts.Add($"\"{who}\" and \"{v.ModName}\" both change {name} in {path}."); continue; }
                 if (!inO && sr.ContainsKey(name)) { conflicts.Add($"\"{who}\" and \"{v.ModName}\" both add {name} to {path}."); continue; }
                 if (name == "(shared data)") { conflicts.Add($"\"{v.ModName}\" changes shared (unnamed) data in {path}, which another mod also changes."); continue; }
@@ -195,5 +197,67 @@ public static class ModMerge
         var bytes = res.Write();
         CaffFile.Read(bytes);
         return bytes;
+    }
+
+    // ------------------------------------------------------------------ record lists
+
+    /// <summary>
+    /// Assets that are flat lists of records keyed by a part id, which mods that add vehicle parts (ULTRA Parts, Seattle's
+    /// recovered parts) all extend: the garage inventories (aid_misc_banjox_blockset_*: 8-byte {u32 count, u32 part id})
+    /// and the network list (aid_misc_banjox_live_networkenum: 20-byte {u32 part id, 4, 0, 0, 0}). Returns the record size.
+    /// </summary>
+    static int? RecordList(string name) =>
+        name.StartsWith("aid_misc_banjox_blockset_", StringComparison.Ordinal) ? 8 :
+        name == "aid_misc_banjox_live_networkenum" ? 20 : null;
+
+    /// <summary>
+    /// Three-way merge of a record list (see <see cref="RecordList"/>): <paramref name="res"/> holds the earlier mods'
+    /// version, <paramref name="c"/> this mod's. A record only one side changed takes that change; records both add or
+    /// change keep the larger count (and a record one side removed stays if the other side changed it); added records
+    /// are appended in order. False when the asset is not a single .data part in all three versions.
+    /// </summary>
+    static bool MergeRecords(CaffFile o, CaffFile res, CaffFile c, string name, int size)
+    {
+        static CaffPart? Data(CaffFile f, string name)
+        {
+            int s = f.Symbols.FindIndex(x => AssetIds.DisplayName(x) == name) + 1;
+            var parts = s == 0 ? new List<CaffPart>() : f.PartsOf(s).ToList();
+            return parts.Count == 1 && f.SectionOf(parts[0]).Name == ".data" ? parts[0] : null;
+        }
+        var po = Data(o, name); var pr = Data(res, name); var pc = Data(c, name);
+        if (po == null || pr == null || pc == null) return false;
+        if (po.Data.Length % size != 0 || pr.Data.Length % size != 0 || pc.Data.Length % size != 0) return false;
+        int key = size == 8 ? 4 : 0;   // offset of the part id in a record
+        List<(uint Id, byte[] Rec)> Read(byte[] d)
+        {
+            var l = new List<(uint, byte[])>();
+            for (int i = 0; i + size <= d.Length; i += size) l.Add((BE.U32(d, i + key), d.AsSpan(i, size).ToArray()));
+            return l;
+        }
+        var lo = Read(po.Data); var lr = Read(pr.Data); var lc = Read(pc.Data);
+        if (lo.Select(x => x.Id).Distinct().Count() != lo.Count) return false;   // ids must be unique keys
+        var mo = lo.ToDictionary(x => x.Id, x => x.Rec);
+        var mr = lr.GroupBy(x => x.Id).ToDictionary(g => g.Key, g => g.First().Rec);
+        var mc = lc.GroupBy(x => x.Id).ToDictionary(g => g.Key, g => g.First().Rec);
+        static bool Same(byte[]? a, byte[]? b) => a == null ? b == null : b != null && a.AsSpan().SequenceEqual(b);
+        byte[]? Larger(byte[]? a, byte[]? b) => a == null ? b : b == null ? a : size == 8 && BE.U32(b, 0) > BE.U32(a, 0) ? b : a;
+        var outList = new List<byte[]>();
+        foreach (var (id, rec) in lo)
+        {
+            var a = mr.GetValueOrDefault(id); var b = mc.GetValueOrDefault(id);
+            var pick = Same(b, rec) ? a : Same(a, rec) ? b : Larger(a, b);
+            if (pick != null) outList.Add(pick);
+        }
+        var added = new Dictionary<uint, byte[]>(); var order = new List<uint>();
+        foreach (var (id, rec) in lr.Concat(lc))
+        {
+            if (mo.ContainsKey(id)) continue;
+            if (added.TryGetValue(id, out var had)) { added[id] = Larger(had, rec)!; continue; }
+            added[id] = rec; order.Add(id);
+        }
+        foreach (var id in order) outList.Add(added[id]);
+        var nd = outList.SelectMany(x => x).ToArray();
+        pr.Data = nd; pr.Size = nd.Length;
+        return true;
     }
 }

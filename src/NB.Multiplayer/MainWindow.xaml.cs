@@ -394,7 +394,7 @@ public partial class MainWindow : Window
         if (!AppSettings.IsGameDir(S.GameDir)) { MessageBox.Show(this, "Choose your game folder in Settings first.", "NB Multiplayer"); return; }
         if (_game is { HasExited: false }) { MessageBox.Show(this, "Close the game first: editions cannot change while it runs.", "NB Multiplayer"); return; }
         EditionBusy.Visibility = Visibility.Visible;
-        EditionBusyText.Text = "Preparing..."; EditionBusyBar.Value = 0;
+        EditionBusyText.Text = "Preparing..."; EditionBusyBar.Value = 0; EditionBusyBar.Visibility = Visibility.Visible;
         CombineButton.IsEnabled = false;
         var prog = new Progress<(string Text, double Fraction)>(p => { EditionBusyText.Text = p.Text; EditionBusyBar.Value = p.Fraction; });
         string name = CombineName.Text.Trim();
@@ -417,6 +417,7 @@ public partial class MainWindow : Window
             _ticked.Clear(); CombineName.Text = ""; _editing = null;
         }
         catch (Exception ex) { EditionBusyText.Text = "The edition could not be built: " + ex.Message; }
+        EditionBusyBar.Visibility = Visibility.Collapsed;   // done or failed: the text says which (a half-full bar looked frozen)
         RefreshEditions();
     }
 
@@ -463,7 +464,7 @@ public partial class MainWindow : Window
     {
         if (!AppSettings.IsGameDir(S.GameDir)) { MessageBox.Show(this, "Choose your game folder in Settings first.", "NB Multiplayer"); return; }
         EditionBusy.Visibility = Visibility.Visible;
-        EditionBusyText.Text = "Preparing..."; EditionBusyBar.Value = 0;
+        EditionBusyText.Text = "Preparing..."; EditionBusyBar.Value = 0; EditionBusyBar.Visibility = Visibility.Visible;
         EditionsScroll.ScrollToTop();
         var prog = new Progress<(string Text, double Fraction)>(p => { EditionBusyText.Text = p.Text; EditionBusyBar.Value = p.Fraction; });
         string dir = S.GameDir;
@@ -486,6 +487,7 @@ public partial class MainWindow : Window
             EditionBusyText.Text = $"\"{ed.Name}\" is ready and selected for playing.";
         }
         catch (Exception ex) { EditionBusyText.Text = "The edition could not be built: " + ex.Message; }
+        EditionBusyBar.Visibility = Visibility.Collapsed;   // done or failed: the text says which (a half-full bar looked frozen)
         RefreshEditions();
     }
 
@@ -502,7 +504,7 @@ public partial class MainWindow : Window
         if (!AppSettings.IsGameDir(mod)) { MessageBox.Show(this, "That folder is not a game folder (it needs default.xex and a Bundle folder).", "NB Multiplayer"); return; }
         if (_game is { HasExited: false }) { MessageBox.Show(this, "Close the game first.", "NB Multiplayer"); return; }
         EditionBusy.Visibility = Visibility.Visible;
-        EditionBusyText.Text = "Preparing..."; EditionBusyBar.Value = 0;
+        EditionBusyText.Text = "Preparing..."; EditionBusyBar.Value = 0; EditionBusyBar.Visibility = Visibility.Visible;
         EditionsScroll.ScrollToTop();
         var prog = new Progress<(string Text, double Fraction)>(p => { EditionBusyText.Text = p.Text; EditionBusyBar.Value = p.Fraction; });
         var candidates = new List<string?> { S.GameDir };
@@ -549,6 +551,7 @@ public partial class MainWindow : Window
             }
         }
         catch (Exception ex) { EditionBusyText.Text = "The folder could not be turned into a mod: " + ex.Message; }
+        EditionBusyBar.Visibility = Visibility.Collapsed;   // done or failed: the text says which (a half-full bar looked frozen)
         RefreshEditions();
     }
 
@@ -564,7 +567,7 @@ public partial class MainWindow : Window
         if (!AppSettings.IsGameDir(S.GameDir)) { MessageBox.Show(this, "Choose your game folder in Settings first.", "NB Multiplayer"); return; }
         if (!File.Exists(patch)) { MessageBox.Show(this, "The patch file is missing: " + patch, "NB Multiplayer"); return; }
         EditionBusy.Visibility = Visibility.Visible;
-        EditionBusyText.Text = "Preparing..."; EditionBusyBar.Value = 0;
+        EditionBusyText.Text = "Preparing..."; EditionBusyBar.Value = 0; EditionBusyBar.Visibility = Visibility.Visible;
         var prog = new Progress<(string Text, double Fraction)>(p => { EditionBusyText.Text = p.Text; EditionBusyBar.Value = p.Fraction; });
         try
         {
@@ -573,6 +576,7 @@ public partial class MainWindow : Window
             EditionBusyText.Text = $"\"{ed.Name}\" is ready and selected for playing.";
         }
         catch (Exception ex) { EditionBusyText.Text = "The edition could not be built: " + ex.Message; }
+        EditionBusyBar.Visibility = Visibility.Collapsed;   // done or failed: the text says which (a half-full bar looked frozen)
         RefreshEditions();
     }
 
