@@ -16,18 +16,59 @@
   "234cec"
  ],
  [
-  "objparams-copy",
-  "757c4b",
-  "actor_banjoai",
-  "234cec",
-  "actor_npc_thomas"
- ],
- [
   "asset-copy",
   "685374",
   "aid_vehicle_banjox_general_golfcartcomplete",
   "234cec",
   "aid_vehicle_banjox_coop_puppet"
+ ],
+ [
+  "objparams-copy",
+  "757c4b",
+  "actor_banjoai",
+  "234cec",
+  "actor_npc_thomas",
+  "actor_coop_driver1"
+ ],
+ [
+  "objparams-set",
+  "aid_objparams_banjox_actor_coop_driver1",
+  "104",
+  "3F000001",
+  "--bundle",
+  "234cec"
+ ],
+ [
+  "objparams-copy",
+  "757c4b",
+  "actor_banjoai",
+  "234cec",
+  "actor_npc_thomas",
+  "actor_coop_driver2"
+ ],
+ [
+  "objparams-set",
+  "aid_objparams_banjox_actor_coop_driver2",
+  "104",
+  "3F000002",
+  "--bundle",
+  "234cec"
+ ],
+ [
+  "objparams-copy",
+  "757c4b",
+  "actor_banjoai",
+  "234cec",
+  "actor_npc_thomas",
+  "actor_coop_driver3"
+ ],
+ [
+  "objparams-set",
+  "aid_objparams_banjox_actor_coop_driver3",
+  "104",
+  "3F000003",
+  "--bundle",
+  "234cec"
  ],
  [
   "ai-route",
@@ -46,7 +87,7 @@
   "--strategy",
   "actorstrategy_coop_puppet",
   "--driver",
-  "actor_banjoai",
+  "actor_coop_driver1",
   "--keep-strategy",
   "--mask",
   "00010000",
@@ -70,7 +111,7 @@
   "--strategy",
   "actorstrategy_coop_puppet",
   "--driver",
-  "actor_banjoai",
+  "actor_coop_driver2",
   "--keep-strategy",
   "--mask",
   "00010000",
@@ -94,7 +135,7 @@
   "--strategy",
   "actorstrategy_coop_puppet",
   "--driver",
-  "actor_banjoai",
+  "actor_coop_driver3",
   "--keep-strategy",
   "--mask",
   "00010000",

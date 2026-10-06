@@ -62,7 +62,9 @@ public sealed class TransformPanel : UserControl
     {
         _obj = o;
         bool editable = o != null && o.Kind != SceneObjectKind.Terrain;
-        foreach (var n in _pos.Concat(_rot).Concat(_scl)) n.Enabled = editable;
+        foreach (var n in _pos.Concat(_rot)) n.Enabled = editable;
+        // markers keep their scale (the record's scale field is not a size; path nodes use it as a node value)
+        foreach (var n in _scl) n.Enabled = editable && !Viewport.SceneViewport.ScaleLocked(o);
         _apply.Enabled = _reset.Enabled = editable;
         _linkRow.Visible = o?.Marker is { Type: 22 };
         _title.Text = o == null ? "No selection" : $"{o.Name}\n{AssetIds.DisplayName(o.ModelName)}";
@@ -87,7 +89,8 @@ public sealed class TransformPanel : UserControl
                   $"Strings: {string.Join(", ", _obj.Marker.Strings.Take(4))}\n" +
                   (_obj.ModelSource != "" ? $"Drawn with: {(_obj.Model?.View != null ? AssetIds.DisplayName(_obj.Model.View.Name) + " from " : "")}{_obj.ModelSource}\n" : "") +
                   (_obj.Marker.Type == 22 ? $"Path: next node #{_obj.Marker.Link}" + (_obj.Marker.Link == _obj.Marker.Index ? " (end of path)" : "") + "; a node linking to itself ends the path\n" : "") +
-                  (_obj.Dirty ? "Modified (not yet saved)" : "Unmodified") + "\nRotation is stored as X/Y/Z angles; the engine's order is assumed X-Y-Z."
+                  (_obj.Dirty ? "Modified (not yet saved)" : "Unmodified") + "\nRotation is stored as X/Y/Z angles; the engine's order is assumed X-Y-Z." +
+                  $"\nScale is locked for markers (stored value {_obj.Marker.Scale:0.###} is kept)."
                 : $"Instance #{_obj.Instance?.Index}, reference model #{_obj.Instance?.RefModel}\n" +
                   $"Record 0x{_obj.Instance?.RecordOffset:X}, matrix 0x{_obj.Instance?.MatrixOffset:X}, node {_obj.Instance?.PlacementNode}\n" +
                   (_obj.Dirty ? "Modified (not yet saved to the workspace)" : "Unmodified") +
@@ -109,6 +112,7 @@ public sealed class TransformPanel : UserControl
         var t = new Vector3((float)_pos[0].Value, (float)_pos[1].Value, (float)_pos[2].Value);
         var r = new Vector3((float)_rot[0].Value, (float)_rot[1].Value, (float)_rot[2].Value) * (MathF.PI / 180);
         var s = new Vector3((float)_scl[0].Value, (float)_scl[1].Value, (float)_scl[2].Value);
+        if (Viewport.SceneViewport.ScaleLocked(_obj)) { Matrix4x4.Decompose(before, out var keep, out _, out _); s = keep; }
         var m = Matrix4x4.CreateScale(s) * Matrix4x4.CreateRotationX(r.X) * Matrix4x4.CreateRotationY(r.Y) * Matrix4x4.CreateRotationZ(r.Z);
         m.Translation = t;
         if (m == before) return;

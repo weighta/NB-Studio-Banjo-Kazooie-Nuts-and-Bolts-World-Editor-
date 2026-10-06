@@ -45,7 +45,22 @@ public sealed partial class CoopSync
     /// <summary>Diagnostics: respawns run, characters per route (written / shown), puppets whose route is known.</summary>
     public int Respawns { get; private set; }
     public int RespawnsForRoutes { get; private set; }
-    public string CharacterStatus => $"respawns {Respawns} (routes {RespawnsForRoutes}) routes {string.Join("/", Enumerable.Range(0, 3).Select(k => _driverParams[k] == 0 ? "-" : $"{_written[k]}:{_spawned[k]}"))} mapped {_routeOfDriver.Count}{(_respawnPending ? " RESPAWNING" : "")}";
+    public string CharacterStatus => $"respawns {Respawns} (routes {RespawnsForRoutes}) routes {string.Join("/", Enumerable.Range(0, 3).Select(k => _driverParams[k] == 0 ? "-" : $"{_written[k]}:{_spawned[k]}"))} mapped {_routeOfDriver.Count} stale {StaleParamsSkipped} towns {TownSessions}{(_respawnPending ? " RESPAWNING" : "")}";
+    /// <summary>Diagnostics: driver objparams copies found to be stale (an earlier town load's) and skipped.</summary>
+    public int StaleParamsSkipped { get; private set; }
+    readonly HashSet<uint> _staleParams = new();
+
+    /// <summary>The model id an avatar was created with (its model instance [A+0x8C0], id at +0x174; 0 = none yet).</summary>
+    uint ModelOf(uint avatar)
+    {
+        if (!AvatarAlive(avatar)) return 0;
+        uint inst = _x.U32(avatar + 0x8C0);
+        return Ptr(inst) ? _x.U32(inst + 0x174) : 0;
+    }
+
+    /// <summary>The character whose model this is (0 = Banjo, also the AI Banjo; -1 = unknown / none).</summary>
+    static int CharacterOfModel(uint model) =>
+        model == 0 ? -1 : Characters.All.FirstOrDefault(c => c.Model == model)?.Index ?? -1;
 
     /// <summary>Route 0..2 of a puppet (by its driver, or the Banjo who got out of it), -1 = unknown driver, -2 = no driver
     /// to tell (being ejected / seated / changed: wait).</summary>
@@ -70,8 +85,20 @@ public sealed partial class CoopSync
             var p = _x.V3(BodyOf(_x, v));
             int best = -1; float bd = 8f;
             for (int k = 0; k < 3; k++) { float dd = Vector3.Distance(p, RouteSpawn[k]); if (dd < bd) { bd = dd; best = k; } }
-            // a new driver spawned from the route's objparams as they are now (our RESPAWN or a local Change Vehicle)
-            if (best >= 0) { _routeOfDriver[d] = best; _spawned[best] = _written[best]; }
+            if (best < 0) continue;
+            // a new driver spawned from the route's objparams as they are now (our RESPAWN or a local Change Vehicle).
+            // Its real model tells whether the objparams we wrote are the live ones: the heap can still hold a copy of an
+            // earlier town load's objparams (freed, not overwritten), and a write into that copy changes nothing - the
+            // driver came back as Banjo and the player's character never showed again. Such a copy is skipped from now on.
+            _routeOfDriver[d] = best;
+            int actual = CharacterOfModel(ModelOf(d));
+            if (actual >= 0 && _written[best] != 0 && actual != _written[best] && _driverParams[best] != 0)
+            {
+                _staleParams.Add(_driverParams[best]);
+                _driverParams[best] = 0; _written[best] = 0;
+                StaleParamsSkipped++;
+            }
+            _spawned[best] = actual >= 0 ? actual : _written[best];
         }
         if (_vehSeen.Count > 64) _vehSeen.IntersectWith(_vehicles);
         if (_routeOfDriver.Count > 32) foreach (var d in _routeOfDriver.Keys.Where(d => !AvatarAlive(d)).ToList()) _routeOfDriver.Remove(d);
@@ -84,6 +111,7 @@ public sealed partial class CoopSync
         if (level == _charLevel) return;
         _charLevel = level;
         Array.Clear(_driverParams); Array.Clear(_written); Array.Clear(_spawned);
+        _staleParams.Clear();
         _routeOfDriver.Clear(); _vehSeen.Clear(); _charAvailable.Clear(); _charScan = null; _charScanAt = DateTime.MinValue;
     }
 
@@ -99,6 +127,7 @@ public sealed partial class CoopSync
         _charScanAt = DateTime.UtcNow;
         var x = _x; var want = _charWanted.Where(c => c != 0 && !_charAvailable.ContainsKey(c)).ToList();
         var known = _driverParams.ToArray();
+        var stale = _staleParams.ToHashSet();
         _charScan = Task.Run(() =>
         {
             var found = known.ToArray();
@@ -108,6 +137,7 @@ public sealed partial class CoopSync
                 foreach (var a in x.FindU32(0x3F000001u + (uint)k))
                 {
                     uint h = a - 0x104;
+                    if (stale.Contains(h)) continue;                     // an earlier town load's copy (see MapRoutes)
                     if (x.U32(h + 0xC0) >> 24 == 0x04 && x.U32(h + 0xD0) >> 24 == 0x20) { found[k] = h; break; }
                 }
             }
@@ -138,9 +168,15 @@ public sealed partial class CoopSync
             {
                 _driverParams[k] = t.Result.Params[k];
                 uint m = _x.U32(_driverParams[k] + 0xC0), a = _x.U32(_driverParams[k] + 0xD0);
-                // already a character (written by an earlier run of the app in this town load)? Banjo = the AI Banjo's own ids
+                // already a character (written by an earlier run of the app in this town load - or a stale copy of an
+                // earlier town load that WE wrote)? Banjo = the AI Banjo's own ids. What the drivers show is not known:
+                // the next respawn tells (MapRoutes), so a stale copy is never taken for "done"
                 var c = Characters.All.Skip(1).FirstOrDefault(cc => cc.Model == m && cc.AnimTable == a);
-                if (c != null) { _written[k] = _spawned[k] = c.Index; _origModel[k] = BanjoAiModel; _origAnim[k] = BanjoAiAnim; }
+                if (c != null)
+                {
+                    _written[k] = c.Index; _origModel[k] = BanjoAiModel; _origAnim[k] = BanjoAiAnim;
+                    if (!_routeOfDriver.ContainsValue(k)) _spawned[k] = -1;     // (a mapped driver already told what it shows)
+                }
                 else { _origModel[k] = m; _origAnim[k] = a; }
             }
         foreach (var (c, ok) in t.Result.Avail) _charAvailable[c] = ok;
@@ -158,17 +194,29 @@ public sealed partial class CoopSync
     }
 
     /// <summary>Which free puppet a remote player gets: one whose driver already is their character, if any.</summary>
-    uint PickPuppet(CoopRemote r)
+    uint PickPuppet(long id, CoopRemote r)
     {
         if (_free.Count == 0) return 0;
+        // the puppet they had (a player who drops out for a moment - a stall, a load - comes back to the same puppet: same
+        // driver, character and design, no new eject / respawn / rebuild)
+        if (_lastPuppet.TryGetValue(id, out var last) && _free.Contains(last) && Alive(last)) return last;
         int want = ShownCharacter(r);
         foreach (var v in _free)
         {
-            uint d = DriverOf(v);
+            uint d = SeatedDriverOf(v);
             if (d != 0 && _routeOfDriver.TryGetValue(d, out var k) && _spawned[k] == want) return v;
         }
         return _free[0];
     }
+    readonly Dictionary<long, uint> _lastPuppet = new();
+
+    /// <summary>The AI driver really sitting in the puppet (an ejected one is still linked from the vehicle: 0 then).</summary>
+    uint SeatedDriverOf(uint veh) { uint d = DriverOf(veh); return d != 0 && _x.U32(d + 0xC3C) == veh ? d : 0; }
+
+    /// <summary>A character respawn is due while players are on foot: their drivers are seated first (and not ejected again
+    /// until the respawn is done - re-ejecting them blocked the respawn for as long as the player stayed on foot, and the
+    /// player was shown as the AI Banjo meanwhile).</summary>
+    bool _respawnWanted;
 
     /// <summary>
     /// Per tick (in town): every shown remote's puppet driver must be the remote's character. A route whose driver shows
@@ -200,7 +248,9 @@ public sealed partial class CoopSync
             need = true;
         }
         if (_driverParams.Any(p => p == 0) && _charWanted.Count > 0) StartCharScan();
-        if (!need || DateTime.UtcNow - _lastRespawn < TimeSpan.FromSeconds(2)) return;
+        if (!need) { _respawnWanted = false; return; }
+        if (_walkers.Count > 0) _respawnWanted = true;
+        if (DateTime.UtcNow - _lastRespawn < TimeSpan.FromSeconds(2)) return;
         if (_op != null || _rebuilding.Count > 0 || FootBusy()) return;
         if (_walkers.Count > 0)
         {
@@ -230,10 +280,11 @@ public sealed partial class CoopSync
     void OnRespawned(bool ok)
     {
         _respawnPending = false;
+        _respawnWanted = false;
         if (!ok) return;
         Respawns++;
         for (int k = 0; k < 3; k++) _spawned[k] = _written[k];
-        _assigned.Clear(); _free.Clear(); _vehicles.Clear(); _walkers.Clear();
+        _assigned.Clear(); _free.Clear(); _vehicles.Clear(); _walkers.Clear(); _lastPuppet.Clear(); _orphans.Clear();
         for (int i = 0; i < 4; i++) _x.Write(FSlots + 0x40 * (uint)i, new byte[4]);
         _routeOfDriver.Clear(); _vehSeen.Clear();
         _lastScan = DateTime.MinValue;

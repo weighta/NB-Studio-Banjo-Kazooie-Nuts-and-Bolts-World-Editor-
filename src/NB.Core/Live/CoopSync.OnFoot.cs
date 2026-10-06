@@ -27,8 +27,8 @@ public sealed partial class CoopSync
     readonly Dictionary<long, Walker> _walkers = new();          // remote player -> their Banjo (ejected or being ejected)
     sealed class FootOp { public FOp Op; public long Id; public uint Veh, R, Seq; public DateTime At; public bool Done; }
     FootOp? _fop;
-    readonly uint[] _indShown = new uint[4];
-    readonly Vector3[] _indPos = new Vector3[4];
+    readonly uint[] _indShown = new uint[8];
+    readonly Vector3[] _indPos = new Vector3[8];
 
     /// <summary>Diagnostics: players shown on foot right now, and on-foot commands run.</summary>
     public int Walking => _walkers.Values.Count(w => w.Out);
@@ -118,9 +118,17 @@ public sealed partial class CoopSync
     bool FootTick(long id, uint puppet, CoopState st, float lead)
     {
         if (!HasFootMod) return true;
+        if (_respawnWanted && (!_walkers.TryGetValue(id, out var sw) || _x.U32(sw.R + 0xC3C) != 0))
+            return true;                                                 // seated for the character respawn: stays seated until it ran
         if (!_walkers.TryGetValue(id, out var w))
         {
             uint r = DriverOf(puppet);
+            if ((r == 0 || _x.U32(r + 0xC3C) != puppet) && _orphans.TryGetValue(id, out var o))
+            {
+                // nobody to eject from this puppet, but this player's earlier driver is standing hidden: he walks again
+                _orphans.Remove(id);
+                if (AvatarAlive(o) && _x.U32(o + 0xC3C) == 0) { _walkers[id] = new Walker { R = o, Puppet = puppet, Out = true }; return true; }
+            }
             if (r == 0 || _x.U32(r + 0xC3C) != puppet || FootBusy()) return true;
             _walkers[id] = w = new Walker { R = r, Puppet = puppet };
             PostFoot(FOp.Eject, id, puppet, r);
@@ -144,8 +152,10 @@ public sealed partial class CoopSync
         float yaw = MathF.Atan2(fw.X, fw.Z);
         if (!float.IsFinite(yaw + pos.X + pos.Y + pos.Z)) return true;
         var b = new byte[0x40];
-        uint flags = 1 | 4 | (st.BodyState != 0 ? 2u : 0u);
-        BE.W32(b, 0, w.R); BE.W32(b, 4, flags); BE.W32(b, 8, st.BodyState);
+        // only states that need nothing from the sender's game (a bolt, a ledge, a Jiggy...): see PuppetBodyState
+        ushort bs = PuppetBodyState(st.BodyState);
+        uint flags = 1 | 4 | (bs != 0 ? 2u : 0u);
+        BE.W32(b, 0, w.R); BE.W32(b, 4, flags); BE.W32(b, 8, bs);
         float[] f = { pos.X, pos.Y, pos.Z, 1, 0, yaw, 0, 0, st.Velocity.X, st.Velocity.Y, st.Velocity.Z, 0 };
         for (int i = 0; i < f.Length; i++) BE.WF32(b, 0x10 + 4 * i, f[i]);
         uint a = FSlots + 0x40 * (uint)w.Slot;
@@ -175,11 +185,17 @@ public sealed partial class CoopSync
             return;
         }
         if (puppet != 0 && Alive(puppet) && DriverOf(puppet) == 0) return;   // puppet being changed: next tick
-        // no seat for him (the puppet has a new driver or is gone): out of sight, local again (idle)
+        // no seat for him (the puppet has a new driver or is gone): out of sight, local again (idle) - kept for this player:
+        // if they come back on foot to a puppet without a driver, he walks for them again
         SetActorHidden(w.R, true);
         var one = new byte[4]; BE.W32(one, 0, 1); _x.Write(w.R + 0x24, one);
         _walkers.Remove(id);
+        _orphans[id] = w.R;
     }
+
+    /// <summary>Drivers left out of their vehicle and hidden (by remote player): reused when that player is on foot again and
+    /// their puppet has no driver to eject.</summary>
+    readonly Dictionary<long, uint> _orphans = new();
 
     /// <summary>The game's indicator icons for remote players who change vehicle (0x6E over their vehicle) or build in
     /// the garage (0x79 where they left town). The game redraws them every frame from the slots.</summary>
@@ -187,17 +203,26 @@ public sealed partial class CoopSync
     {
         if (!HasFootMod) return;
         var want = new List<(uint Type, Vector3 Pos)>();
+        var markers = new List<(uint Type, Vector3 Pos)>();
+        int order = 0;
         foreach (var (id, r) in remotes.OrderBy(kv => kv.Key))
         {
             var st = r.State;
             if (!Finite(st) || st.Position == Vector3.Zero) continue;
             if (st.Mode == CoopMode.Building) want.Add((IndicatorVehicleEdit, st.Position + new Vector3(0, 2.5f, 0)));
             else if (st.Mode == CoopMode.Garage) want.Add((IndicatorMumboPad, st.Position + new Vector3(0, 2.5f, 0)));
+            // every other player in town: their colour on the minimap (the garage icon has its own map icon)
+            if (st.Shown || st.Mode == CoopMode.Building) markers.Add((PlayerMarker(order), ShownPosition(id, st)));
+            order++;
         }
-        for (int i = 0; i < 4; i++)
+        // markers first when the slots run short (4 in editions before co-op 1.7): the minimap matters more than icons
+        want = markers.Concat(want).Take(IndicatorSlots).ToList();
+        for (int i = 0; i < IndicatorSlots; i++)
         {
             var (type, pos) = i < want.Count ? want[i] : (0u, Vector3.Zero);
-            if (_indShown[i] == type && Vector3.Distance(_indPos[i], pos) < 0.05f) continue;
+            // markers follow the player: rewritten when they moved 0.5 u (icons over a vehicle: 0.05 u)
+            float eps = PlayerMarkers.Contains(type) ? 0.5f : 0.05f;
+            if (_indShown[i] == type && Vector3.Distance(_indPos[i], pos) < eps) continue;
             uint a = FIndicators + 0x20 * (uint)i;
             if (type == 0) _x.Write(a, new byte[4]);
             else

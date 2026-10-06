@@ -15,7 +15,7 @@
     <AssemblyName>NBMultiplayer</AssemblyName>
     <RootNamespace>NB.Multiplayer</RootNamespace>
     <Product>NB Multiplayer</Product>
-    <Version>2.1.1</Version>
+    <Version>2.2.0</Version>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
   </PropertyGroup>
 
@@ -39,6 +39,9 @@
     <None Include="$(ModsRoot)charsel\dist\CharacterSelect.nbpatch" Link="patches\CharacterSelect.nbpatch" Condition="Exists('$(ModsRoot)charsel\dist\CharacterSelect.nbpatch')"
           CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
     <None Include="$(ModsRoot)ultra\dist\UltraParts.nbpatch" Link="patches\UltraParts.nbpatch" Condition="Exists('$(ModsRoot)ultra\dist\UltraParts.nbpatch')"
+          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
+    <!-- map mod: Seattle (Workspaces/seattle, NB.Cli patch-build; see seattle/PLAN.md) -->
+    <None Include="$(ModsRoot)seattle\dist\Seattle.nbpatch" Link="patches\Seattle.nbpatch" Condition="Exists('$(ModsRoot)seattle\dist\Seattle.nbpatch')"
           CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
     <!-- official map mod: Snowy Showdown Town (snow/build.sh) -->
     <None Include="$(ModsRoot)snow\dist\SnowyShowdownTown.nbpatch" Link="patches\SnowyShowdownTown.nbpatch" Condition="Exists('$(ModsRoot)snow\dist\SnowyShowdownTown.nbpatch')"

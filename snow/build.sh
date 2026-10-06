@@ -35,16 +35,19 @@ $CLI obj-set "$WS" aid_script_banjox_lightsetup_showdowntown_morning 68 h:B4BECE
 echo "== falling snow: camera-following emitters (exe mod snow-follows-camera)"
 python snow/research/fx/snowtown.py "$WS" --size1 0.55 --size2 1.0 --emit1 1500 --emit2 80 | grep emit
 
+echo "== no ceiling: the town's invisible lid shrunk to a speck (exe mods town-no-ceiling + town-flight-thrust below)"
+$CLI ops-apply "$WS" snow/no_ceiling_ops.json | tail -1
+
 echo "== the hand-modded game folder"
 rm -rf "${DIR:?}"
 $CLI link-copy "$FRESH" "$DIR" Bundle/4f/234cec Bundle/50/234cec Bundle/4f/685374 default.xex
 for f in Bundle/4f/234cec Bundle/50/234cec Bundle/4f/685374; do chmod u+w "$DIR/$f"; cp "$WS/game/$f" "$DIR/$f"; done
 chmod u+w "$DIR/default.xex"
-$CLI xex-poke "$FRESH/default.xex" "$DIR/default.xex" --mod snow-follows-camera
+$CLI xex-poke "$FRESH/default.xex" "$DIR/default.xex" --mod snow-follows-camera --mod town-no-ceiling --mod town-flight-thrust
 
 echo "== mod"
 mkdir -p snow/dist
 $CLI patch-from-folder "$DIR" snow/dist/SnowyShowdownTown.nbpatch --ref "$FRESH" --name "Snowy Showdown Town" --id snowy-showdown-town \
-     --version 1.0 --author weighta --category map --tags "Showdown Town,Winter,Christmas,Weather,Textures" \
-     --desc "Showdown Town under a winter sky: deep snow on the streets and roofs, frosted trees, holly garlands and red-and-green bunting, falling snow all over town, and cold winter light, fog and skies for morning, midday, dusk and a starry blue night." \
+     --version 1.1 --author weighta --category map --tags "Showdown Town,Winter,Christmas,Weather,Textures" \
+     --desc "Showdown Town under a winter sky: deep snow on the streets and roofs, frosted trees, holly garlands and red-and-green bunting, falling snow all over town, and cold winter light, fog and skies for morning, midday, dusk and a starry blue night. No ceiling over town, and planes fly in town." \
   | grep -E "^(delta|new|xexmods|exe mods|wrote)"

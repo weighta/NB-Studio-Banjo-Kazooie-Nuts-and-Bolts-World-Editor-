@@ -20,6 +20,7 @@ namespace NB.Core.Project;
 ///   script-insert  &lt;bundle&gt; &lt;script asset&gt; &lt;after&gt; &lt;command hex words...&gt;
 ///   asset-set      &lt;bundle&gt; &lt;asset&gt; &lt;offset hex&gt;=&lt;u32 hex | asset name&gt; ...   (many words of any asset's .data)
 ///   model-keep-joints &lt;bundle&gt; &lt;model&gt; &lt;new model&gt; &lt;joint&gt;   (a copy showing only that joint's subtree)
+///   asset-patch    &lt;bundle&gt; &lt;asset&gt; &lt;offset hex&gt;=&lt;old u32 hex&gt;:&lt;new u32 hex&gt; ...   (only when every old word matches)
 /// </code>
 /// asset-copy also copies assets that point into their bundle's shared string pool (animations): the strings are
 /// re-pointed at (or added to) the destination pool. Mods replay their ops in one batch (each bundle written once).
@@ -28,7 +29,7 @@ namespace NB.Core.Project;
 /// </summary>
 public static class WorldOps
 {
-    public static readonly string[] Names = { "objparams-copy", "objparams-set", "asset-copy", "ai-route", "script-insert", "asset-set", "model-keep-joints" };
+    public static readonly string[] Names = { "objparams-copy", "objparams-set", "asset-copy", "ai-route", "script-insert", "asset-set", "model-keep-joints", "asset-patch" };
 
     static string Disp(string s) => AssetIds.DisplayName(s);
     static int Sym(CaffFile c, string name) => c.Symbols.FindIndex(s => Disp(s) == name) + 1;
@@ -40,7 +41,7 @@ public static class WorldOps
     {
         if (op.Count == 0) return "empty op";
         int min = op[0] switch { "objparams-copy" => 5, "objparams-set" => 4, "asset-copy" => 4, "ai-route" => 3, "script-insert" => 5,
-                                 "asset-set" => 4, "model-keep-joints" => 5, _ => -1 };
+                                 "asset-set" => 4, "model-keep-joints" => 5, "asset-patch" => 4, _ => -1 };
         if (min < 0) return $"unknown op \"{op[0]}\" (a newer NB Studio / NB Multiplayer may be needed)";
         return op.Count < min ? $"{op[0]}: {min - 1} or more arguments expected" : null;
     }
@@ -60,6 +61,7 @@ public static class WorldOps
             case "ai-route": AiRouteOp(ws, a, log); break;
             case "script-insert": ScriptInsert(ws, a, log); break;
             case "asset-set": AssetSet(ws, a, log); break;
+            case "asset-patch": AssetPatch(ws, a, log); break;
             case "model-keep-joints": ModelKeepJoints(ws, a, log); break;
         }
     }
@@ -69,6 +71,34 @@ public static class WorldOps
     {
         using (ws.Batch())
             foreach (var op in ops) Run(ws, op, log, index);
+    }
+
+    // asset-patch <bundle> <asset> <offset hex>=<old hex>:<new hex> ...: like asset-set, but only when EVERY listed word still
+    // holds its old value (the asset is the retail one); otherwise nothing is written and the op is skipped with a log line,
+    // so a mod made for the retail asset never damages an asset another mod replaced (e.g. a rebuilt world collision).
+    static void AssetPatch(Workspace ws, string[] a, Action<string> log)
+    {
+        uint b = Hex(a[1]);
+        var caff = ws.LoadResident(b);
+        int sym = Sym(caff, a[2]);
+        if (sym == 0) { log($"asset-patch: {a[2]} not in {b:x6}, skipped"); return; }
+        var d = caff.PartsOf(sym).First(p => caff.SectionOf(p).Name == ".data").Data;
+        var words = new List<(int Off, uint Old, uint New)>();
+        foreach (var kv in a.Skip(3))
+        {
+            int eq = kv.IndexOf('='), colon = kv.IndexOf(':');
+            if (eq <= 0 || colon < eq) throw new ArgumentException($"asset-patch: '{kv}' is not offset=old:new");
+            int off = Convert.ToInt32(kv[..eq], 16);
+            if (off < 0 || off + 4 > d.Length) { log($"asset-patch: offset 0x{off:X} outside {a[2]} ({d.Length} bytes), skipped"); return; }
+            words.Add((off, Hex(kv[(eq + 1)..colon]), Hex(kv[(colon + 1)..])));
+        }
+        if (words.All(w => BE.U32(d, w.Off) == w.New)) { log($"{a[2]} in {b:x6}: already patched"); return; }
+        var bad = words.FirstOrDefault(w => BE.U32(d, w.Off) != w.Old);
+        if (words.Any(w => BE.U32(d, w.Off) != w.Old))
+        { log($"asset-patch: {a[2]} in {b:x6} is not the expected asset (0x{bad.Off:X} = 0x{BE.U32(d, bad.Off):X8}), skipped"); return; }
+        foreach (var w in words) BE.W32(d, w.Off, w.New);
+        ws.SaveResident(b, caff, $"{a[2]}: {words.Count} word(s) patched");
+        log($"{a[2]} in {b:x6}: {words.Count} word(s) patched");
     }
 
     // asset-set <bundle> <asset> <offset hex>=<u32 hex | asset name> ...: words of any asset's .data part

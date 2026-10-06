@@ -171,20 +171,10 @@ public sealed class WorldScene
             }
             catch (Exception e) { Log.Add($"{mc.Symbols[s - 1]}: {e.Message}"); Audit.Note("marker assets that failed to parse", $"{AssetIds.DisplayName(mc.Symbols[s - 1])}: {e.Message}"); }
         }
-        // grass layers (background chunk 17: u32 count, 0xC4-byte records: +0 grass model id, +4 density texture id, box,
-        // spacing…): scattered by the game at run time, not drawn here
-        if (Background.Chunks.TryGetValue(17, out int c17))
-            try
-            {
-                var bd = Background.View.Data(".data");
-                int ng = NB.Core.IO.BE.S32(bd, c17);
-                var grass = Enumerable.Range(0, Math.Clamp(ng, 0, 4096)).Select(i => NB.Core.IO.BE.U32(bd, c17 + 4 + 0xC4 * i))
-                    .Select(gid => FindAsset(gid, Caff) is { } g ? AssetIds.DisplayName(g.Caff.Symbols[g.Sym - 1]).Replace("aid_model_banjox_background_", "") : $"{gid:X8}")
-                    .GroupBy(x => x).Select(g => $"{g.Key} ×{g.Count()}");
-                Audit.GrassLayers = ng;
-                Audit.Note("grass layers (chunk 17, scattered by the game at run time; not drawn)", $"{ng} layers: {string.Join(", ", grass)}");
-            }
-            catch (Exception e) { Log.Add("grass layers: " + e.Message); }
+        // grass layers (chunk 17 of the background model, or of a reference model placed in the world such as Spiral
+        // Mountain's grassboxes): the game covers each box with grass tiles at run time (see GrassLayer)
+        try { LoadGrass(); }
+        catch (Exception e) { Log.Add("grass layers: " + e.Message); }
         Audit.Models = Models.Count;
         Audit.Bundles = _caffs.Where(kv => kv.Value != null).Select(kv => kv.Key).ToList();
         foreach (var (cat, items) in Audit.Notes.OrderBy(kv => kv.Key))
@@ -403,6 +393,35 @@ public sealed class WorldScene
         Audit.Count("objects drawn at markers", (cls ?? "marker record").Replace("objDefId_", ""));
     }
 
+    /// <summary>Grass layers of the world (chunk 17), with their grass model; tiles are laid out by the viewer once the
+    /// shadow (density) texture is chosen (<see cref="GrassLayer.BuildTiles"/>).</summary>
+    public readonly List<GrassLayer> Grass = new();
+
+    void LoadGrass()
+    {
+        var sources = new List<(ModelAsset Model, CaffFile Caff, Matrix4x4 Place, string Name)> { (Background, Caff, Matrix4x4.Identity, "background") };
+        foreach (var o in Objects.Where(o => o.Kind == SceneObjectKind.Scenery && o.Model != null && o.Model.Chunks.ContainsKey(17)))
+            sources.Add((o.Model!, LoadBundle(o.ModelBundle) ?? Caff, o.Transform, o.Name));
+        foreach (var (model, caff, place, name) in sources)
+        {
+            if (!model.Chunks.TryGetValue(17, out int c17)) continue;
+            var layers = GrassLayer.Read(model.View.Data(".data"), c17, place, name);
+            foreach (var l in layers)
+            {
+                if (FindAsset(l.ModelId, caff) is { } gl && GetModel(gl.Caff, gl.Sym) is { } gm)
+                {
+                    l.Model = gm; l.ModelName = AssetIds.DisplayName(gl.Caff.Symbols[gl.Sym - 1]);
+                    try { l.Mesh = GrassMesh.From(gm); } catch (Exception e) { Log.Add($"grass model {l.ModelName}: {e.Message}"); }
+                }
+                l.HeightName = NameById.GetValueOrDefault(l.HeightId) ?? (FindAsset(l.HeightId, caff) is { } hl ? AssetIds.DisplayName(hl.Caff.Symbols[hl.Sym - 1]) : "");
+                Grass.Add(l);
+            }
+            Audit.GrassLayers += layers.Count;
+            var kinds = layers.GroupBy(l => l.ModelName.Replace("aid_model_banjox_background_", "")).Select(g => $"{(g.Key == "" ? "?" : g.Key)} ×{g.Count()}");
+            Audit.Note("grass layers (chunk 17, tiles laid out like the game)", $"{name}: {layers.Count} layers: {string.Join(", ", kinds)}");
+        }
+    }
+
     /// <summary>Collision per model name (aid_model_X ↔ aid_havok_X), in model space. Filled by <see cref="LoadCollision"/>.</summary>
     public Dictionary<string, List<NB.Core.Havok.CollisionMesh>>? CollisionByModel;
 
@@ -431,6 +450,46 @@ public sealed class WorldScene
         CollisionByModel = result;
         return (result.Count, result.Values.Sum(l => l.Sum(m => m.Triangles.Count / 3)), notes);
     }
+
+    /// <summary>
+    /// Havok collision of one object, per drawn model: every model's collision is the aid_havok asset of the same name
+    /// (terrain, scenery, nested reference models, and all 269 marker-object models of Showdown Town and the common bundle
+    /// checked), looked up in the model's bundle, then the load set. Meshes are in the model's space; Local places them
+    /// in the object (children of composite buildings, vehicle parts). Cached per model.
+    /// </summary>
+    public List<(string Asset, List<NB.Core.Havok.CollisionMesh> Meshes, Matrix4x4 Local)> CollisionOf(SceneObject o)
+    {
+        var list = new List<(string, List<NB.Core.Havok.CollisionMesh>, Matrix4x4)>();
+        var models = new List<(ModelAsset M, Matrix4x4 L)>();
+        if (o.Model != null) models.Add((o.Model, Matrix4x4.Identity));
+        models.AddRange(o.Children);
+        foreach (var (m, local) in models)
+        {
+            if (m.View == null) continue;
+            if (!_collByModel.TryGetValue(m, out var hit))
+            {
+                hit = null;
+                try
+                {
+                    string name = AssetIds.DisplayName(m.View.Name);
+                    if (name.StartsWith("aid_model_") && AssetIds.IdOf("aid_havok_" + name["aid_model_".Length..]) is uint hid
+                        && FindAsset(hid, m.View.Caff) is { } loc)
+                    {
+                        if (!_relocByCaff.TryGetValue(loc.Caff, out var rel)) _relocByCaff[loc.Caff] = rel = AssetView.BuildRelocIndex(loc.Caff);
+                        var d = new AssetView(loc.Caff, loc.Sym, rel).Data(".data");
+                        // actors' assets are empty 32-byte placeholders (their physics body is made at run time)
+                        hit = (AssetIds.DisplayName(loc.Caff.Symbols[loc.Sym - 1]),
+                               NB.Core.Havok.HkPackfile.IsPackfileAsset(d) ? NB.Core.Havok.HkCollision.ExtractAsset(d).Meshes : new List<NB.Core.Havok.CollisionMesh>());
+                    }
+                }
+                catch (Exception e) { Log.Add($"collision of {AssetIds.DisplayName(m.View.Name)}: {e.Message}"); }
+                _collByModel[m] = hit;
+            }
+            if (hit is { } h) list.Add((h.Asset, h.Meshes, local));
+        }
+        return list;
+    }
+    readonly Dictionary<ModelAsset, (string Asset, List<NB.Core.Havok.CollisionMesh> Meshes)?> _collByModel = new(ReferenceEqualityComparer.Instance);
 
     public readonly List<MarkerAsset> Markers = new();
     /// <summary>Asset id → display name for every asset in the bundle.</summary>
@@ -554,6 +613,10 @@ public sealed class WorldScene
     /// <summary>Bundles changed by the last <see cref="ApplyEdits"/> (the world bundle and/or act bundles).</summary>
     public readonly HashSet<uint> DirtyBundles = new();
 
+    /// <summary>Saving keeps every marker's stored scale (the editor locks marker scale). Off: a scaled marker transform
+    /// writes its mean scale (old behaviour).</summary>
+    public bool LockMarkerScale = true;
+
     public int ApplyEdits()
     {
         var part = Background.View.Part(Background.View.PartId(".data"));
@@ -568,7 +631,9 @@ public sealed class WorldScene
                     Matrix4x4.Decompose(o.Transform, out var sc, out var q, out var t);
                     o.Marker.Position = t;
                     o.Marker.Rotation = MathUtil.EulerXYZ(Matrix4x4.CreateFromQuaternion(q));
-                    o.Marker.Scale = (sc.X + sc.Y + sc.Z) / 3;
+                    // the record's scale is kept as stored: the editor does not scale markers (path nodes carry values
+                    // such as 0.5 there that are not a size), and a rounding drift must not rewrite it
+                    if (MathF.Abs((sc.X + sc.Y + sc.Z) / 3 - (o.Marker.Scale == 0 ? 1 : o.Marker.Scale)) > 1e-3f && !LockMarkerScale) o.Marker.Scale = (sc.X + sc.Y + sc.Z) / 3;
                     MarkerAsset.WriteTransform(o.MarkerSet.Caff ?? Caff, o.MarkerSet.Symbol, o.Marker);
                     o.Transform = o.Marker.Matrix; o.OriginalTransform = o.Transform;
                 }

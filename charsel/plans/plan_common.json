@@ -1,0 +1,7774 @@
+{
+"steps": [
+{
+"op": "copy",
+"srcBundle": "685374",
+"src": "aid_objparams_banjox_actor_banjo",
+"dstBundle": "685374",
+"name": "aid_objparams_banjox_actor_charsel_mumbo"
+},
+{
+"op": "copy",
+"srcBundle": "685374",
+"src": "aid_animtable_banjox_actor_banjo",
+"dstBundle": "685374",
+"name": "aid_animtable_banjox_charsel_mumbo"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_objparams_banjox_actor_charsel_mumbo",
+"off": 192,
+"val": "04B07E16"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_objparams_banjox_actor_charsel_mumbo",
+"off": 208,
+"val": "20A09A7E"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 72,
+"val": "024EE267"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 76,
+"val": "064EE267"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 164,
+"val": "021344B7"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 168,
+"val": "061344B7"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 256,
+"val": "02110B93"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 260,
+"val": "06110B93"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 348,
+"val": "02110B93"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 352,
+"val": "06110B93"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 440,
+"val": "02110B93"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 444,
+"val": "06110B93"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 532,
+"val": "02110B93"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 536,
+"val": "06110B93"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 624,
+"val": "02110B93"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 628,
+"val": "06110B93"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 716,
+"val": "02110B93"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 720,
+"val": "06110B93"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 808,
+"val": "021E7478"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 812,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 900,
+"val": "021E7478"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 904,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 992,
+"val": "02FA88E0"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 996,
+"val": "06FA88E0"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 1084,
+"val": "021E7478"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 1088,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 1176,
+"val": "024CB530"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 1180,
+"val": "064CB530"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 1268,
+"val": "02017743"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 1272,
+"val": "06FCEC48"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 1360,
+"val": "02017743"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 1364,
+"val": "06FCEC48"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 1452,
+"val": "02017743"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 1456,
+"val": "06FCEC48"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 1544,
+"val": "026C6044"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 1548,
+"val": "066C6044"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 1636,
+"val": "026C6044"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 1640,
+"val": "066C6044"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 1728,
+"val": "026C6044"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 1732,
+"val": "066C6044"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 1820,
+"val": "027FC060"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 1824,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 1912,
+"val": "027FC060"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 1916,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 2004,
+"val": "027FC060"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 2008,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 2096,
+"val": "027FC060"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 2100,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 2188,
+"val": "027FC060"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 2192,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 2280,
+"val": "021344B7"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 2284,
+"val": "061344B7"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 2372,
+"val": "024EE267"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 2376,
+"val": "064EE267"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 2464,
+"val": "027FC060"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 2468,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 2556,
+"val": "027FC060"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 2560,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 2648,
+"val": "027FC060"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 2652,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 2740,
+"val": "027FC060"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 2744,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 2832,
+"val": "027FC060"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 2836,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 2924,
+"val": "021344B7"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 2928,
+"val": "061344B7"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 3016,
+"val": "024EE267"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 3020,
+"val": "064EE267"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 3108,
+"val": "024CB530"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 3112,
+"val": "064CB530"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 3200,
+"val": "024CB530"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 3204,
+"val": "064CB530"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 3292,
+"val": "021E7478"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 3296,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 3384,
+"val": "021E7478"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 3388,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 3476,
+"val": "023BBA39"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 3480,
+"val": "063BBA39"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 3568,
+"val": "021E7478"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 3572,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 3660,
+"val": "02017743"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 3664,
+"val": "06FCEC48"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 3752,
+"val": "02017743"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 3756,
+"val": "06FCEC48"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 3844,
+"val": "021E7478"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 3848,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 3936,
+"val": "021E7478"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 3940,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 4028,
+"val": "024CB530"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 4032,
+"val": "064CB530"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 4120,
+"val": "02126C2B"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 4124,
+"val": "06126C2B"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 4212,
+"val": "024CB530"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 4216,
+"val": "064CB530"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 4304,
+"val": "024CB530"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 4308,
+"val": "064CB530"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 4396,
+"val": "02126C2B"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 4400,
+"val": "06126C2B"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 4488,
+"val": "024CB530"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 4492,
+"val": "064CB530"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 4580,
+"val": "02126C2B"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 4584,
+"val": "06126C2B"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 4672,
+"val": "024CB530"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 4676,
+"val": "064CB530"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 4764,
+"val": "024CB530"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 4768,
+"val": "064CB530"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 4856,
+"val": "024CB530"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 4860,
+"val": "064CB530"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 4948,
+"val": "024CB530"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 4952,
+"val": "064CB530"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 5040,
+"val": "024CB530"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 5044,
+"val": "064CB530"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 5132,
+"val": "024CB530"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 5136,
+"val": "064CB530"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 5224,
+"val": "024CB530"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 5228,
+"val": "064CB530"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 5316,
+"val": "02126C2B"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 5320,
+"val": "06126C2B"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 5408,
+"val": "024CB530"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 5412,
+"val": "064CB530"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 5500,
+"val": "020C1F29"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 5504,
+"val": "060C1F29"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 5592,
+"val": "020C1F29"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 5596,
+"val": "060C1F29"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 5684,
+"val": "020C1F29"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 5688,
+"val": "060C1F29"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 5776,
+"val": "020C1F29"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 5780,
+"val": "060C1F29"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 5868,
+"val": "020C1F29"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 5872,
+"val": "060C1F29"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 5960,
+"val": "020C1F29"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 5964,
+"val": "060C1F29"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 6052,
+"val": "020C1F29"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 6056,
+"val": "060C1F29"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 6144,
+"val": "023BBA39"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 6148,
+"val": "063BBA39"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 6236,
+"val": "0294927E"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 6240,
+"val": "0694927E"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 6328,
+"val": "023BBA39"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 6332,
+"val": "063BBA39"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 6420,
+"val": "023BBA39"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 6424,
+"val": "063BBA39"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 6512,
+"val": "023BBA39"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 6516,
+"val": "063BBA39"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 6604,
+"val": "02017743"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 6608,
+"val": "06FCEC48"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 6696,
+"val": "02017743"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 6700,
+"val": "06FCEC48"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 6788,
+"val": "024CB530"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 6792,
+"val": "064CB530"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 6880,
+"val": "02035732"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 6884,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 6972,
+"val": "021E7478"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 6976,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 7064,
+"val": "02110B93"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 7068,
+"val": "06110B93"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 7156,
+"val": "02110B93"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 7160,
+"val": "06110B93"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 7248,
+"val": "021E7478"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 7252,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 7340,
+"val": "021E7478"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 7344,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 7432,
+"val": "023BBA39"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 7436,
+"val": "063BBA39"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 7524,
+"val": "023BBA39"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 7528,
+"val": "063BBA39"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 7616,
+"val": "02126C2B"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 7620,
+"val": "06126C2B"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 7708,
+"val": "021E7478"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 7712,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 7800,
+"val": "02110B93"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 7804,
+"val": "06110B93"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 7892,
+"val": "02FA88E0"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 7896,
+"val": "06FA88E0"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 7984,
+"val": "02FA88E0"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 7988,
+"val": "06FA88E0"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 8076,
+"val": "02FA88E0"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 8080,
+"val": "06FA88E0"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 8168,
+"val": "02FA88E0"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 8172,
+"val": "06FA88E0"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 8260,
+"val": "02FA88E0"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 8264,
+"val": "06FA88E0"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 8352,
+"val": "02FA88E0"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 8356,
+"val": "06FA88E0"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 8444,
+"val": "02017743"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 8448,
+"val": "06FCEC48"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 8536,
+"val": "02126C2B"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 8540,
+"val": "06126C2B"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 8628,
+"val": "024CB530"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 8632,
+"val": "064CB530"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 8720,
+"val": "02126C2B"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 8724,
+"val": "06126C2B"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 8812,
+"val": "024CB530"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 8816,
+"val": "064CB530"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 8904,
+"val": "02126C2B"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 8908,
+"val": "06126C2B"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 8996,
+"val": "024CB530"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 9000,
+"val": "064CB530"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 9088,
+"val": "021E7478"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 9092,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 9180,
+"val": "021E7478"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 9184,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 9272,
+"val": "024CB530"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 9276,
+"val": "064CB530"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 9364,
+"val": "021E7478"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 9368,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 9456,
+"val": "021E7478"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 9460,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 9548,
+"val": "021E7478"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 9552,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 9640,
+"val": "021E7478"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 9644,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 9732,
+"val": "021E7478"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 9736,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 9824,
+"val": "021E7478"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 9828,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 9916,
+"val": "021E7478"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 9920,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 10008,
+"val": "021E7478"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 10012,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 10100,
+"val": "021E7478"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 10104,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 10192,
+"val": "02110B93"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 10196,
+"val": "06110B93"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 10284,
+"val": "02110B93"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 10288,
+"val": "06110B93"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 10376,
+"val": "0294927E"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 10380,
+"val": "0694927E"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 10468,
+"val": "0294927E"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 10472,
+"val": "0694927E"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 10560,
+"val": "02110B93"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 10564,
+"val": "06110B93"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 10652,
+"val": "02110B93"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 10656,
+"val": "06110B93"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 10744,
+"val": "02110B93"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 10748,
+"val": "06110B93"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 10836,
+"val": "02110B93"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 10840,
+"val": "06110B93"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 10928,
+"val": "021E7478"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 10932,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 11020,
+"val": "021E7478"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 11024,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 11112,
+"val": "021E7478"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 11116,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 11204,
+"val": "021E7478"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 11208,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 11296,
+"val": "02110B93"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 11300,
+"val": "06110B93"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 11388,
+"val": "02110B93"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 11392,
+"val": "06110B93"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 11480,
+"val": "024CB530"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 11484,
+"val": "064CB530"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 11572,
+"val": "02FA88E0"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 11576,
+"val": "06FA88E0"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 11664,
+"val": "02FA88E0"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 11668,
+"val": "06FA88E0"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 11756,
+"val": "02FA88E0"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 11760,
+"val": "06FA88E0"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 11848,
+"val": "027FC060"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 11852,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 11940,
+"val": "027FC060"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 11944,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 12032,
+"val": "027FC060"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 12036,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 12124,
+"val": "027FC060"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 12128,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 12216,
+"val": "027FC060"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 12220,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 12308,
+"val": "027FC060"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 12312,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 12400,
+"val": "027FC060"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 12404,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 12492,
+"val": "0215FF54"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 12496,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 12584,
+"val": "0215FF54"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 12588,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 12676,
+"val": "0215FF54"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 12680,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 12768,
+"val": "02A791F3"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 12772,
+"val": "06A791F3"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 12860,
+"val": "02182B64"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 12864,
+"val": "06182B64"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 12952,
+"val": "0236BE9C"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 12956,
+"val": "0636BE9C"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 13044,
+"val": "0207A97E"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 13048,
+"val": "0607A97E"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 13136,
+"val": "025A1412"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 13140,
+"val": "065A1412"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 13228,
+"val": "024CB530"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 13232,
+"val": "064CB530"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 13320,
+"val": "026DC17B"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 13324,
+"val": "066DC17B"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 13412,
+"val": "021344B7"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 13416,
+"val": "061344B7"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 13504,
+"val": "021344B7"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 13508,
+"val": "061344B7"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 13596,
+"val": "024EE267"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 13600,
+"val": "064EE267"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 13688,
+"val": "024EE267"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 13692,
+"val": "064EE267"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 13780,
+"val": "026DC17B"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 13784,
+"val": "066DC17B"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 13872,
+"val": "026DC17B"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 13876,
+"val": "066DC17B"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 13964,
+"val": "0294927E"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 13968,
+"val": "0694927E"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 14056,
+"val": "026C6044"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 14060,
+"val": "066C6044"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 14148,
+"val": "026C6044"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 14152,
+"val": "066C6044"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 14240,
+"val": "026C6044"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 14244,
+"val": "066C6044"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 14332,
+"val": "023BBA39"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 14336,
+"val": "063BBA39"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 14424,
+"val": "029F38B8"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 14428,
+"val": "069F38B8"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 14516,
+"val": "029F38B8"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 14520,
+"val": "069F38B8"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 14608,
+"val": "029F38B8"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 14612,
+"val": "069F38B8"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 14700,
+"val": "029F38B8"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 14704,
+"val": "069F38B8"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 14792,
+"val": "029F38B8"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 14796,
+"val": "069F38B8"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 14884,
+"val": "029F38B8"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 14888,
+"val": "069F38B8"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 14976,
+"val": "026C6044"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 14980,
+"val": "066C6044"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 15068,
+"val": "026C6044"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 15072,
+"val": "066C6044"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 15160,
+"val": "026C6044"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 15164,
+"val": "066C6044"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 15252,
+"val": "026C6044"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 15256,
+"val": "066C6044"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 15344,
+"val": "026C6044"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 15348,
+"val": "066C6044"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 15436,
+"val": "026C6044"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_mumbo",
+"off": 15440,
+"val": "066C6044"
+},
+{
+"op": "copy",
+"srcBundle": "234cec",
+"src": "aid_anim_banjox_actor_mumbo_knockbackland",
+"dstBundle": "685374",
+"name": "aid_anim_banjox_actor_mumbo_knockbackland"
+},
+{
+"op": "copy",
+"srcBundle": "234cec",
+"src": "aid_anim_banjox_actor_mumbo_knockback",
+"dstBundle": "685374",
+"name": "aid_anim_banjox_actor_mumbo_knockback"
+},
+{
+"op": "copy",
+"srcBundle": "3cabc1",
+"src": "aid_anim_banjox_actor_mumbo_hits_vehiclehitright",
+"dstBundle": "685374",
+"name": "aid_anim_banjox_actor_mumbo_hits_vehiclehitright"
+},
+{
+"op": "copy",
+"srcBundle": "234cec",
+"src": "aid_anim_banjox_actor_mumbo_cratemagic",
+"dstBundle": "685374",
+"name": "aid_anim_banjox_actor_mumbo_cratemagic"
+},
+{
+"op": "copy",
+"srcBundle": "234cec",
+"src": "aid_anim_banjox_actor_mumbo_leapoutofway",
+"dstBundle": "685374",
+"name": "aid_anim_banjox_actor_mumbo_leapoutofway"
+},
+{
+"op": "copy",
+"srcBundle": "3cabc1",
+"src": "aid_anim_banjox_actor_mumbo_drivecheer",
+"dstBundle": "685374",
+"name": "aid_anim_banjox_actor_mumbo_drivecheer"
+},
+{
+"op": "copy",
+"srcBundle": "234cec",
+"src": "aid_anim_banjox_actor_mumbo_drivestand",
+"dstBundle": "685374",
+"name": "aid_anim_banjox_actor_mumbo_drivestand"
+},
+{
+"op": "copy",
+"srcBundle": "3cabc1",
+"src": "aid_anim_banjox_actor_mumbo_hits_vehiclehitleft",
+"dstBundle": "685374",
+"name": "aid_anim_banjox_actor_mumbo_hits_vehiclehitleft"
+},
+{
+"op": "copy",
+"srcBundle": "234cec",
+"src": "aid_anim_banjox_actor_mumbo_fallcycle",
+"dstBundle": "685374",
+"name": "aid_anim_banjox_actor_mumbo_fallcycle"
+},
+{
+"op": "copy",
+"srcBundle": "3cabc1",
+"src": "aid_anim_banjox_actor_mumbo_hits_vehiclehitfront",
+"dstBundle": "685374",
+"name": "aid_anim_banjox_actor_mumbo_hits_vehiclehitfront"
+},
+{
+"op": "copy",
+"srcBundle": "234cec",
+"src": "aid_anim_banjox_actor_mumbo_run",
+"dstBundle": "685374",
+"name": "aid_anim_banjox_actor_mumbo_run"
+},
+{
+"op": "copy",
+"srcBundle": "3cabc1",
+"src": "aid_anim_banjox_actor_mumbo_jumpoutvehicle",
+"dstBundle": "685374",
+"name": "aid_anim_banjox_actor_mumbo_jumpoutvehicle"
+},
+{
+"op": "copy",
+"srcBundle": "3cabc1",
+"src": "aid_anim_banjox_actor_mumbo_drivesad",
+"dstBundle": "685374",
+"name": "aid_anim_banjox_actor_mumbo_drivesad"
+},
+{
+"op": "copy",
+"srcBundle": "3cabc1",
+"src": "aid_anim_banjox_actor_mumbo_jumpinvehicle",
+"dstBundle": "685374",
+"name": "aid_anim_banjox_actor_mumbo_jumpinvehicle"
+},
+{
+"op": "copy",
+"srcBundle": "3cabc1",
+"src": "aid_anim_banjox_actor_mumbo_hits_passengerhitright",
+"dstBundle": "685374",
+"name": "aid_anim_banjox_actor_mumbo_hits_passengerhitright"
+},
+{
+"op": "copy",
+"srcBundle": "3cabc1",
+"src": "aid_anim_banjox_actor_mumbo_driveangry",
+"dstBundle": "685374",
+"name": "aid_anim_banjox_actor_mumbo_driveangry"
+},
+{
+"op": "copy",
+"srcBundle": "3cabc1",
+"src": "aid_anim_banjox_actor_mumbo_drivevehicle",
+"dstBundle": "685374",
+"name": "aid_anim_banjox_actor_mumbo_drivevehicle"
+},
+{
+"op": "copy",
+"srcBundle": "234cec",
+"src": "aid_anim_banjox_actor_mumbo_walk",
+"dstBundle": "685374",
+"name": "aid_anim_banjox_actor_mumbo_walk"
+},
+{
+"op": "copy",
+"srcBundle": "234cec",
+"src": "aid_anim_banjox_actor_mumbo_hit",
+"dstBundle": "685374",
+"name": "aid_anim_banjox_actor_mumbo_hit"
+},
+{
+"op": "copy",
+"srcBundle": "3cabc1",
+"src": "aid_anim_banjox_actor_mumbo_hits_vehiclehitbehind",
+"dstBundle": "685374",
+"name": "aid_anim_banjox_actor_mumbo_hits_vehiclehitbehind"
+},
+{
+"op": "copy",
+"srcBundle": "234cec",
+"src": "aid_anim_banjox_actor_mumbo_standpullbraces",
+"dstBundle": "685374",
+"name": "aid_anim_banjox_actor_mumbo_standpullbraces"
+},
+{
+"op": "copy",
+"srcBundle": "3cabc1",
+"src": "aid_animevents_banjox_actor_mumbo_hits_vehiclehitright",
+"dstBundle": "685374",
+"name": "aid_animevents_banjox_actor_mumbo_hits_vehiclehitright"
+},
+{
+"op": "copy",
+"srcBundle": "234cec",
+"src": "aid_animevents_banjox_actor_mumbo_cratemagic",
+"dstBundle": "685374",
+"name": "aid_animevents_banjox_actor_mumbo_cratemagic"
+},
+{
+"op": "copy",
+"srcBundle": "234cec",
+"src": "aid_animevents_banjox_actor_mumbo_leapoutofway",
+"dstBundle": "685374",
+"name": "aid_animevents_banjox_actor_mumbo_leapoutofway"
+},
+{
+"op": "copy",
+"srcBundle": "3cabc1",
+"src": "aid_animevents_banjox_actor_mumbo_drivecheer",
+"dstBundle": "685374",
+"name": "aid_animevents_banjox_actor_mumbo_drivecheer"
+},
+{
+"op": "copy",
+"srcBundle": "3cabc1",
+"src": "aid_animevents_banjox_actor_mumbo_hits_vehiclehitleft",
+"dstBundle": "685374",
+"name": "aid_animevents_banjox_actor_mumbo_hits_vehiclehitleft"
+},
+{
+"op": "copy",
+"srcBundle": "3cabc1",
+"src": "aid_animevents_banjox_actor_mumbo_hits_vehiclehitfront",
+"dstBundle": "685374",
+"name": "aid_animevents_banjox_actor_mumbo_hits_vehiclehitfront"
+},
+{
+"op": "copy",
+"srcBundle": "234cec",
+"src": "aid_animevents_banjox_actor_mumbo_run",
+"dstBundle": "685374",
+"name": "aid_animevents_banjox_actor_mumbo_run"
+},
+{
+"op": "copy",
+"srcBundle": "3cabc1",
+"src": "aid_animevents_banjox_actor_mumbo_jumpoutvehicle",
+"dstBundle": "685374",
+"name": "aid_animevents_banjox_actor_mumbo_jumpoutvehicle"
+},
+{
+"op": "copy",
+"srcBundle": "3cabc1",
+"src": "aid_animevents_banjox_actor_mumbo_drivesad",
+"dstBundle": "685374",
+"name": "aid_animevents_banjox_actor_mumbo_drivesad"
+},
+{
+"op": "copy",
+"srcBundle": "3cabc1",
+"src": "aid_animevents_banjox_actor_mumbo_jumpinvehicle",
+"dstBundle": "685374",
+"name": "aid_animevents_banjox_actor_mumbo_jumpinvehicle"
+},
+{
+"op": "copy",
+"srcBundle": "3cabc1",
+"src": "aid_animevents_banjox_actor_mumbo_hits_passengerhitright",
+"dstBundle": "685374",
+"name": "aid_animevents_banjox_actor_mumbo_hits_passengerhitright"
+},
+{
+"op": "copy",
+"srcBundle": "3cabc1",
+"src": "aid_animevents_banjox_actor_mumbo_driveangry",
+"dstBundle": "685374",
+"name": "aid_animevents_banjox_actor_mumbo_driveangry"
+},
+{
+"op": "copy",
+"srcBundle": "234cec",
+"src": "aid_animevents_banjox_actor_mumbo_walk",
+"dstBundle": "685374",
+"name": "aid_animevents_banjox_actor_mumbo_walk"
+},
+{
+"op": "copy",
+"srcBundle": "234cec",
+"src": "aid_animevents_banjox_actor_mumbo_hit",
+"dstBundle": "685374",
+"name": "aid_animevents_banjox_actor_mumbo_hit"
+},
+{
+"op": "copy",
+"srcBundle": "3cabc1",
+"src": "aid_animevents_banjox_actor_mumbo_hits_vehiclehitbehind",
+"dstBundle": "685374",
+"name": "aid_animevents_banjox_actor_mumbo_hits_vehiclehitbehind"
+},
+{
+"op": "copy",
+"srcBundle": "234cec",
+"src": "aid_animevents_banjox_actor_mumbo_standpullbraces",
+"dstBundle": "685374",
+"name": "aid_animevents_banjox_actor_mumbo_standpullbraces"
+},
+{
+"op": "copy",
+"srcBundle": "234cec",
+"src": "aid_animevents_banjox_actor_mumbo_hits_knockbackland",
+"dstBundle": "685374",
+"name": "aid_animevents_banjox_actor_mumbo_hits_knockbackland"
+},
+{
+"op": "copy",
+"srcBundle": "685374",
+"src": "aid_objparams_banjox_actor_banjo",
+"dstBundle": "685374",
+"name": "aid_objparams_banjox_actor_charsel_grunty"
+},
+{
+"op": "copy",
+"srcBundle": "685374",
+"src": "aid_animtable_banjox_actor_banjo",
+"dstBundle": "685374",
+"name": "aid_animtable_banjox_charsel_grunty"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_objparams_banjox_actor_charsel_grunty",
+"off": 192,
+"val": "048F7E4F"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_objparams_banjox_actor_charsel_grunty",
+"off": 208,
+"val": "20AE87C1"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 72,
+"val": "0258B833"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 76,
+"val": "0658B833"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 164,
+"val": "027A6D1B"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 168,
+"val": "06284D87"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 256,
+"val": "020489C2"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 260,
+"val": "060489C2"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 348,
+"val": "020489C2"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 352,
+"val": "060489C2"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 440,
+"val": "020489C2"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 444,
+"val": "060489C2"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 532,
+"val": "020489C2"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 536,
+"val": "060489C2"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 624,
+"val": "020489C2"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 628,
+"val": "060489C2"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 716,
+"val": "020489C2"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 720,
+"val": "060489C2"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 808,
+"val": "0211F7CF"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 812,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 900,
+"val": "0211F7CF"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 904,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 992,
+"val": "024E55CA"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 996,
+"val": "064E55CA"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 1084,
+"val": "0211F7CF"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 1088,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 1176,
+"val": "02337CED"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 1180,
+"val": "06337CED"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 1268,
+"val": "02337CED"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 1272,
+"val": "06337CED"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 1360,
+"val": "02337CED"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 1364,
+"val": "06337CED"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 1452,
+"val": "02D47F75"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 1456,
+"val": "06D47F75"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 1544,
+"val": "02780A59"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 1548,
+"val": "06780A59"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 1636,
+"val": "02780A59"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 1640,
+"val": "06780A59"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 1728,
+"val": "02780A59"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 1732,
+"val": "06780A59"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 1820,
+"val": "027FFE80"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 1824,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 1912,
+"val": "027FFE80"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 1916,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 2004,
+"val": "027FFE80"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 2008,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 2096,
+"val": "027FFE80"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 2100,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 2188,
+"val": "027FFE80"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 2192,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 2280,
+"val": "027A6D1B"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 2284,
+"val": "06284D87"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 2372,
+"val": "0258B833"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 2376,
+"val": "0658B833"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 2464,
+"val": "027FFE80"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 2468,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 2556,
+"val": "027FFE80"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 2560,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 2648,
+"val": "027FFE80"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 2652,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 2740,
+"val": "027FFE80"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 2744,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 2832,
+"val": "027FFE80"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 2836,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 2924,
+"val": "027A6D1B"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 2928,
+"val": "06284D87"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 3016,
+"val": "0258B833"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 3020,
+"val": "0658B833"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 3108,
+"val": "024365D8"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 3112,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 3200,
+"val": "02337CED"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 3204,
+"val": "06337CED"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 3292,
+"val": "0211F7CF"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 3296,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 3384,
+"val": "0211F7CF"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 3388,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 3476,
+"val": "0235C007"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 3480,
+"val": "0635C007"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 3568,
+"val": "0211F7CF"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 3572,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 3660,
+"val": "02337CED"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 3664,
+"val": "06337CED"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 3752,
+"val": "02337CED"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 3756,
+"val": "06337CED"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 3844,
+"val": "0211F7CF"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 3848,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 3936,
+"val": "0211F7CF"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 3940,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 4028,
+"val": "02531B77"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 4032,
+"val": "06531B77"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 4120,
+"val": "02531B77"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 4124,
+"val": "06531B77"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 4212,
+"val": "02531B77"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 4216,
+"val": "06531B77"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 4304,
+"val": "02531B77"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 4308,
+"val": "06531B77"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 4396,
+"val": "02531B77"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 4400,
+"val": "06531B77"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 4488,
+"val": "02531B77"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 4492,
+"val": "06531B77"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 4580,
+"val": "02531B77"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 4584,
+"val": "06531B77"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 4672,
+"val": "02531B77"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 4676,
+"val": "06531B77"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 4764,
+"val": "02531B77"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 4768,
+"val": "06531B77"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 4856,
+"val": "02531B77"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 4860,
+"val": "06531B77"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 4948,
+"val": "02531B77"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 4952,
+"val": "06531B77"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 5040,
+"val": "02531B77"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 5044,
+"val": "06531B77"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 5132,
+"val": "02531B77"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 5136,
+"val": "06531B77"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 5224,
+"val": "02531B77"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 5228,
+"val": "06531B77"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 5316,
+"val": "02531B77"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 5320,
+"val": "06531B77"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 5408,
+"val": "02531B77"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 5412,
+"val": "06531B77"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 5500,
+"val": "024E55CA"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 5504,
+"val": "064E55CA"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 5592,
+"val": "024E55CA"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 5596,
+"val": "064E55CA"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 5684,
+"val": "024E55CA"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 5688,
+"val": "064E55CA"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 5776,
+"val": "024E55CA"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 5780,
+"val": "064E55CA"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 5868,
+"val": "024E55CA"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 5872,
+"val": "064E55CA"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 5960,
+"val": "024E55CA"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 5964,
+"val": "064E55CA"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 6052,
+"val": "024E55CA"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 6056,
+"val": "064E55CA"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 6144,
+"val": "0235C007"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 6148,
+"val": "0635C007"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 6236,
+"val": "02F481AF"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 6240,
+"val": "06F481AF"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 6328,
+"val": "0235C007"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 6332,
+"val": "0635C007"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 6420,
+"val": "0235C007"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 6424,
+"val": "0635C007"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 6512,
+"val": "0235C007"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 6516,
+"val": "0635C007"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 6604,
+"val": "02337CED"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 6608,
+"val": "06337CED"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 6696,
+"val": "02337CED"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 6700,
+"val": "06337CED"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 6788,
+"val": "02337CED"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 6792,
+"val": "06337CED"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 6880,
+"val": "024365D8"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 6884,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 6972,
+"val": "0211F7CF"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 6976,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 7064,
+"val": "020489C2"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 7068,
+"val": "060489C2"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 7156,
+"val": "020489C2"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 7160,
+"val": "060489C2"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 7248,
+"val": "0211F7CF"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 7252,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 7340,
+"val": "0211F7CF"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 7344,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 7432,
+"val": "0235C007"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 7436,
+"val": "0635C007"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 7524,
+"val": "0235C007"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 7528,
+"val": "0635C007"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 7616,
+"val": "021252CB"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 7620,
+"val": "061252CB"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 7708,
+"val": "0211F7CF"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 7712,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 7800,
+"val": "020489C2"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 7804,
+"val": "060489C2"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 7892,
+"val": "024E55CA"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 7896,
+"val": "064E55CA"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 7984,
+"val": "024E55CA"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 7988,
+"val": "064E55CA"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 8076,
+"val": "024E55CA"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 8080,
+"val": "064E55CA"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 8168,
+"val": "024E55CA"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 8172,
+"val": "064E55CA"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 8260,
+"val": "024E55CA"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 8264,
+"val": "064E55CA"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 8352,
+"val": "024E55CA"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 8356,
+"val": "064E55CA"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 8444,
+"val": "02337CED"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 8448,
+"val": "06337CED"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 8536,
+"val": "021252CB"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 8540,
+"val": "061252CB"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 8628,
+"val": "02531B77"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 8632,
+"val": "06531B77"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 8720,
+"val": "021252CB"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 8724,
+"val": "061252CB"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 8812,
+"val": "02531B77"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 8816,
+"val": "06531B77"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 8904,
+"val": "021252CB"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 8908,
+"val": "061252CB"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 8996,
+"val": "02531B77"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 9000,
+"val": "06531B77"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 9088,
+"val": "0211F7CF"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 9092,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 9180,
+"val": "0211F7CF"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 9184,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 9272,
+"val": "0211F7CF"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 9276,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 9364,
+"val": "0211F7CF"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 9368,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 9456,
+"val": "0211F7CF"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 9460,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 9548,
+"val": "0211F7CF"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 9552,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 9640,
+"val": "0211F7CF"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 9644,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 9732,
+"val": "0211F7CF"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 9736,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 9824,
+"val": "0211F7CF"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 9828,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 9916,
+"val": "0211F7CF"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 9920,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 10008,
+"val": "0211F7CF"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 10012,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 10100,
+"val": "0211F7CF"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 10104,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 10192,
+"val": "020489C2"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 10196,
+"val": "060489C2"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 10284,
+"val": "020489C2"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 10288,
+"val": "060489C2"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 10376,
+"val": "02F481AF"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 10380,
+"val": "06F481AF"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 10468,
+"val": "02F481AF"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 10472,
+"val": "06F481AF"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 10560,
+"val": "020489C2"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 10564,
+"val": "060489C2"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 10652,
+"val": "020489C2"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 10656,
+"val": "060489C2"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 10744,
+"val": "020489C2"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 10748,
+"val": "060489C2"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 10836,
+"val": "020489C2"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 10840,
+"val": "060489C2"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 10928,
+"val": "0211F7CF"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 10932,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 11020,
+"val": "0211F7CF"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 11024,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 11112,
+"val": "0211F7CF"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 11116,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 11204,
+"val": "0211F7CF"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 11208,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 11296,
+"val": "020489C2"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 11300,
+"val": "060489C2"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 11388,
+"val": "020489C2"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 11392,
+"val": "060489C2"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 11480,
+"val": "02337CED"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 11484,
+"val": "06337CED"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 11572,
+"val": "024E55CA"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 11576,
+"val": "064E55CA"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 11664,
+"val": "024E55CA"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 11668,
+"val": "064E55CA"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 11756,
+"val": "024E55CA"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 11760,
+"val": "064E55CA"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 11848,
+"val": "027FFE80"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 11852,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 11940,
+"val": "027FFE80"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 11944,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 12032,
+"val": "027FFE80"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 12036,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 12124,
+"val": "027FFE80"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 12128,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 12216,
+"val": "027FFE80"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 12220,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 12308,
+"val": "027FFE80"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 12312,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 12400,
+"val": "027FFE80"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 12404,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 12492,
+"val": "027CD6F8"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 12496,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 12584,
+"val": "027CD6F8"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 12588,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 12676,
+"val": "027CD6F8"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 12680,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 12768,
+"val": "028E5B3B"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 12772,
+"val": "068E5B3B"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 12860,
+"val": "02DCB393"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 12864,
+"val": "06DCB393"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 12952,
+"val": "02491DBB"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 12956,
+"val": "06491DBB"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 13044,
+"val": "02780A59"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 13048,
+"val": "06780A59"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 13136,
+"val": "0210F654"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 13140,
+"val": "0610F654"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 13228,
+"val": "02531B77"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 13232,
+"val": "06531B77"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 13320,
+"val": "0204E8D7"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 13324,
+"val": "0604E8D7"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 13412,
+"val": "027A6D1B"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 13416,
+"val": "06284D87"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 13504,
+"val": "027A6D1B"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 13508,
+"val": "06284D87"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 13596,
+"val": "0258B833"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 13600,
+"val": "0658B833"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 13688,
+"val": "0258B833"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 13692,
+"val": "0658B833"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 13780,
+"val": "0204E8D7"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 13784,
+"val": "0604E8D7"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 13872,
+"val": "0204E8D7"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 13876,
+"val": "0604E8D7"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 13964,
+"val": "02F481AF"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 13968,
+"val": "06F481AF"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 14056,
+"val": "02780A59"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 14060,
+"val": "06780A59"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 14148,
+"val": "02780A59"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 14152,
+"val": "06780A59"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 14240,
+"val": "02780A59"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 14244,
+"val": "06780A59"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 14332,
+"val": "0235C007"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 14336,
+"val": "0635C007"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 14424,
+"val": "02914286"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 14428,
+"val": "06914286"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 14516,
+"val": "02914286"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 14520,
+"val": "06914286"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 14608,
+"val": "02914286"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 14612,
+"val": "06914286"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 14700,
+"val": "02914286"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 14704,
+"val": "06914286"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 14792,
+"val": "02914286"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 14796,
+"val": "06914286"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 14884,
+"val": "02914286"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 14888,
+"val": "06914286"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 14976,
+"val": "02780A59"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 14980,
+"val": "06780A59"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 15068,
+"val": "02780A59"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 15072,
+"val": "06780A59"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 15160,
+"val": "02780A59"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 15164,
+"val": "06780A59"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 15252,
+"val": "02780A59"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 15256,
+"val": "06780A59"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 15344,
+"val": "02780A59"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 15348,
+"val": "06780A59"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 15436,
+"val": "02780A59"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_grunty",
+"off": 15440,
+"val": "06780A59"
+},
+{
+"op": "copy",
+"srcBundle": "234cec",
+"src": "aid_anim_banjox_actor_grunty_stand",
+"dstBundle": "685374",
+"name": "aid_anim_banjox_actor_grunty_stand"
+},
+{
+"op": "copy",
+"srcBundle": "100375",
+"src": "aid_anim_banjox_actor_grunty_driveangry",
+"dstBundle": "685374",
+"name": "aid_anim_banjox_actor_grunty_driveangry"
+},
+{
+"op": "copy",
+"srcBundle": "100375",
+"src": "aid_anim_banjox_actor_grunty_jumpinvehicle",
+"dstBundle": "685374",
+"name": "aid_anim_banjox_actor_grunty_jumpinvehicle"
+},
+{
+"op": "copy",
+"srcBundle": "234cec",
+"src": "aid_anim_banjox_actor_grunty_fallcycle",
+"dstBundle": "685374",
+"name": "aid_anim_banjox_actor_grunty_fallcycle"
+},
+{
+"op": "copy",
+"srcBundle": "234cec",
+"src": "aid_anim_banjox_actor_grunty_leapoutofway",
+"dstBundle": "685374",
+"name": "aid_anim_banjox_actor_grunty_leapoutofway"
+},
+{
+"op": "copy",
+"srcBundle": "234cec",
+"src": "aid_anim_banjox_actor_grunty_hits_knockbackland",
+"dstBundle": "685374",
+"name": "aid_anim_banjox_actor_grunty_hits_knockbackland"
+},
+{
+"op": "copy",
+"srcBundle": "234cec",
+"src": "aid_anim_banjox_actor_grunty_run",
+"dstBundle": "685374",
+"name": "aid_anim_banjox_actor_grunty_run"
+},
+{
+"op": "copy",
+"srcBundle": "234cec",
+"src": "aid_anim_banjox_actor_grunty_hits_knockback",
+"dstBundle": "685374",
+"name": "aid_anim_banjox_actor_grunty_hits_knockback"
+},
+{
+"op": "copy",
+"srcBundle": "100375",
+"src": "aid_anim_banjox_actor_grunty_hits_vehiclehitfront",
+"dstBundle": "685374",
+"name": "aid_anim_banjox_actor_grunty_hits_vehiclehitfront"
+},
+{
+"op": "copy",
+"srcBundle": "234cec",
+"src": "aid_anim_banjox_actor_grunty_standlookaround",
+"dstBundle": "685374",
+"name": "aid_anim_banjox_actor_grunty_standlookaround"
+},
+{
+"op": "copy",
+"srcBundle": "100375",
+"src": "aid_anim_banjox_actor_grunty_jumpoutvehicle",
+"dstBundle": "685374",
+"name": "aid_anim_banjox_actor_grunty_jumpoutvehicle"
+},
+{
+"op": "copy",
+"srcBundle": "100375",
+"src": "aid_anim_banjox_actor_grunty_drivesad",
+"dstBundle": "685374",
+"name": "aid_anim_banjox_actor_grunty_drivesad"
+},
+{
+"op": "copy",
+"srcBundle": "100375",
+"src": "aid_anim_banjox_actor_grunty_hits_vehiclehitright",
+"dstBundle": "685374",
+"name": "aid_anim_banjox_actor_grunty_hits_vehiclehitright"
+},
+{
+"op": "copy",
+"srcBundle": "100375",
+"src": "aid_anim_banjox_actor_grunty_drivecheer",
+"dstBundle": "685374",
+"name": "aid_anim_banjox_actor_grunty_drivecheer"
+},
+{
+"op": "copy",
+"srcBundle": "234cec",
+"src": "aid_anim_banjox_actor_grunty_drivestand",
+"dstBundle": "685374",
+"name": "aid_anim_banjox_actor_grunty_drivestand"
+},
+{
+"op": "copy",
+"srcBundle": "100375",
+"src": "aid_anim_banjox_actor_grunty_drivevehicle",
+"dstBundle": "685374",
+"name": "aid_anim_banjox_actor_grunty_drivevehicle"
+},
+{
+"op": "copy",
+"srcBundle": "100375",
+"src": "aid_anim_banjox_actor_grunty_hits_vehiclehitbehind",
+"dstBundle": "685374",
+"name": "aid_anim_banjox_actor_grunty_hits_vehiclehitbehind"
+},
+{
+"op": "copy",
+"srcBundle": "234cec",
+"src": "aid_anim_banjox_actor_grunty_hit",
+"dstBundle": "685374",
+"name": "aid_anim_banjox_actor_grunty_hit"
+},
+{
+"op": "copy",
+"srcBundle": "234cec",
+"src": "aid_anim_banjox_actor_grunty_hits_knockbackgetup",
+"dstBundle": "685374",
+"name": "aid_anim_banjox_actor_grunty_hits_knockbackgetup"
+},
+{
+"op": "copy",
+"srcBundle": "100375",
+"src": "aid_anim_banjox_actor_grunty_hits_vehiclehitleft",
+"dstBundle": "685374",
+"name": "aid_anim_banjox_actor_grunty_hits_vehiclehitleft"
+},
+{
+"op": "copy",
+"srcBundle": "234cec",
+"src": "aid_anim_banjox_actor_grunty_walk",
+"dstBundle": "685374",
+"name": "aid_anim_banjox_actor_grunty_walk"
+},
+{
+"op": "copy",
+"srcBundle": "234cec",
+"src": "aid_animevents_banjox_actor_grunty_stand",
+"dstBundle": "685374",
+"name": "aid_animevents_banjox_actor_grunty_stand"
+},
+{
+"op": "copy",
+"srcBundle": "100375",
+"src": "aid_animevents_banjox_actor_grunty_driveangry",
+"dstBundle": "685374",
+"name": "aid_animevents_banjox_actor_grunty_driveangry"
+},
+{
+"op": "copy",
+"srcBundle": "100375",
+"src": "aid_animevents_banjox_actor_grunty_jumpinvehicle",
+"dstBundle": "685374",
+"name": "aid_animevents_banjox_actor_grunty_jumpinvehicle"
+},
+{
+"op": "copy",
+"srcBundle": "234cec",
+"src": "aid_animevents_banjox_actor_grunty_leapoutofway",
+"dstBundle": "685374",
+"name": "aid_animevents_banjox_actor_grunty_leapoutofway"
+},
+{
+"op": "copy",
+"srcBundle": "100375",
+"src": "aid_animevents_banjox_actor_grunty_drivehappy",
+"dstBundle": "685374",
+"name": "aid_animevents_banjox_actor_grunty_drivehappy"
+},
+{
+"op": "copy",
+"srcBundle": "234cec",
+"src": "aid_animevents_banjox_actor_grunty_hits_knockbackland",
+"dstBundle": "685374",
+"name": "aid_animevents_banjox_actor_grunty_hits_knockbackland"
+},
+{
+"op": "copy",
+"srcBundle": "234cec",
+"src": "aid_animevents_banjox_actor_grunty_run",
+"dstBundle": "685374",
+"name": "aid_animevents_banjox_actor_grunty_run"
+},
+{
+"op": "copy",
+"srcBundle": "100375",
+"src": "aid_animevents_banjox_actor_grunty_hits_vehiclehitfront",
+"dstBundle": "685374",
+"name": "aid_animevents_banjox_actor_grunty_hits_vehiclehitfront"
+},
+{
+"op": "copy",
+"srcBundle": "234cec",
+"src": "aid_animevents_banjox_actor_grunty_standlookaround",
+"dstBundle": "685374",
+"name": "aid_animevents_banjox_actor_grunty_standlookaround"
+},
+{
+"op": "copy",
+"srcBundle": "100375",
+"src": "aid_animevents_banjox_actor_grunty_jumpoutvehicle",
+"dstBundle": "685374",
+"name": "aid_animevents_banjox_actor_grunty_jumpoutvehicle"
+},
+{
+"op": "copy",
+"srcBundle": "100375",
+"src": "aid_animevents_banjox_actor_grunty_drivesad",
+"dstBundle": "685374",
+"name": "aid_animevents_banjox_actor_grunty_drivesad"
+},
+{
+"op": "copy",
+"srcBundle": "100375",
+"src": "aid_animevents_banjox_actor_grunty_hits_vehiclehitright",
+"dstBundle": "685374",
+"name": "aid_animevents_banjox_actor_grunty_hits_vehiclehitright"
+},
+{
+"op": "copy",
+"srcBundle": "100375",
+"src": "aid_animevents_banjox_actor_grunty_hits_vehiclehitbehind",
+"dstBundle": "685374",
+"name": "aid_animevents_banjox_actor_grunty_hits_vehiclehitbehind"
+},
+{
+"op": "copy",
+"srcBundle": "234cec",
+"src": "aid_animevents_banjox_actor_grunty_hit",
+"dstBundle": "685374",
+"name": "aid_animevents_banjox_actor_grunty_hit"
+},
+{
+"op": "copy",
+"srcBundle": "234cec",
+"src": "aid_animevents_banjox_actor_grunty_hits_knockbackgetup",
+"dstBundle": "685374",
+"name": "aid_animevents_banjox_actor_grunty_hits_knockbackgetup"
+},
+{
+"op": "copy",
+"srcBundle": "100375",
+"src": "aid_animevents_banjox_actor_grunty_hits_vehiclehitleft",
+"dstBundle": "685374",
+"name": "aid_animevents_banjox_actor_grunty_hits_vehiclehitleft"
+},
+{
+"op": "copy",
+"srcBundle": "234cec",
+"src": "aid_animevents_banjox_actor_grunty_walk",
+"dstBundle": "685374",
+"name": "aid_animevents_banjox_actor_grunty_walk"
+},
+{
+"op": "copy",
+"srcBundle": "685374",
+"src": "aid_objparams_banjox_actor_banjo",
+"dstBundle": "685374",
+"name": "aid_objparams_banjox_actor_charsel_log"
+},
+{
+"op": "copy",
+"srcBundle": "685374",
+"src": "aid_animtable_banjox_actor_banjo",
+"dstBundle": "685374",
+"name": "aid_animtable_banjox_charsel_log"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_objparams_banjox_actor_charsel_log",
+"off": 192,
+"val": "04491F1A"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_objparams_banjox_actor_charsel_log",
+"off": 208,
+"val": "201BCA39"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 72,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 76,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 164,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 168,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 256,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 260,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 348,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 352,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 440,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 444,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 532,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 536,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 624,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 628,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 716,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 720,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 808,
+"val": "0283972E"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 812,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 900,
+"val": "0283972E"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 904,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 992,
+"val": "023E9237"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 996,
+"val": "063E9237"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 1084,
+"val": "0283972E"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 1088,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 1176,
+"val": "0252B207"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 1180,
+"val": "0652B207"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 1268,
+"val": "0291AC86"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 1272,
+"val": "0691AC86"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 1360,
+"val": "0291AC86"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 1364,
+"val": "0691AC86"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 1452,
+"val": "02DD6575"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 1456,
+"val": "06DD6575"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 1544,
+"val": "02F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 1548,
+"val": "06F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 1636,
+"val": "02F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 1640,
+"val": "06F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 1728,
+"val": "02F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 1732,
+"val": "06F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 1820,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 1824,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 1912,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 1916,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 2004,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 2008,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 2096,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 2100,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 2188,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 2192,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 2280,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 2284,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 2372,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 2376,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 2464,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 2468,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 2556,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 2560,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 2648,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 2652,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 2740,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 2744,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 2832,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 2836,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 2924,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 2928,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 3016,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 3020,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 3108,
+"val": "029F9A22"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 3112,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 3200,
+"val": "02F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 3204,
+"val": "06F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 3292,
+"val": "0283972E"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 3296,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 3384,
+"val": "0283972E"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 3388,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 3476,
+"val": "0252B207"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 3480,
+"val": "0652B207"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 3568,
+"val": "0283972E"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 3572,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 3660,
+"val": "0291AC86"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 3664,
+"val": "0691AC86"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 3752,
+"val": "0291AC86"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 3756,
+"val": "0691AC86"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 3844,
+"val": "0283972E"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 3848,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 3936,
+"val": "0283972E"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 3940,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 4028,
+"val": "02F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 4032,
+"val": "06F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 4120,
+"val": "02F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 4124,
+"val": "06F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 4212,
+"val": "02F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 4216,
+"val": "06F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 4304,
+"val": "02F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 4308,
+"val": "06F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 4396,
+"val": "02F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 4400,
+"val": "06F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 4488,
+"val": "02F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 4492,
+"val": "06F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 4580,
+"val": "02F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 4584,
+"val": "06F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 4672,
+"val": "02F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 4676,
+"val": "06F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 4764,
+"val": "02F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 4768,
+"val": "06F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 4856,
+"val": "02F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 4860,
+"val": "06F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 4948,
+"val": "02F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 4952,
+"val": "06F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 5040,
+"val": "02F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 5044,
+"val": "06F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 5132,
+"val": "02F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 5136,
+"val": "06F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 5224,
+"val": "02F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 5228,
+"val": "06F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 5316,
+"val": "02F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 5320,
+"val": "06F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 5408,
+"val": "02F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 5412,
+"val": "06F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 5500,
+"val": "023E9237"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 5504,
+"val": "063E9237"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 5592,
+"val": "023E9237"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 5596,
+"val": "063E9237"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 5684,
+"val": "023E9237"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 5688,
+"val": "063E9237"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 5776,
+"val": "023E9237"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 5780,
+"val": "063E9237"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 5868,
+"val": "023E9237"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 5872,
+"val": "063E9237"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 5960,
+"val": "023E9237"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 5964,
+"val": "063E9237"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 6052,
+"val": "023E9237"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 6056,
+"val": "063E9237"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 6144,
+"val": "0252B207"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 6148,
+"val": "0652B207"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 6236,
+"val": "02C8E6DD"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 6240,
+"val": "06C8E6DD"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 6328,
+"val": "0252B207"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 6332,
+"val": "0652B207"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 6420,
+"val": "0252B207"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 6424,
+"val": "0652B207"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 6512,
+"val": "0252B207"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 6516,
+"val": "0652B207"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 6604,
+"val": "0291AC86"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 6608,
+"val": "0691AC86"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 6696,
+"val": "0291AC86"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 6700,
+"val": "0691AC86"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 6788,
+"val": "0291AC86"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 6792,
+"val": "0691AC86"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 6880,
+"val": "029F9A22"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 6884,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 6972,
+"val": "0283972E"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 6976,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 7064,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 7068,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 7156,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 7160,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 7248,
+"val": "0283972E"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 7252,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 7340,
+"val": "0283972E"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 7344,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 7432,
+"val": "0252B207"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 7436,
+"val": "0652B207"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 7524,
+"val": "0252B207"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 7528,
+"val": "0652B207"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 7616,
+"val": "02F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 7620,
+"val": "06F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 7708,
+"val": "0283972E"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 7712,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 7800,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 7804,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 7892,
+"val": "023E9237"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 7896,
+"val": "063E9237"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 7984,
+"val": "023E9237"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 7988,
+"val": "063E9237"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 8076,
+"val": "023E9237"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 8080,
+"val": "063E9237"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 8168,
+"val": "023E9237"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 8172,
+"val": "063E9237"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 8260,
+"val": "023E9237"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 8264,
+"val": "063E9237"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 8352,
+"val": "023E9237"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 8356,
+"val": "063E9237"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 8444,
+"val": "0291AC86"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 8448,
+"val": "0691AC86"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 8536,
+"val": "02F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 8540,
+"val": "06F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 8628,
+"val": "02F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 8632,
+"val": "06F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 8720,
+"val": "02F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 8724,
+"val": "06F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 8812,
+"val": "02F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 8816,
+"val": "06F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 8904,
+"val": "02F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 8908,
+"val": "06F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 8996,
+"val": "02F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 9000,
+"val": "06F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 9088,
+"val": "0283972E"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 9092,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 9180,
+"val": "0283972E"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 9184,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 9272,
+"val": "0283972E"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 9276,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 9364,
+"val": "0283972E"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 9368,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 9456,
+"val": "0283972E"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 9460,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 9548,
+"val": "0283972E"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 9552,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 9640,
+"val": "0283972E"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 9644,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 9732,
+"val": "0283972E"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 9736,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 9824,
+"val": "0283972E"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 9828,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 9916,
+"val": "0283972E"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 9920,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 10008,
+"val": "0283972E"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 10012,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 10100,
+"val": "0283972E"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 10104,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 10192,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 10196,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 10284,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 10288,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 10376,
+"val": "02C8E6DD"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 10380,
+"val": "06C8E6DD"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 10468,
+"val": "02C8E6DD"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 10472,
+"val": "06C8E6DD"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 10560,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 10564,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 10652,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 10656,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 10744,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 10748,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 10836,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 10840,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 10928,
+"val": "0283972E"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 10932,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 11020,
+"val": "0283972E"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 11024,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 11112,
+"val": "0283972E"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 11116,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 11204,
+"val": "0283972E"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 11208,
+"val": "00000000"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 11296,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 11300,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 11388,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 11392,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 11480,
+"val": "0291AC86"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 11484,
+"val": "0691AC86"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 11572,
+"val": "023E9237"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 11576,
+"val": "063E9237"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 11664,
+"val": "023E9237"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 11668,
+"val": "063E9237"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 11756,
+"val": "023E9237"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 11760,
+"val": "063E9237"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 11848,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 11852,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 11940,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 11944,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 12032,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 12036,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 12124,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 12128,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 12216,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 12220,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 12308,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 12312,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 12400,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 12404,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 12492,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 12496,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 12584,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 12588,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 12676,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 12680,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 12768,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 12772,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 12860,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 12864,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 12952,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 12956,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 13044,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 13048,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 13136,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 13140,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 13228,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 13232,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 13320,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 13324,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 13412,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 13416,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 13504,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 13508,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 13596,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 13600,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 13688,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 13692,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 13780,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 13784,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 13872,
+"val": "020FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 13876,
+"val": "060FA5B5"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 13964,
+"val": "02C8E6DD"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 13968,
+"val": "06C8E6DD"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 14056,
+"val": "0252B207"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 14060,
+"val": "0652B207"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 14148,
+"val": "0252B207"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 14152,
+"val": "0652B207"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 14240,
+"val": "02F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 14244,
+"val": "06F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 14332,
+"val": "0252B207"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 14336,
+"val": "0652B207"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 14424,
+"val": "02F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 14428,
+"val": "06F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 14516,
+"val": "02F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 14520,
+"val": "06F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 14608,
+"val": "02F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 14612,
+"val": "06F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 14700,
+"val": "02F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 14704,
+"val": "06F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 14792,
+"val": "02F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 14796,
+"val": "06F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 14884,
+"val": "02F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 14888,
+"val": "06F63086"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 14976,
+"val": "0252B207"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 14980,
+"val": "0652B207"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 15068,
+"val": "0252B207"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 15072,
+"val": "0652B207"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 15160,
+"val": "0252B207"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 15164,
+"val": "0652B207"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 15252,
+"val": "0252B207"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 15256,
+"val": "0652B207"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 15344,
+"val": "0252B207"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 15348,
+"val": "0652B207"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 15436,
+"val": "0252B207"
+},
+{
+"op": "u32",
+"bundle": "685374",
+"asset": "aid_animtable_banjox_charsel_log",
+"off": 15440,
+"val": "0652B207"
+},
+{
+"op": "copy",
+"srcBundle": "234cec",
+"src": "aid_anim_banjox_actor_log_standlookaround",
+"dstBundle": "685374",
+"name": "aid_anim_banjox_actor_log_standlookaround"
+},
+{
+"op": "copy",
+"srcBundle": "234cec",
+"src": "aid_anim_banjox_actor_log_run",
+"dstBundle": "685374",
+"name": "aid_anim_banjox_actor_log_run"
+},
+{
+"op": "copy",
+"srcBundle": "234cec",
+"src": "aid_anim_banjox_actor_log_fallcycle",
+"dstBundle": "685374",
+"name": "aid_anim_banjox_actor_log_fallcycle"
+},
+{
+"op": "copy",
+"srcBundle": "234cec",
+"src": "aid_anim_banjox_actor_log_hits_knockbackland",
+"dstBundle": "685374",
+"name": "aid_anim_banjox_actor_log_hits_knockbackland"
+},
+{
+"op": "copy",
+"srcBundle": "234cec",
+"src": "aid_anim_banjox_actor_log_hits_knockback",
+"dstBundle": "685374",
+"name": "aid_anim_banjox_actor_log_hits_knockback"
+},
+{
+"op": "copy",
+"srcBundle": "234cec",
+"src": "aid_anim_banjox_actor_log_walk",
+"dstBundle": "685374",
+"name": "aid_anim_banjox_actor_log_walk"
+},
+{
+"op": "copy",
+"srcBundle": "234cec",
+"src": "aid_anim_banjox_actor_log_hits_knockbackgetup",
+"dstBundle": "685374",
+"name": "aid_anim_banjox_actor_log_hits_knockbackgetup"
+},
+{
+"op": "copy",
+"srcBundle": "234cec",
+"src": "aid_anim_banjox_actor_log_hit",
+"dstBundle": "685374",
+"name": "aid_anim_banjox_actor_log_hit"
+},
+{
+"op": "copy",
+"srcBundle": "234cec",
+"src": "aid_animevents_banjox_actor_log_standlookaround",
+"dstBundle": "685374",
+"name": "aid_animevents_banjox_actor_log_standlookaround"
+},
+{
+"op": "copy",
+"srcBundle": "234cec",
+"src": "aid_animevents_banjox_actor_log_run",
+"dstBundle": "685374",
+"name": "aid_animevents_banjox_actor_log_run"
+},
+{
+"op": "copy",
+"srcBundle": "234cec",
+"src": "aid_animevents_banjox_actor_log_hits_knockbackland",
+"dstBundle": "685374",
+"name": "aid_animevents_banjox_actor_log_hits_knockbackland"
+},
+{
+"op": "copy",
+"srcBundle": "234cec",
+"src": "aid_animevents_banjox_actor_log_walk",
+"dstBundle": "685374",
+"name": "aid_animevents_banjox_actor_log_walk"
+},
+{
+"op": "copy",
+"srcBundle": "234cec",
+"src": "aid_animevents_banjox_actor_log_hits_knockbackgetup",
+"dstBundle": "685374",
+"name": "aid_animevents_banjox_actor_log_hits_knockbackgetup"
+},
+{
+"op": "copy",
+"srcBundle": "234cec",
+"src": "aid_animevents_banjox_actor_log_hit",
+"dstBundle": "685374",
+"name": "aid_animevents_banjox_actor_log_hit"
+}
+]
+}

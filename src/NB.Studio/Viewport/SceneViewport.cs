@@ -68,6 +68,44 @@ public sealed partial class SceneViewport : UserControl
     /// <summary>Debug: draw everything (no frustum / size culling), to compare against the culled frame.</summary>
     public bool NoCull;
     readonly Dictionary<string, Renderer.LineBatch> _collision = new();
+    /// <summary>Draw the selected object's own Havok collision (magenta, on top), independent of View > Collision.</summary>
+    public bool ShowSelectionCollision { get => _showSelColl; set { if (_showSelColl != value) { _showSelColl = value; _gl.Invalidate(); } } }
+    bool _showSelColl;
+    Renderer.LineBatch? _selCollBatch; SceneObject? _selCollFor;
+    /// <summary>What the selection-collision overlay shows (asset names, triangles), for the status bar / scripts.</summary>
+    public string SelectionCollisionInfo { get; private set; } = "";
+    public event Action<string>? SelectionCollisionChanged;
+
+    void DrawSelectionCollision(Matrix4x4 vp)
+    {
+        if (!_showSelColl || Selected == null || Scene == null) return;
+        if (_selCollFor != Selected)
+        {
+            if (_selCollBatch != null) _r.DeleteLineBatch(_selCollBatch);
+            _selCollBatch = null; _selCollFor = Selected;
+            var parts = Scene.CollisionOf(Selected);
+            var segs = new List<(Vector3, Vector3)>();
+            int tris = 0;
+            foreach (var (_, meshes, local) in parts)
+                for (int mi = 0; mi < meshes.Count; mi++)
+                {
+                    var m = meshes[mi]; var seen = new HashSet<(int, int)>();
+                    tris += m.Triangles.Count / 3;
+                    for (int t = 0; t + 2 < m.Triangles.Count; t += 3)
+                        for (int e = 0; e < 3; e++)
+                        {
+                            int a = m.Triangles[t + e], b = m.Triangles[t + (e + 1) % 3];
+                            if (seen.Add((Math.Min(a, b), Math.Max(a, b)))) segs.Add((Vector3.Transform(m.Positions[a], local), Vector3.Transform(m.Positions[b], local)));
+                        }
+                }
+            if (segs.Count > 0) _selCollBatch = _r.CreateLineBatch(segs, new Vector3(1f, 0.2f, 0.85f));
+            SelectionCollisionInfo = parts.Count == 0 ? $"{Selected.Name}: no collision (no aid_havok asset for its model)"
+                : tris == 0 ? $"{Selected.Name}: {string.Join(", ", parts.Select(p => p.Asset.Replace("aid_havok_banjox_", "")).Distinct().Take(3))} holds no shapes (characters and other actors get their physics body at run time)"
+                : $"{Selected.Name}: {tris:N0} collision triangles in {parts.Count} shape(s): {string.Join(", ", parts.Select(p => p.Asset.Replace("aid_havok_banjox_", "")).Distinct().Take(4))}";
+            SelectionCollisionChanged?.Invoke(SelectionCollisionInfo);
+        }
+        if (_selCollBatch != null) _r.DrawLineBatch(_selCollBatch, Selected.Transform * vp, onTop: true);
+    }
     public event Action<SceneObject?>? SelectionChanged;
     public event Action<SceneObject>? ObjectEdited;   // after a transform was confirmed (for undo)
     public event Action<SceneObject, Matrix4x4>? EditStarted;
@@ -238,6 +276,7 @@ public sealed partial class SceneViewport : UserControl
         }
         else { _r.Lighting = new SceneLighting(); var pick = _skies.FirstOrDefault(); _sky = pick.Model; SkyName = pick.Model != null ? pick.Name : null; }
         _r.InvalidateShadow();
+        if (Scene != null) StartGrass();   // the grass shadow textures follow the time of day
         _gl.Invalidate();
     }
 
@@ -296,11 +335,14 @@ public sealed partial class SceneViewport : UserControl
         CancelTransform();
         if (_ready) { _gl.MakeCurrent(); _r.Clear(); foreach (var b in _collision.Values) _r.DeleteLineBatch(b); }
         _collision.Clear();
+        if (_ready && _selCollBatch != null) _r.DeleteLineBatch(_selCollBatch);
+        _selCollBatch = null; _selCollFor = null;
         if (_ready && _staticLines != null) _r.DeleteLineBatch(_staticLines);
         _staticLines = null; _linesVersion++;
         Scene = scene; Selected = null;
         _lights = null; _skies.Clear(); _sky = null; _r.Lighting = new SceneLighting();
         _water = null; _r.MaterialOverrides.Clear();
+        ResetGrass();
         if (scene != null)
         {
             var terrain = scene.Objects.FirstOrDefault(o => o.Kind == SceneObjectKind.Terrain);
@@ -328,12 +370,17 @@ public sealed partial class SceneViewport : UserControl
 
     public (float Yaw, float Pitch) LookAngles => (_yaw, _pitch);
 
-    /// <summary>Scenery hidden by the tool: below y -200, or scaled to (almost) nothing.</summary>
+    /// <summary>Objects whose scale is not edited: markers (actors, pickups, path nodes, spawns…). The game places them by
+    /// position and rotation; the record's scale field is kept as stored (path nodes use it as a node value, not a size),
+    /// so the gizmo, S and the Properties scale fields leave it alone.</summary>
+    public static bool ScaleLocked(SceneObject? o) => o != null && o.Kind == SceneObjectKind.Marker;
+
+    /// <summary>Scenery hidden by the tool: sunk below y -10000, or scaled to (almost) nothing.</summary>
     public static bool IsHidden(SceneObject o)
     {
         var t = o.Transform;
         float scale = new Vector3(t.M11, t.M12, t.M13).Length();
-        return t.Translation.Y < -200 || scale < 0.01f;
+        return t.Translation.Y < -10000 || scale < 0.01f;   // sunk by 20,000 (imported Source maps reach below y -200)
     }
 
     public void Select(SceneObject? o, bool focus = false)
@@ -450,6 +497,8 @@ public sealed partial class SceneViewport : UserControl
                 foreach (var (cm, cl) in o.Children) _r.DrawModel(cm, cl * o.Transform, tint, NoCull ? null : fr);
             }
             if (_water != null && ShowTerrain && _viewMode is ViewMode.Textured or ViewMode.Rendered) _r.DrawModel(_water, Matrix4x4.Identity, Vector4.Zero, NoCull ? null : fr);
+            _r.GrassTilesDrawn = 0;
+            DrawGrassLayers(NoCull ? null : fr);
             _r.FlushTransparent();
             GL.PolygonMode(MaterialFace.FrontAndBack, PolygonMode.Fill);
             if (ShowCollision && Scene.CollisionByModel != null)
@@ -484,6 +533,7 @@ public sealed partial class SceneViewport : UserControl
                 _staticKey = key;
             }
             _r.DrawLineBatch(_staticLines, vp, onTop: true);
+            DrawSelectionCollision(vp);
             if (Selected != null) DrawGizmo(vp);
         }
         DrawOverlays(W, H);
@@ -634,7 +684,7 @@ public sealed partial class SceneViewport : UserControl
             return;
         }
         _r.Lines(lines, vp, true, 2f);
-        if (Mode == GizmoMode.Select) return;
+        if (Mode == GizmoMode.Select || (Mode == GizmoMode.Scale && ScaleLocked(Selected))) return;
         var ax = GizmoAxes(); float len = GizmoLength();
         var right = Right(); var up = Vector3.Normalize(Vector3.Cross(right, Forward()));
         for (int i = 0; i < 3; i++)
@@ -656,7 +706,7 @@ public sealed partial class SceneViewport : UserControl
     /// <summary>The gizmo handle (0..2) under the mouse, or -1: within 9 pixels of an axis segment's screen projection.</summary>
     int HandleAt(Point m)
     {
-        if (Selected == null || Selected.Kind == SceneObjectKind.Terrain || Mode == GizmoMode.Select) return -1;
+        if (Selected == null || Selected.Kind == SceneObjectKind.Terrain || Mode == GizmoMode.Select || (Mode == GizmoMode.Scale && ScaleLocked(Selected))) return -1;
         var p = Selected.Transform.Translation; var ax = GizmoAxes(); float len = GizmoLength();
         var s0 = ToScreen(p); if (s0 == null) return -1;
         int best = -1; float bestD = 9;
@@ -887,6 +937,7 @@ public sealed partial class SceneViewport : UserControl
     void BeginTransform(XfKind kind, bool drag, int axis = -1, AxisSpace space = AxisSpace.World)
     {
         if (Selected == null || Selected.Kind == SceneObjectKind.Terrain) return;
+        if (kind == XfKind.Scale && ScaleLocked(Selected)) return;   // markers keep their scale
         if (_xf != XfKind.None) { if (!drag) { _xf = kind; _xfTyped = ""; UpdateTransform(); } return; }
         _xf = kind; _xfDrag = drag; _xfAxis = axis; _xfSpace = space; _xfTyped = ""; _xfDragKeyAxis = false;
         _xfStart = Selected.Transform; _xfMouse0 = _mouse;
@@ -902,13 +953,14 @@ public sealed partial class SceneViewport : UserControl
         var o = Selected; var start = _xfStart;
         _xf = XfKind.None; _xfAxis = -1; _xfTyped = "";
         if (o != null && o.Transform != start) { ObjectEdited?.Invoke(o); SelectionChanged?.Invoke(o); }
+        if (o?.Kind == SceneObjectKind.Marker) _linesVersion++;
         _gl.Invalidate();
     }
 
     public void CancelTransform()
     {
         if (_xf == XfKind.None) return;
-        if (Selected != null) { Selected.Transform = _xfStart; SelectionChanged?.Invoke(Selected); }
+        if (Selected != null) { Selected.Transform = _xfStart; SelectionChanged?.Invoke(Selected); if (Selected.Kind == SceneObjectKind.Marker) _linesVersion++; }
         _xf = XfKind.None; _xfAxis = -1; _xfTyped = "";
         _gl.Invalidate();
     }
@@ -1023,6 +1075,8 @@ public sealed partial class SceneViewport : UserControl
                 break;
             }
         }
+        // markers (boxes, path-node links) are in the static line batch: rebuild it so the path follows the node live
+        if (o.Kind == SceneObjectKind.Marker) _linesVersion++;
         SelectionChanged?.Invoke(o);
         _gl.Invalidate();
     }
@@ -1053,7 +1107,7 @@ public sealed partial class SceneViewport : UserControl
         var f = Forward(); var r = Right(); var d = Vector3.Zero;
         // S is Scale while something is selected (Blender), but while flying (right button held, other fly keys held,
         // or flying a moment ago) S flies backwards
-        bool sFlies = _sFlies || !SScales || _looking || Selected == null || Selected.Kind == SceneObjectKind.Terrain;
+        bool sFlies = _sFlies || !SScales || _looking || Selected == null || Selected.Kind == SceneObjectKind.Terrain || ScaleLocked(Selected);
         if (_keys.Contains(Keys.W) || _keys.Contains(Keys.Up)) d += f;
         if ((_keys.Contains(Keys.S) && sFlies) || _keys.Contains(Keys.Down)) d -= f;
         if (_keys.Contains(Keys.D) || _keys.Contains(Keys.Right)) d += r;
@@ -1101,7 +1155,7 @@ public sealed partial class SceneViewport : UserControl
             case Keys.D3: Mode = GizmoMode.Scale; _gl.Invalidate(); break;
             case Keys.G when canEdit: BeginTransform(XfKind.Grab, false); e.Handled = true; break;
             case Keys.R when canEdit: BeginTransform(XfKind.Rotate, false); e.Handled = true; break;
-            case Keys.S when canEdit: BeginTransform(XfKind.Scale, false); e.Handled = true; break;
+            case Keys.S when canEdit && !ScaleLocked(Selected): BeginTransform(XfKind.Scale, false); e.Handled = true; break;
             case Keys.Z when e.Shift: ViewMode = (ViewMode)(((int)_viewMode + 1) % 4); break;
             case Keys.Escape: Select(null); break;
         }

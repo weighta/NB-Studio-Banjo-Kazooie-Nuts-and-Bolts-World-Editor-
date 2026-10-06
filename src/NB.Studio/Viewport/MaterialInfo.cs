@@ -191,7 +191,7 @@ public sealed class MaterialInfo
             // texture-coordinate transforms of the vertex shader (per-texture tiling)
             Dictionary<int, XenosShader.UvSource>? uvs = null;
             try { if (d.ColourVertexShader is { } vs && pass != null) uvs = XenosShader.InterpolatorUvs(vs, pass.VsConstants, d.Layout); } catch { uvs = null; }
-            var tr = XenosTranslator.Translate(sh, consts, d.Colors != null, d.UVs2 != null, uvs);
+            var tr = XenosTranslator.Translate(sh, consts, d.Colors != null, d.UVs2 != null, uvs, d.UVs3 != null);
             if (tr.Fail == null)
             {
                 var byslot = tex0.ToDictionary(x => x.Slot, x => x.Texture);

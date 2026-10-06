@@ -50,7 +50,7 @@ public sealed class SceneLighting
 /// <summary>GPU-side resources: shaders, per-material mesh batches and textures. All calls must happen with the GL context current.
 /// A frame is <see cref="Begin"/>, any number of <see cref="DrawModel"/> (opaque and cut-out batches draw at once, blended ones are
 /// queued), then <see cref="FlushTransparent"/> (contact-occlusion overlays, then blended batches back to front).</summary>
-public sealed class Renderer : IDisposable
+public sealed partial class Renderer : IDisposable
 {
     int _prog, _lineProg, _lineVao, _lineVbo, _ovProg, _ovVao, _ovVbo;
     int _uLineMvp, _uOvScreen;
@@ -70,10 +70,10 @@ public sealed class Renderer : IDisposable
     const string VS = """
         #version 330 core
         layout(location=0) in vec3 aPos; layout(location=1) in vec3 aNrm; layout(location=2) in vec2 aUV; layout(location=3) in vec2 aUV2;
-        layout(location=4) in vec3 aTan; layout(location=5) in vec4 aCol;
+        layout(location=4) in vec3 aTan; layout(location=5) in vec4 aCol; layout(location=6) in vec2 aUV3;
         uniform mat4 uMvp; uniform mat4 uModel; uniform mat4 uShadow;
-        out vec3 vN; out vec3 vW; out vec2 vUV; out vec2 vUV2; out vec4 vCol; out vec4 vSh;
-        void main(){ vec4 w = uModel * vec4(aPos,1.0); vW = w.xyz; vSh = uShadow * w; gl_Position = uMvp * vec4(aPos,1.0); vN = mat3(uModel) * aNrm; vUV = aUV; vUV2 = aUV2; vCol = aCol; }
+        out vec3 vN; out vec3 vW; out vec2 vUV; out vec2 vUV2; out vec4 vCol; out vec4 vSh; out vec2 vUV3;
+        void main(){ vec4 w = uModel * vec4(aPos,1.0); vW = w.xyz; vSh = uShadow * w; gl_Position = uMvp * vec4(aPos,1.0); vN = mat3(uModel) * aNrm; vUV = aUV; vUV2 = aUV2; vCol = aCol; vUV3 = aUV3; }
         """;
     const string FS = """
         #version 330 core
@@ -309,7 +309,7 @@ public sealed class Renderer : IDisposable
     readonly Dictionary<ModelAsset, Batch[]> _batches = new();
     /// <summary>Materials for generated geometry (water surfaces) instead of reading the draw's stream state.</summary>
     public readonly Dictionary<MeshDraw, MaterialInfo> MaterialOverrides = new();
-    const int Floats = 17;   // pos 3, normal 3, uv 2, uv2 2, tangent 3, colour 4
+    const int Floats = 19;   // pos 3, normal 3, uv 2, uv2 2, tangent 3, colour 4, uv3 2
 
     Batch[] Batches(ModelAsset model)
     {
@@ -340,6 +340,7 @@ public sealed class Renderer : IDisposable
                     buf.Add(p.X); buf.Add(p.Y); buf.Add(p.Z); buf.Add(q.X); buf.Add(q.Y); buf.Add(q.Z); buf.Add(t.X); buf.Add(t.Y); buf.Add(t2.X); buf.Add(t2.Y);
                     buf.Add(tg.X); buf.Add(tg.Y); buf.Add(tg.Z);
                     buf.Add(((c >> 16) & 0xFF) / 255f); buf.Add(((c >> 8) & 0xFF) / 255f); buf.Add((c & 0xFF) / 255f); buf.Add((c >> 24) / 255f);   // 0xAARRGGBB
+                    var t3 = d.UVs3 != null ? d.UVs3[i] : t2; buf.Add(t3.X); buf.Add(t3.Y);
                 }
                 foreach (int i in d.Indices)
                     if (i < n) { idx.Add(b + (uint)i); bmn = Vector3.Min(bmn, d.Positions[i]); bmx = Vector3.Max(bmx, d.Positions[i]); }
@@ -358,6 +359,7 @@ public sealed class Renderer : IDisposable
             GL.EnableVertexAttribArray(3); GL.VertexAttribPointer(3, 2, VertexAttribPointerType.Float, false, st, 32);
             GL.EnableVertexAttribArray(4); GL.VertexAttribPointer(4, 3, VertexAttribPointerType.Float, false, st, 40);
             GL.EnableVertexAttribArray(5); GL.VertexAttribPointer(5, 4, VertexAttribPointerType.Float, false, st, 52);
+            GL.EnableVertexAttribArray(6); GL.VertexAttribPointer(6, 2, VertexAttribPointerType.Float, false, st, 68);
             GL.BindVertexArray(0);
             list.Add(bt);
         }
@@ -847,7 +849,7 @@ public sealed class Renderer : IDisposable
 
     const string XFS_HEAD = """
         #version 330 core
-        in vec3 vN; in vec3 vW; in vec2 vUV; in vec2 vUV2; in vec4 vCol; in vec4 vSh; out vec4 o;
+        in vec3 vN; in vec3 vW; in vec2 vUV; in vec2 vUV2; in vec4 vCol; in vec4 vSh; in vec2 vUV3; out vec4 o;
         uniform sampler2DShadow tShadow; uniform int uUseShadow;
         uniform sampler2D tS0; uniform sampler2D tS1; uniform sampler2D tS2; uniform sampler2D tS3;
         uniform sampler2D tS4; uniform sampler2D tS5; uniform sampler2D tS6; uniform sampler2D tS7;
@@ -884,7 +886,7 @@ public sealed class Renderer : IDisposable
         void main() {
           vec3 n0 = length(vN) > 0.0 ? normalize(vN) : vec3(0.0, 1.0, 0.0);
           if (!gl_FrontFacing) n0 = -n0;
-          vec2 gUV = vUV, gUV2 = vUV2; vec4 gCol = vCol; vec3 gPos = vW;
+          vec2 gUV = vUV, gUV2 = vUV2, gUV3 = vUV3; vec4 gCol = vCol; vec3 gPos = vW;
           vec3 gV = normalize(uEye - vW);
           vec3 gN = n0;
         """;
@@ -964,6 +966,7 @@ public sealed class Renderer : IDisposable
         foreach (var t in _textures.Values) if (t != 0) GL.DeleteTexture(t);
         _textures.Clear(); _hasAlpha.Clear(); _lum.Clear(); _midAlpha.Clear();
         _queue.Clear(); _multiply.Clear();
+        ClearGrass();
     }
 
     public void Dispose()

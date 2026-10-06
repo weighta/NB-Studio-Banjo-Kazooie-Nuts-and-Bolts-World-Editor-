@@ -905,6 +905,104 @@ static class Program
                     foreach (var e in rep.Errors) Console.WriteLine("  ERROR " + e);
                     return rep.Errors.Count == 0 ? 0 : 2;
                 }
+                case "vmf-info":
+                case "vmf-import":
+                {
+                    // vmf-info <file.vmf> [options] [--ws <workspace>]       : what an import would make + size estimate
+                    // vmf-import <workspace> <file.vmf> [options] [--out <scene folder>] : import into the world (rebuilt from its original)
+                    // options: --scale s  --offset x,y,z  --world hex  --materials dir  --props  --prop-folder dir  --prop-zup
+                    //          --placeholders  --no-prop-collision  --no-light  --no-fog  --no-water  --no-spawn  --keep-bounds
+                    //          --keep-garage  --keep-town-objects  --tex-size n  --gen-size n  --chunk n  --assumed-size n
+                    //          --game <Source game / Garry's Mod folder>  --keep-skybox  --no-sky-collision
+                    //          bake: --no-bake --luxel u --exposure x --gamma g --bounce b --sky-samples n --page n --game-ambient a --game-sun s
+                    bool import = args[0] == "vmf-import";
+                    string vmf = import ? args[2] : args[1];
+                    var o = new NB.Core.SourceEngine.VmfImportOptions();
+                    string? wsPath = import ? args[1] : null, outDir = null;
+                    float Fl(string s) => float.Parse(s, System.Globalization.CultureInfo.InvariantCulture);
+                    for (int i = import ? 3 : 2; i < args.Length; i++)
+                    {
+                        switch (args[i])
+                        {
+                            case "--scale": o.Scale = Fl(args[++i]); break;
+                            case "--offset": { var v = args[++i].Split(',').Select(Fl).ToArray(); o.Offset = new(v[0], v[1], v[2]); break; }
+                            case "--world": o.World = Convert.ToUInt32(args[++i], 16); break;
+                            case "--materials": o.MaterialFolder = args[++i]; break;
+                            case "--props": o.IncludeProps = true; break;
+                            case "--prop-folder": o.PropFolder = args[++i]; break;
+                            case "--prop-zup": o.PropYUp = false; break;
+                            case "--placeholders": o.PropPlaceholders = true; break;
+                            case "--no-prop-collision": o.PropCollision = false; break;
+                            case "--no-light": o.Light = false; break;
+                            case "--no-fog": o.Fog = false; break;
+                            case "--no-water": o.Water = false; break;
+                            case "--no-spawn": o.Spawn = false; break;
+                            case "--keep-bounds": o.UnlimitedBounds = false; break;
+                            case "--keep-garage": o.KeepGarage = true; break;
+                            case "--keep-town-objects": o.RemoveTownObjects = false; break;
+                            case "--tex-size": o.MaxTextureSize = int.Parse(args[++i]); break;
+                            case "--gen-size": o.GeneratedTextureSize = int.Parse(args[++i]); break;
+                            case "--assumed-size": o.AssumedTextureSize = int.Parse(args[++i]); break;
+                            case "--chunk": o.ChunkTriangles = int.Parse(args[++i]); break;
+                            case "--game": o.GameFolder = args[++i]; break;
+                            case "--keep-skybox": o.Drop3DSkybox = false; break;
+                            case "--no-sky-collision": o.SkyCollision = false; break;
+                            case "--player-clips": o.PlayerClipCollision = true; break;
+                            case "--no-bake": o.Bake.Enabled = false; break;
+                            case "--luxel": o.Bake.LuxelSize = Fl(args[++i]); break;
+                            case "--exposure": o.Bake.Exposure = Fl(args[++i]); break;
+                            case "--gamma": o.Bake.Gamma = Fl(args[++i]); break;
+                            case "--overbright": o.Bake.Overbright = Fl(args[++i]); break;
+                            case "--bounce": o.Bake.Bounce = Fl(args[++i]); break;
+                            case "--sky-samples": o.Bake.SkySamples = int.Parse(args[++i]); break;
+                            case "--page": o.Bake.PageSize = int.Parse(args[++i]); break;
+                            case "--game-ambient": o.Bake.GameAmbient = Fl(args[++i]); break;
+                            case "--game-sun": o.Bake.GameSun = Fl(args[++i]); break;
+                            case "--ws": wsPath = args[++i]; break;
+                            case "--out": outDir = args[++i]; break;
+                            case "--bake-test": break;
+                            case "--probe-light": i++; break;
+                            default: Console.WriteLine($"unknown option {args[i]}"); return 1;
+                        }
+                    }
+                    var sw = System.Diagnostics.Stopwatch.StartNew();
+                    if (!import)
+                    {
+                        var map = NB.Core.SourceEngine.VmfMap.Load(vmf);
+                        NB.Core.Formats.CaffFile? world = null;
+                        if (wsPath != null) world = NB.Core.Project.Workspace.Open(wsPath).LoadResident(o.World);
+                        var plan = NB.Core.SourceEngine.VmfImporter.Plan(map, o, world);
+                        int pl = Array.IndexOf(args, "--probe-light");
+                        if (pl > 0) { var v = args[pl + 1].Split(',').Select(Fl).ToArray(); Console.WriteLine(NB.Core.SourceEngine.VmfImporter.ProbeLight(plan, o, new(v[0], v[1], v[2]))); return 0; }
+                        if (args.Contains("--bake-test"))
+                        {
+                            // bake + write the scene folder without building it into a workspace (lightmap preview)
+                            var dir = outDir ?? Path.Combine(Path.GetTempPath(), "vmf_bake_" + plan.MapName);
+                            NB.Core.SourceEngine.VmfImporter.WriteScene(plan, o, dir, new Progress<(string, double)>(p => { }));
+                            Console.WriteLine("scene folder written: " + dir);
+                        }
+                        foreach (var l in NB.Core.SourceEngine.VmfImporter.Describe(plan)) Console.WriteLine(l);
+                        Console.WriteLine("materials:");
+                        foreach (var m in plan.Materials) Console.WriteLine($"  {m.Material,-48} {m.Triangles,7} tris  -> {m.Texture} {m.OutW}x{m.OutH} {m.Source}");
+                        var notDrawn = plan.MaterialUses.Where(kv => !kv.Value.Draw).ToList();
+                        if (notDrawn.Count > 0) Console.WriteLine("not drawn: " + string.Join(", ", notDrawn.Select(kv => $"{kv.Key} ({kv.Value.Why}{(kv.Value.Collide ? ", collides" : "")})")));
+                        if (plan.Props.Count > 0) Console.WriteLine("props:");
+                        foreach (var p in plan.Props) Console.WriteLine($"  {p.Model,-56} x{p.Instances,-4} {(p.File ?? "(no model file)")}{(p.Vertices > 0 ? $" {p.Vertices} verts {p.Triangles} tris" : "")}");
+                        Console.WriteLine($"planned in {sw.Elapsed.TotalSeconds:F1}s");
+                        return plan.Warnings.Count == 0 ? 0 : 3;
+                    }
+                    var ws = NB.Core.Project.Workspace.Open(wsPath!);
+                    var idx = NB.Core.Project.AssetIndex.LoadOrBuild(ws);
+                    string last = "";
+                    var res = NB.Core.SourceEngine.VmfImporter.Import(ws, idx, vmf, o, outDir, new Progress<(string, double)>(p => { var s = p.Item1.Split(' ')[0]; if (s != last) { last = s; Console.WriteLine($"  [{sw.Elapsed.TotalSeconds,6:F1}s] {p.Item1}"); } }));
+                    foreach (var l in NB.Core.SourceEngine.VmfImporter.Describe(res.Plan)) Console.WriteLine(l);
+                    var rep = res.Report!;
+                    Console.WriteLine($"imported in {sw.Elapsed.TotalSeconds:F1}s: {rep.Textures} textures, {rep.Models} models, {rep.Instances} instances, {rep.Hidden} hidden, {rep.Markers} markers, {rep.LightSetups} light setups, collision {rep.CollisionTriangles} tris, water {rep.WaterTriangles} tris");
+                    Console.WriteLine($"world bundle {o.World:x6}: {rep.BundleBytes / 1048576.0:F1} MB (estimate {res.Plan.EstimatedBytes / 1048576.0:F1} MB, original {res.Plan.BudgetBytes / 1048576.0:F1} MB); scene folder {res.SceneFolder}");
+                    foreach (var n in rep.Notes) Console.WriteLine("  " + n);
+                    foreach (var e in rep.Errors) Console.WriteLine("  ERROR " + e);
+                    return rep.Errors.Count == 0 ? 0 : 2;
+                }
                 case "tex-create":
                 {
                     // tex-create <workspace> <bundle hex> <new texture name> <image> [WxH]: new resident DXT1 texture (full mip chain)

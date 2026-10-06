@@ -10,6 +10,8 @@ public sealed class ImportMesh
     public List<Vector3> Positions = new();
     public List<Vector3>? Normals;
     public List<Vector2>? UVs;
+    /// <summary>Second texture coordinate set (lightmaps / AO), per vertex; OBJ "vx u v" lines, one per "v".</summary>
+    public List<Vector2>? UVs2;
     public List<int> Triangles = new();   // indices into the lists above, game winding
     /// <summary>The source file's material of this mesh (OBJ usemtl + MTL, FBX Material), when it has one.</summary>
     public ImportMaterial? Material;
@@ -90,7 +92,7 @@ public static class ObjReader
 
     public static List<ImportMesh> Read(string path)
     {
-        var P = new List<Vector3>(); var T = new List<Vector2>(); var N = new List<Vector3>();
+        var P = new List<Vector3>(); var T = new List<Vector2>(); var N = new List<Vector3>(); var X = new List<Vector2>();
         var meshes = new List<ImportMesh>();
         ImportMesh? cur = null; Dictionary<(int, int, int), int>? map = null;
         static float F(string s) => float.Parse(s, NumberStyles.Float, CultureInfo.InvariantCulture);
@@ -112,6 +114,7 @@ public static class ObjReader
                 case "v": P.Add(new Vector3(F(t[1]), F(t[2]), F(t[3]))); break;
                 case "vt": T.Add(new Vector2(F(t[1]), 1 - F(t[2]))); break;
                 case "vn": N.Add(new Vector3(F(t[1]), F(t[2]), F(t[3]))); break;
+                case "vx": X.Add(new Vector2(F(t[1]), F(t[2]))); break;   // NB extension: second UV set per position
                 case "mtllib": foreach (var m in ReadMtl(Path.Combine(dir, line[6..].Trim()), dir)) mats[m.Name] = m; break;
                 case "usemtl":
                 {
@@ -137,6 +140,7 @@ public static class ObjReader
                             cur.Positions.Add(P[pi]);
                             if (ti >= 0) (cur.UVs ??= new()).Add(T[ti]);
                             if (ni >= 0) (cur.Normals ??= new()).Add(N[ni]);
+                            if (pi < X.Count) (cur.UVs2 ??= new()).Add(X[pi]);
                         }
                         poly.Add(vi);
                     }
@@ -151,6 +155,7 @@ public static class ObjReader
         {
             if (m.UVs != null && m.UVs.Count != m.Positions.Count) m.UVs = null;       // mixed faces with/without uv
             if (m.Normals != null && m.Normals.Count != m.Positions.Count) m.Normals = null;
+            if (m.UVs2 != null && m.UVs2.Count != m.Positions.Count) m.UVs2 = null;
             m.Normals ??= ComputeNormals(m);
         }
         return meshes;

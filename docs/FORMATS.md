@@ -1129,5 +1129,49 @@ LF_K 7,602, and an 80 degree knee bend renders as a clean bend of the lower leg 
 
   (e.g. place an explosive/hostile actor with the marker tools) and compare with the same test in Nutty Acres.
 
+## Grass layers, dialog assets, path nodes, collision (NB Studio 1.7, 2026-10-05)
 
+### Grass layers
+* Grass layers = chunk 17 (u32 count + 0xC4-byte records) of the background model **or of a reference model placed in the
+  world**: Spiral Mountain has none in its background — its 28 layers are in `…spiralmountain_grassboxes` (instance 90 at
+  the origin). Showdown Town 78 (background), Terrarium 1 (+1 in `references_mushroomhall`). Nutty Acres has **no chunk 17**:
+  its grass is the scenery model `nuttyacres_references_trees_fabricgrass` (see "Nutty Acres" below).
+* Record: +0 grass model id, +4 shadow texture id (name without the lighting suffix), +8 box min, +0x14 box max,
+  +0x20 tile spacing (6; underwater 2), +0x24/+0x28/+0x2C ?, +0x30 draw range in tiles (20 → 120 units = last LOD distance),
+  +0x34 position jitter (0.2 of the spacing, either way), +0x38 height texture id, +0x3C/+0x40 height scale min/max
+  (1 / 1.5), +0x44 shadow texture name (stale bytes after it).
+* Tiles (13,279 tile records read from guest memory on the Spiral Mountain title screen, 0x70 bytes: 3 rotation rows,
+  position, bbox min, max, flags): **one tile per spacing×spacing cell that has any non-zero shadow-texture alpha**
+  (1035/1035 cells of layer 23 match); position = cell centre + jitter; y = box min y; turned by a random multiple of 90°;
+  y scaled by a random factor in [+0x3C, +0x40].
+* Grass vertex shader: index = vertex × **30** + tile slot (c132 = 1/30, −30; 30 tiles per draw — the generic K detector
+  in ModelAsset picks 16/32 for these, wrong); world xz → uv = (xz − min.xz)/size.xz (no flip, checked against tile
+  bboxes); y += height texture red × (max.y − min.y); colour = vertex colour × shadow rgb; **a blade is killed when its
+  vertex alpha > shadow alpha** (o63.z = saturate(vcol.a − shadow.a)): the shadow texture's alpha is the density.
+  Pixel shader: diffuse × colour × (sun colour × sun height + c49).
+* Shadow textures come in lighting variants `_0, _1, _2, _4` held by the time-of-day/act bundles (Showdown Town: _0 midday
+  e00470, _1 morning 01d1b6, _2 afternoon 6bd4a7, _4 night 3f0052; Spiral Mountain _0 title/startofgame, _1 endofgame/
+  trickyrace, _2 twistyrace). The viewer picks the variant held by the current light's bundle, else the scene's bundles,
+  else _0, and re-lays the tiles when the light changes.
+* LOD: the grass model's LOD table (meadow 0:[0,1,2,3] 60:[1,2,3] 90:[2,3] 120:[3]) = density nodes by tile distance.
 
+### Dialog assets and character lines
+* `aid_dialog_*`: +8 = loctext table id. A dialog node name such as "mrfit_running" is the table entry
+  "dialog__mrfit_running"; numbered variants ("dialog__mrfit_cantafford1".."4") belong to the same node.
+* A character's lines: marker -> actor objparams -> its own strategy/script/dialog assets -> the dialog's table, plus entries
+  named after the character in the world's and act's tables (e.g. `showdowntown__mrfit_menutitle`, hit lines in
+  `actor_hitdialogs`). Tables exist per language (`loctext/<lang>/<id>`).
+
+### Path nodes
+* Marker type 6 (actor): +8 = the start node of its path. Path nodes keep a per-node value in the scale field
+  (0.5, 1.59, 6.6 ...): it is data, not a size (only types 5, 8, 14, 22 have values other than 1).
+* The town markers exist only once (234cec); `aid_pathenginepreprocess_*` is the walking navmesh and holds no node
+  coordinates. Moved nodes are followed in game as long as the next node is reachable on that navmesh.
+
+### Collision
+* Each model has an `aid_havok_<same name>` asset with its collision. Character (actor) havok assets are empty 32-byte
+  placeholders.
+
+### Texture names
+* Imported texture names must not end in "top" (and probably "mip"): the game names texture entries `<name>top` / `<name>mip`; a "top"
+  name (WOOD/OFFDESKTOP) hung Showdown Town's loading. NB's Source map importer adds `_m` to such names.

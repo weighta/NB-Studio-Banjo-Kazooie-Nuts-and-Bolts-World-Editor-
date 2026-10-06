@@ -69,6 +69,6 @@ BP=$(python -c "import zlib; print('%08x' % ((zlib.crc32(b'banjox_coop_puppet') 
 echo "== patch (puppet blueprint id $BP)"
 mkdir -p coop/dist
 $CLI patch-build $WS ${COOP_OUT:-coop/dist/ShowdownTownCoop.nbpatch} --name "Showdown Town Co-op" --author weighta \
-     --version 1.6 --category coop --ops coop/ops.json --multiplayer coop --tags "Showdown Town" \
+     --version 1.7 --category coop --ops coop/ops.json --multiplayer coop --tags "Showdown Town" \
      --desc "Play the single-player game together in NB Multiplayer: other players drive through your Showdown Town. Town vehicles are destructible and can be changed in town." \
      --extra mode=coop --extra puppetBlueprint=$BP --extra parkSpot=0,0,0

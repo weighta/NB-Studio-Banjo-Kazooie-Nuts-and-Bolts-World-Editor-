@@ -26,6 +26,7 @@ public sealed class MainForm : Form
     readonly AssetPreviewPanel _preview;
     readonly TransformPanel _transform = new() { Dock = DockStyle.Fill };
     readonly TextPanel _text = new() { Dock = DockStyle.Fill };
+    readonly DialoguePanel _dialogue = new() { Dock = DockStyle.Fill };
     readonly AudioPanel _audio = new() { Dock = DockStyle.Fill };
     readonly VideoPanel _video = new() { Dock = DockStyle.Fill };
     readonly TagEditorPanel _tags = new() { Dock = DockStyle.Fill };
@@ -38,7 +39,13 @@ public sealed class MainForm : Form
     readonly TabControl _center = new() { Dock = DockStyle.Fill };
     readonly TabControl _right = new() { Dock = DockStyle.Fill };
     readonly ContextMenuStrip _objMenu = new();
-    ToolStripMenuItem? _viewCollision;
+    ToolStripMenuItem? _viewCollision, _viewSelColl;
+
+    void SetSelectionCollision(bool on)
+    {
+        _view.ShowSelectionCollision = on;
+        if (_viewSelColl != null && _viewSelColl.Checked != on) _viewSelColl.Checked = on;
+    }
     TabControl _leftTabs = null!;
     ToolStrip _toolbar = null!;
     MenuStrip _menu = null!;
@@ -91,7 +98,8 @@ public sealed class MainForm : Form
         var rProps = new TabPage("Properties"); rProps.Controls.Add(_transform);
         var rTags = new TabPage("Tag Editor"); rTags.Controls.Add(_tags);
         var rLive = new TabPage("Live (game)"); rLive.Controls.Add(_live);
-        _right.TabPages.AddRange(new[] { rProps, rTags, rLive });
+        var rDlg = _dialogueTab = new TabPage("Dialogue"); rDlg.Controls.Add(_dialogue);
+        _right.TabPages.AddRange(new[] { rProps, rTags, rLive, rDlg });
 
         var splitLR = new SplitContainer { Dock = DockStyle.Fill, SplitterDistance = 320 };
         var splitCR = new SplitContainer { Dock = DockStyle.Fill, SplitterDistance = 900 };
@@ -122,6 +130,8 @@ public sealed class MainForm : Form
         // ---- wiring
         _worlds.DoubleClick += async (_, _) => { if (_worlds.SelectedItem is WorldItem wi) await OpenWorld(wi.Entry, wi.Act); };
         _view.SelectionChanged += OnSelection;
+        _view.GrassChanged += s => Log("  " + s);
+        _view.SelectionCollisionChanged += s => Log("Collision: " + s);
         _view.TextureSource = n => _scene?.LoadTexture(n);
         _view.EditStarted += (o, before) => _pendingBefore = before;
         _view.ObjectEdited += o => PushUndo(o, _pendingBefore, o.Transform);
@@ -139,6 +149,7 @@ public sealed class MainForm : Form
         _assets.AssetActivated += e => { _center.SelectedIndex = 1; _preview.Show(_ws!, e, Log); _tags.ShowAsset(_ws!, e); };
         _preview.Log = Log;
         _tags.Log = Log;
+        _dialogue.Log = Log;
         _text.Log = Log; _audio.Log = Log; _video.Log = Log; _parts.Log = Log;
         _audio.VgmstreamPath = FindUp(Path.Combine("thirdparty", "vgmstream", "vgmstream-cli.exe"));
         _tags.Changed += () => UpdateTitle();
@@ -379,7 +390,12 @@ public sealed class MainForm : Form
         var vO = new ToolStripMenuItem("Objects at Markers (buildings, characters, pickups)") { Checked = _view.ShowObjects, CheckOnClick = true,
             ToolTipText = "Models the game places with markers, like L.O.G.'s palace, Jiggy bank, characters and notes. Off: markers are small boxes (faster)." };
         vO.CheckedChanged += (_, _) => { _view.ShowObjects = vO.Checked; _view.Refresh3D(); };
-        view.DropDownItems.AddRange(new ToolStripItem[] { vMode, new ToolStripSeparator(), vT, vS, vO, vM, vP, vC });
+        var vSC = _viewSelColl = new ToolStripMenuItem("Collision of Selection") { CheckOnClick = true, ToolTipText = "Magenta wireframe of the selected object's own Havok collision, on top of everything (also in the object's right-click menu)." };
+        vSC.CheckedChanged += (_, _) => { if (_view.ShowSelectionCollision != vSC.Checked) SetSelectionCollision(vSC.Checked); };
+        var vG = new ToolStripMenuItem("Grass (chunk-17 grass layers)") { Checked = _view.ShowGrass, CheckOnClick = true,
+            ToolTipText = "Grass tiles laid out like the game: the grass model at every cell of each layer with density, lifted by the layer's height texture and coloured by its shadow texture (time-of-day variant of the current light)." };
+        vG.CheckedChanged += (_, _) => _view.ShowGrass = vG.Checked;
+        view.DropDownItems.AddRange(new ToolStripItem[] { vMode, new ToolStripSeparator(), vT, vS, vO, vG, vM, vP, vC, vSC });
 
         var build = new ToolStripMenuItem("&Build");
         build.DropDownItems.Add("&Validate Workspace", null, async (_, _) => await ValidateWorkspace());
@@ -424,6 +440,7 @@ public sealed class MainForm : Form
         startIn.DropDownItems.Add("(open a workspace first)");
         tools.DropDownItems.Add(startIn);
         tools.DropDownItems.Add("Rebuild Asset Index", null, async (_, _) => { if (_ws != null) await LoadIndex(true); });
+        tools.DropDownItems.Add("Import Source Map (.vmf)… (Hammer map → playable Showdown Town geometry)", null, async (_, _) => await ImportVmf(null, null));
         tools.DropDownItems.Add("Xbox 360 Photo Viewer (drop console photo packages)…", null, (_, _) => new Panels.PhotoViewerForm().Show(this));
         tools.DropDownItems.Add("Decompress an xcompress (0FF512ED) File…", null, (_, _) => DecompressFile());
         tools.DropDownItems.Add("Executable (default.xex) Info / Extract PE…", null, (_, _) => XexInfo());
@@ -497,12 +514,17 @@ public sealed class MainForm : Form
         _objMenu.Items.Add(new ToolStripLabel(o.Name) { Font = new Font(Font, FontStyle.Bold) });
         _objMenu.Items.Add("Focus Camera on Object", null, (_, _) => _view.Focus(o));
         _objMenu.Items.Add("Edit Properties", null, (_, _) => { _view.Select(o); _right.SelectedIndex = 1; });
+        if (o.Kind == SceneObjectKind.Marker && o.Marker!.AssetIds.Any(a => a >> 24 == 0x1F))
+            _objMenu.Items.Add("Dialogue…", null, (_, _) => { _view.Select(o); _right.SelectedTab = _dialogueTab; });
         _objMenu.Items.Add("Export Model as OBJ…", null, (_, _) => ExportObject(o, false));
         _objMenu.Items.Add("Export Model as OBJ (with world transform)…", null, (_, _) => ExportObject(o, true));
         _objMenu.Items.Add("Export Model as FBX…", null, (_, _) => ExportObject(o, false, fbx: true));
         _objMenu.Items.Add("Export Model as FBX (with world transform)…", null, (_, _) => ExportObject(o, true, fbx: true));
         _objMenu.Items.Add(new ToolStripSeparator());
         var reset = _objMenu.Items.Add("Reset Transform", null, (_, _) => ResetTransform(o)); reset.Enabled = o.Kind != SceneObjectKind.Terrain;
+        var sc = new ToolStripMenuItem("Show Collision of Selection") { Checked = _view.ShowSelectionCollision, ToolTipText = "Magenta wireframe of this object's own Havok collision (the aid_havok asset of each of its models), drawn on top." };
+        sc.Click += (_, _) => { _view.Select(o); SetSelectionCollision(!_view.ShowSelectionCollision); };
+        _objMenu.Items.Add(sc);
         _objMenu.Items.Add(new ToolStripMenuItem("Hide in Editor", null, (_, _) => { o.Visible = false; FillTree(); _view.Refresh3D(); }));
         _objMenu.Items.Add(new ToolStripSeparator());
         var imp = _objMenu.Items.Add("Import Model (replace geometry with OBJ/FBX)…", null, async (_, _) => await ImportModel(o));
@@ -646,7 +668,7 @@ public sealed class MainForm : Form
         }
         _assets.SetIndex(_index);
         _tags.Index = _index;
-        try { _text.SetWorkspace(_ws); _audio.SetWorkspace(_ws, _index); _video.SetWorkspace(_ws); } catch (Exception e) { Log("Media panels: " + e.Message); }
+        try { _text.SetWorkspace(_ws); _audio.SetWorkspace(_ws, _index); _video.SetWorkspace(_ws); _dialogue.SetWorkspace(_ws, _index); } catch (Exception e) { Log("Media panels: " + e.Message); }
         try { _parts.SetWorkspace(_ws, _index); } catch (Exception e) { Log("Part importer: " + e.Message); }
         try { _atmos.SetWorkspace(_ws, _index); } catch (Exception e) { Log("Atmosphere: " + e.Message); }
         Log($"Asset index: {_index.Entries.Count} assets in {_index.BundleSummary.Count} bundles; {_worlds.Items.Count} world scenes (double-click one to open).");
@@ -674,6 +696,46 @@ public sealed class MainForm : Form
             Log($"Exported {n} file(s) to {target} (see NBMOD_CHANGES.txt{(ws.Manifest.ExeMods.Count > 0 ? "; executable mods: xenia_patches\\patches — copy into Xenia's folder" : "")}).");
         }
         catch (Exception e) { Error("Export failed", e); }
+        finally { _busy = false; SetProgress(null, 0); }
+    }
+
+    /// <summary>Tools > Import Source Map: the options dialog (with the plan and size estimate), then the import
+    /// (NB.Core.SourceEngine.VmfImporter: scene folder in &lt;workspace&gt;\imports\&lt;map&gt;, built into Showdown Town), then
+    /// the world is reopened. <paramref name="script"/> (automation): imports with these options without the dialog.</summary>
+    async Task ImportVmf(string? file, NB.Core.SourceEngine.VmfImportOptions? script)
+    {
+        if (_ws == null || _index == null) { MessageBox.Show(this, "Open a workspace first.", "Import Source Map"); return; }
+        var ws = _ws; var idx = _index;
+        var o = script;
+        if (o == null)
+        {
+            NB.Core.Formats.CaffFile? world = null;
+            try { world = ws.LoadResident(NB.Core.SourceEngine.VmfImportOptions.ShowdownTown); } catch (Exception) { }
+            using var d = new Panels.VmfImportDialog(file, world);
+            if (d.ShowDialog(this) != DialogResult.OK) return;
+            file = d.MapPath; o = d.Options;
+        }
+        if (file == null) return;
+        if (_scene != null && _scene.Objects.Any(x => x.Dirty) && script == null &&
+            MessageBox.Show(this, "Unsaved world edits will be lost when Showdown Town is rebuilt. Continue?", "Import Source Map", MessageBoxButtons.OKCancel) != DialogResult.OK) return;
+        _busy = true; SetProgress("Importing " + Path.GetFileName(file) + "…", 0);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            var res = await Task.Run(() => NB.Core.SourceEngine.VmfImporter.Import(ws, idx, file, o, null,
+                new Progress<(string S, double P)>(p => BeginInvoke(() => SetProgress("Source map: " + p.S, p.P)))));
+            Log($"Source map {Path.GetFileName(file)} imported into Showdown Town in {sw.Elapsed.TotalSeconds:F0}s (scene folder {res.SceneFolder}):");
+            foreach (var l in NB.Core.SourceEngine.VmfImporter.Describe(res.Plan)) Log("  " + l);
+            var rep = res.Report!;
+            Log($"  world bundle {rep.BundleBytes / 1048576.0:F1} MB (original {res.Plan.BudgetBytes / 1048576.0:F1} MB); {rep.Models} models, {rep.Textures} textures, collision {rep.CollisionTriangles:N0} triangles, {rep.LightSetups} light setups");
+            foreach (var e in rep.Errors) Log("  ERROR " + e);
+            Log("  Play it: Build > Launch Workspace in Xenia, start a new game (Tools > Test Mode: Skip Intro starts it in Showdown Town). Undo: Build > Revert a Modified File (Bundle/4f/234cec).");
+            ws.ForgetCache(o.World);
+            var item = _worlds.Items.OfType<WorldItem>().FirstOrDefault(x => x.Entry.Bundle == o.World);
+            if (item != null) await OpenWorld(item.Entry);
+            if (rep.Errors.Count > 0) MessageBox.Show(this, $"{rep.Errors.Count} error(s) — see the log.", "Import Source Map", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+        catch (Exception e) { Error("Source map import failed", e); }
         finally { _busy = false; SetProgress(null, 0); }
     }
 
@@ -1307,9 +1369,19 @@ public sealed class MainForm : Form
         _tree.EndUpdate();
     }
 
+    TabPage _dialogueTab = null!;
+
     void OnSelection(SceneObject? o)
     {
         _transform.SetObject(o);
+        // a character (a marker placing an actor): its dialogue lines, and the Dialogue tab when the user wants it shown
+        if (o?.Marker != _dialogueFor?.Marker || o == null)
+        {
+            _dialogueFor = o;
+            _dialogue.Show(o?.Kind == SceneObjectKind.Marker ? _scene : null, o?.Kind == SceneObjectKind.Marker ? o : null, _index);
+            _dialogueTab.Text = _dialogue.LineCount > 0 ? $"Dialogue ({_dialogue.LineCount})" : "Dialogue";
+            if (_dialogue.AutoShow && _dialogue.LineCount > 0 && _right.SelectedIndex == 0) _right.SelectedTab = _dialogueTab;   // from Properties only (not Tag Editor / Live)
+        }
         _tags.ShowObject(_scene, o);
         _status.Text = o == null ? "" : $"{o.Name} — {AssetIds.DisplayName(o.ModelName)}{(o.ModelSource == "" || o.Model == null ? "" : o.Model.View == null ? $" ({o.ModelSource})" : $" (model {AssetIds.DisplayName(o.Model.View.Name).Replace("aid_model_banjox_", "")} from {o.ModelSource})")}  pos ({o.Transform.M41:F2}, {o.Transform.M42:F2}, {o.Transform.M43:F2})";
         if (o != null)
@@ -1321,6 +1393,8 @@ public sealed class MainForm : Form
         }
         UpdateTitle();
     }
+
+    SceneObject? _dialogueFor;
 
     static TreeNode? FindNode(TreeNodeCollection nodes, SceneObject o)
     {
@@ -1718,10 +1792,16 @@ public sealed class MainForm : Form
                     case "--scale":
                     {
                         float f = float.Parse(Next(), System.Globalization.CultureInfo.InvariantCulture);
-                        var o = _view.Selected!; var before = o.Transform; var t = before.Translation; var m = before; m.Translation = Vector3.Zero; m = Matrix4x4.CreateScale(f) * m; m.Translation = t; o.Transform = m;
+                        var o = _view.Selected!;
+                        if (SceneViewport.ScaleLocked(o)) { L($"script: {o.Name} is a marker: scale is locked"); break; }
+                        var before = o.Transform; var t = before.Translation; var m = before; m.Translation = Vector3.Zero; m = Matrix4x4.CreateScale(f) * m; m.Translation = t; o.Transform = m;
                         PushUndo(o, before, o.Transform); L($"script: scaled {o.Name} x{f}"); break;
                     }
                     case "--undo": await Undo(); L("script: undo"); break;
+                    case "--dialogue": L($"script: dialogue tab {(_right.SelectedTab == _dialogueTab ? "shown" : "hidden")}: " + _dialogue.ScriptState()); break;
+                    case "--dialogue-lang": _dialogue.ScriptLanguage(Next()); L("script: dialogue " + _dialogue.ScriptState()); break;
+                    case "--dialogue-edit": { var n = Next(); var t = Next(); L("script: dialogue " + _dialogue.ScriptEdit(n, t)); break; }
+                    case "--dialogue-save": _dialogue.ScriptSave(); L("script: dialogue saved"); break;
                     case "--redo": await Redo(); L("script: redo"); break;
                     case "--path-link":
                     {
@@ -1732,6 +1812,25 @@ public sealed class MainForm : Form
                     }
                     case "--save": SaveWorld(); L("script: saved"); break;
                     case "--build-scene": await BuildScene(Next()); L("script: scene built"); break;
+                    case "--import-vmf":
+                    {
+                        // --import-vmf <file.vmf> [game folder|-]: Tools > Import Source Map with default options
+                        var f = Next(); var g = i + 1 < a.Count && !a[i + 1].StartsWith("--") ? Next() : null;
+                        await ImportVmf(f, new NB.Core.SourceEngine.VmfImportOptions { GameFolder = g is null or "-" ? null : g });
+                        L("script: source map imported"); break;
+                    }
+                    case "--vmf-dialog-shot":
+                    {
+                        // --vmf-dialog-shot <file.vmf> <png>: the import dialog analysing a map, captured, then cancelled
+                        var f = Next(); var png = Next();
+                        NB.Core.Formats.CaffFile? world = null;
+                        try { world = _ws?.LoadResident(NB.Core.SourceEngine.VmfImportOptions.ShowdownTown); } catch (Exception) { }
+                        using var dlg = new Panels.VmfImportDialog(f, world);
+                        dlg.StartPosition = FormStartPosition.Manual; dlg.Location = new Point(Left + 60, Top + 60);
+                        dlg.Show(this); Application.DoEvents(); await Task.Delay(300); dlg.Analyse(); Application.DoEvents(); await Task.Delay(300); Application.DoEvents();
+                        using (var bmp = new Bitmap(dlg.Width, dlg.Height)) { dlg.DrawToBitmap(bmp, new Rectangle(0, 0, dlg.Width, dlg.Height)); bmp.Save(png); }
+                        dlg.Close(); L($"script: vmf dialog captured {png}"); break;
+                    }
                     case "--live-attach": _right.SelectedIndex = 2; _live.ScriptAttach(); L("script: live " + _live.StateText); break;
                     case "--live-tp":
                     {

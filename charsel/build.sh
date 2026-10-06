@@ -20,6 +20,6 @@ p = sys.argv[1]; m = json.load(open(p)); m['ExeMods'] = ['charsel']; json.dump(m
 EOF
 mkdir -p charsel/dist
 $CLI patch-build $WS ${CHARSEL_OUT:-charsel/dist/CharacterSelect.nbpatch} --name "Character Select" --author weighta \
-     --version 1.0 --category gameplay --ops charsel/ops.json --multiplayer world --tags "Characters,Showdown Town" \
+     --version 1.1 --category gameplay --ops charsel/ops.json --multiplayer world --tags "Characters,Showdown Town" \
      --desc "Play as someone else: Tuxedo or Robot Banjo, Kazooie, Mumbo, Grunty or L.O.G. everywhere, and in Showdown Town also Trophy Thomas, Klungo, Mr. Fit, Humba Wumba, Bottles, Boggy, King Jingaling, Jolly, Captain Blubber, Piddles or a Jinjo. Choose your character in NB Multiplayer (Play page); in co-op the other players see you as that character." \
      --extra mode=charsel

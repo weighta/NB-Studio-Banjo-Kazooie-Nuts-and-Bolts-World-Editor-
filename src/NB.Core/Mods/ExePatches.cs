@@ -810,6 +810,27 @@ public static class ExePatches
             new ExeWord(0x82D67064, 0x00000000, 0x4B802998, "b 0x825699FC  next block")
         });
 
+    public static readonly ExeMod SmallRoomMatchmaking = new(
+        "small-room-matchmaking",
+        "Xbox LIVE Ranked / Player Match start with 2 or more players",
+        "Matchmaking (Ranked Match, Player Match) ends in the session owner's STATE_WAITING_FOR_OTHERS (0x824FA280): the match " +
+        "starts when the players still missing (8 slots - players, match session object +0xE4 - +0xDC) are <= an allowance " +
+        "that is 0, then 2 after T = 40 s (set on entering the state, 0x824F406C), then 4 after T + 15 s; at T + 30 s the " +
+        "owner kills the session ('We've timed out waiting for others') and searches again. A room of 2-3 friends therefore " +
+        "never got a match (the lobby shows 'Opponent 1' and starts over every ~70 s). With this tweak T = 20 s and the " +
+        "allowance is 6: a lobby of 2+ starts 20 s after it was created (a full lobby still starts at once; a lone player " +
+        "never starts). The team-parity rule (odd missing count in team games) is unchanged. NB's Xenia build applies the " +
+        "same words itself in rooms (cvar nb_room_matchmaking, kernel/nb_overlay.cc ApplyTitleFixes).",
+        "Xenia 2026-10-05 (two instances, one NB room): Ranked Match Football and Player Match Short Circuit started with " +
+        "2 players and both loaded the same match (before: endless 'Opponent 1' lobby). Raising +0xE4 live had the same " +
+        "effect (Ranked Banjo-Brawl).",
+        new[]
+        {
+            new ExeWord(0x824F406C, 0x616B9C40, 0x616B4E20, "ori r11,r11,0x4E20: T = 20 s (was 40 s) in STATE_WAITING_FOR_OTHERS"),
+            new ExeWord(0x824FA4F8, 0x3BA00002, 0x3BA00006, "li r29,6: allowance after T (was 2) - 2 of 8 players start"),
+            new ExeWord(0x824FA434, 0x3BA00004, 0x3BA00006, "li r29,6: allowance after T + 15 s (was 4)"),
+        });
+
     public static readonly ExeMod CoopOnFoot = new(
         "coop-onfoot",
         "Co-op: other players on foot, wrench hits, Change Vehicle / garage indicators",
@@ -819,8 +840,8 @@ public static class ExePatches
         "marker set 0x00010000 despawned 0x823DEC80 and spawned again 0x823C6458: their drivers are re-created from their " +
         "objparams - character select); 4 driver slots at 0x82FBF700 drive " +
         "non-local Banjos every frame (transform 0x821FDC30, velocity, body state 0x8227B548: real walk / run / jump / wrench " +
-        "animations); 4 indicator slots at 0x82FBF800 draw any scene indicator (0x823F79C0: 0x6E vehicle edit, 0x79 Mumbo " +
-        "pad...) at any position. Hook 0x822AE340 logs the local player's wrench hits on other Banjos (0x82FBF540). Caves " +
+        "animations); 8 indicator slots at 0x82FBF800 draw any scene indicator (0x823F79C0: 0x6E vehicle edit, 0x79 Mumbo " +
+        "pad, LIVE player colours on the minimap...) at any position. Hook 0x822AE340 logs the local player's wrench hits on other Banjos (0x82FBF540). Caves " +
         "0x82D62CC8.., 0x82D40EA8.. Research: coop/research/onfoot/REPORT.txt.",
         "Xenia 2026-10-02 (two games): ejected puppet Banjos walk, run, jump and spin the wrench where the remote player is; " +
         "wrench hits knock the other player down natively; the vehicle-edit icon shows while the other player has Change Vehicle open.",
@@ -987,7 +1008,7 @@ public static class ExePatches
             new ExeWord(0x82D62F38, 0x00000000, 0x409AFF48, "loop"),
             new ExeWord(0x82D62F3C, 0x00000000, 0x3FC082FC, "lis r30,ind@ha"),
             new ExeWord(0x82D62F40, 0x00000000, 0x3BDEF800, "r30 = indicator slot 0x82FBF800"),
-            new ExeWord(0x82D62F44, 0x00000000, 0x3BA00004, "r29 = 4 slots"),
+            new ExeWord(0x82D62F44, 0x00000000, 0x3BA00008, "r29 = 8 slots (0x82FBF800..0x82FBF900: other players' minimap markers + icons)"),
             new ExeWord(0x82D62F48, 0x00000000, 0x809E0000, "type"),
             new ExeWord(0x82D62F4C, 0x00000000, 0x2B040000, "cmplwi cr6,r4,0"),
             new ExeWord(0x82D62F50, 0x00000000, 0x419A0018, "none"),
@@ -1243,6 +1264,195 @@ public static class ExePatches
             new ExeWord(0x8251CC24, 0x419A0028, 0x60000000, "always use the fixed block list (was: only in demo builds)"),
         });
 
+    // ---- mods agent 2026-10-05: begin ----
+    public static readonly ExeMod TownFlightThrust = new(
+        "town-flight-thrust",
+        "Propellers and jets push in Showdown Town (planes fly in town)",
+        "Propellers and jets are one block class (objDefId_vehicleBlockJetEngine). Its per-frame force routine 0x822717B0 skips applying the thrust when the vehicle belongs to Showdown Town (owner +0x58 == 1) and vehicle +0x624 is 0, which it is for the player's vehicles. The thrust is still computed (block +0x5A0, e.g. 2940 for a small propeller at full throttle) but never reaches the body, so in town planes only roll on their wheels. The town branch is skipped, so propellers and jets push exactly as in the Act worlds (thrust still fades out at the vehicle's top speed, block top-speed rule 0x8227C158). Combine with Change Vehicle in town.",
+        "Xenia 2026-10-05 (Humba Plane 1 from Humba's blueprints, Change Vehicle in town): placed at rest 60 units above the lake with RT held it accelerated to 17.8 u/s in the air and held its height (lift) with the mod; see MERGE.md for the unpatched comparison.",
+        new[]
+        {
+            new ExeWord(0x82271800, 0x409A0010, 0x48000010, "b 0x82271810"),
+        });
+
+    public static readonly ExeMod UnlimitedPartQuantity = new(
+        "unlimited-part-quantity",
+        "Unlimited part quantities (9999 of every part you own)",
+        "The parts inventory ([0x82FACA44], 0x40-byte entries) is rebuilt at every game load by 0x8251CDD8 from the unlocked part sets: each set entry adds its quantity (e.g. 4 small engines) to the part's owned/available counts (+0x24/+0x28, +0x30/+0x34). The quantity is replaced by 9999 and repeated sets set the count instead of adding to it, so every part you have unlocked can be used 9999 times in Mumbo's garage (no 4-engine or 2-torpedo limits). Locked parts stay locked (combine with All parts unlocked for every part). The 250 parts-per-vehicle limit is a separate tweak.",
+        "Xenia 2026-10-05: with the all-unlocked save every one of the 118 inventory entries reads 9999/9999/9999/9999 (tools/xenia/inventory.py); garage use: see MERGE.md.",
+        new[]
+        {
+            new ExeWord(0x8251CE5C, 0x83370000, 0x3B20270F, "li r25,9999"),
+            new ExeWord(0x8251CEAC, 0x7D08CA14, 0x7F28CB78, "mr r8,r25"),
+            new ExeWord(0x8251CEB0, 0x7D29CA14, 0x7F29CB78, "mr r9,r25"),
+        });
+
+    public static readonly ExeMod LogsChoiceUnlock = new(
+        "logs-choice-unlock",
+        "L.O.G.'s Choice: Choose Vehicle unlocks after the TT trophy",
+        "L.O.G.'s Choice challenges force the challenge's own vehicle: their challenge record has +0x88 = 0, which greys out Choose Vehicle and Create Vehicle on the challenge start screen (0x825C7FF8) and makes the challenge spawn the record's blueprint (+0x78) instead of the player's vehicle (0x82522FA0). Both reads go to a routine at 0x82D64000 that keeps +0x88 when it is set and otherwise returns whether the challenge's TT trophy is earned (the record's ..._BeatenCPlus game flag, +0x1D8, the same flag the start screen uses for the trophy icon). So the first time, and until the TT trophy is won with L.O.G.'s vehicle, the challenge is played as usual; afterwards Choose Vehicle (and Create Vehicle) stay unlocked for that challenge for the whole save. Single player only (multiplayer keeps its own rule).",
+        "See MERGE.md (Xenia test in Nutty Acres Act 1, game 1).",
+        new[]
+        {
+            new ExeWord(0x825C80A0, 0x838B0088, 0x4879BFE1, "bl 0x82d64080"),
+            new ExeWord(0x82522FFC, 0x816B0088, 0x488410B1, "bl 0x82d640ac"),
+            new ExeWord(0x8251FE28, 0x81730000, 0x488442DD, "bl 0x82d64104"),
+            new ExeWord(0x8251FF4C, 0x81730000, 0x488441B9, "bl 0x82d64104"),
+            new ExeWord(0x82D64000, 0x00000000, 0x2B030000, "cmplwi cr6,r3,0"),
+            new ExeWord(0x82D64004, 0x00000000, 0x419A006C, "beq cr6,no"),
+            new ExeWord(0x82D64008, 0x00000000, 0x80830088, "lwz r4,0x88(r3)  record +0x88: own vehicle allowed (0 = L.O.G.'s Choice)"),
+            new ExeWord(0x82D6400C, 0x00000000, 0x2F040000, "cmpwi cr6,r4,0"),
+            new ExeWord(0x82D64010, 0x00000000, 0x409A0068, "bne cr6,yes"),
+            new ExeWord(0x82D64014, 0x00000000, 0x7C0802A6, "mflr r0"),
+            new ExeWord(0x82D64018, 0x00000000, 0x9001FFF8, "stw r0,-0x8(r1)"),
+            new ExeWord(0x82D6401C, 0x00000000, 0x9421FFA0, "stwu r1,-0x60(r1)"),
+            new ExeWord(0x82D64020, 0x00000000, 0x388301D8, "addi r4,r3,0x1D8  '..._BeatenCPlus' flag name (TT trophy)"),
+            new ExeWord(0x82D64024, 0x00000000, 0x38600000, "li r3,0"),
+            new ExeWord(0x82D64028, 0x00000000, 0x4B5FFE59, "bl 0x82363E80  flag index by name (0 = unknown)"),
+            new ExeWord(0x82D6402C, 0x00000000, 0x2B030000, "cmplwi cr6,r3,0"),
+            new ExeWord(0x82D64030, 0x00000000, 0x419A002C, "beq cr6,unknown"),
+            new ExeWord(0x82D64034, 0x00000000, 0x3D6082FB, "lis r11,0x82FB"),
+            new ExeWord(0x82D64038, 0x00000000, 0x816BD9F0, "lwz r11,-0x2610(r11)  [0x82FAD9F0] game flags"),
+            new ExeWord(0x82D6403C, 0x00000000, 0x816B00F4, "lwz r11,0xF4(r11)"),
+            new ExeWord(0x82D64040, 0x00000000, 0x816B0008, "lwz r11,0x8(r11)  flag bit array"),
+            new ExeWord(0x82D64044, 0x00000000, 0x546AE8FE, "rlwinm r10,r3,29,3,31  index >> 3"),
+            new ExeWord(0x82D64048, 0x00000000, 0x7D6A58AE, "lbzx r11,r10,r11"),
+            new ExeWord(0x82D6404C, 0x00000000, 0x546A077E, "rlwinm r10,r3,0,29,31  index & 7"),
+            new ExeWord(0x82D64050, 0x00000000, 0x7D6B5430, "srw r11,r11,r10"),
+            new ExeWord(0x82D64054, 0x00000000, 0x556307FE, "rlwinm r3,r11,0,31,31  TT trophy earned?"),
+            new ExeWord(0x82D64058, 0x00000000, 0x48000008, "b out"),
+            new ExeWord(0x82D6405C, 0x00000000, 0x38600000, "li r3,0"),
+            new ExeWord(0x82D64060, 0x00000000, 0x38210060, "addi r1,r1,0x60"),
+            new ExeWord(0x82D64064, 0x00000000, 0x8001FFF8, "lwz r0,-0x8(r1)"),
+            new ExeWord(0x82D64068, 0x00000000, 0x7C0803A6, "mtlr r0"),
+            new ExeWord(0x82D6406C, 0x00000000, 0x4E800020, "blr"),
+            new ExeWord(0x82D64070, 0x00000000, 0x38600000, "li r3,0"),
+            new ExeWord(0x82D64074, 0x00000000, 0x4E800020, "blr"),
+            new ExeWord(0x82D64078, 0x00000000, 0x38600001, "li r3,1"),
+            new ExeWord(0x82D6407C, 0x00000000, 0x4E800020, "blr"),
+            new ExeWord(0x82D64080, 0x00000000, 0x7C0802A6, "mflr r0"),
+            new ExeWord(0x82D64084, 0x00000000, 0x9001FFF8, "stw r0,-0x8(r1)"),
+            new ExeWord(0x82D64088, 0x00000000, 0x9421FFA0, "stwu r1,-0x60(r1)"),
+            new ExeWord(0x82D6408C, 0x00000000, 0x7D635B78, "mr r3,r11"),
+            new ExeWord(0x82D64090, 0x00000000, 0x4BFFFF71, "bl allowed"),
+            new ExeWord(0x82D64094, 0x00000000, 0x7C7C1B78, "mr r28,r3"),
+            new ExeWord(0x82D64098, 0x00000000, 0x38210060, "addi r1,r1,0x60"),
+            new ExeWord(0x82D6409C, 0x00000000, 0x8001FFF8, "lwz r0,-0x8(r1)"),
+            new ExeWord(0x82D640A0, 0x00000000, 0x7C0803A6, "mtlr r0"),
+            new ExeWord(0x82D640A4, 0x00000000, 0x893D0080, "lbz r9,0x80(r29)  r9 = [0x82FAC650] (r29 = 0x82FAC5D0), as before the hook"),
+            new ExeWord(0x82D640A8, 0x00000000, 0x4E800020, "blr"),
+            new ExeWord(0x82D640AC, 0x00000000, 0x7C0802A6, "mflr r0"),
+            new ExeWord(0x82D640B0, 0x00000000, 0x9001FFF8, "stw r0,-0x8(r1)"),
+            new ExeWord(0x82D640B4, 0x00000000, 0x9421FFA0, "stwu r1,-0x60(r1)"),
+            new ExeWord(0x82D640B8, 0x00000000, 0x91610050, "stw r11,0x50(r1)"),
+            new ExeWord(0x82D640BC, 0x00000000, 0x7D635B78, "mr r3,r11"),
+            new ExeWord(0x82D640C0, 0x00000000, 0x4BFFFF41, "bl allowed"),
+            new ExeWord(0x82D640C4, 0x00000000, 0x7C6B1B78, "mr r11,r3"),
+            new ExeWord(0x82D640C8, 0x00000000, 0x2F030000, "cmpwi cr6,r3,0"),
+            new ExeWord(0x82D640CC, 0x00000000, 0x419A0028, "beq cr6,sret  still locked: L.O.G.'s vehicle (original)"),
+            new ExeWord(0x82D640D0, 0x00000000, 0x81410050, "lwz r10,0x50(r1)"),
+            new ExeWord(0x82D640D4, 0x00000000, 0x806A0088, "lwz r3,0x88(r10)"),
+            new ExeWord(0x82D640D8, 0x00000000, 0x2F030000, "cmpwi cr6,r3,0"),
+            new ExeWord(0x82D640DC, 0x00000000, 0x409A0018, "bne cr6,sret  ordinary challenge: unchanged (1)"),
+            new ExeWord(0x82D640E0, 0x00000000, 0x806A0078, "lwz r3,0x78(r10)  L.O.G.'s blueprint"),
+            new ExeWord(0x82D640E4, 0x00000000, 0x809F0000, "lwz r4,0(r31)"),
+            new ExeWord(0x82D640E8, 0x00000000, 0x7F032000, "cmpw cr6,r3,r4"),
+            new ExeWord(0x82D640EC, 0x00000000, 0x409A0008, "bne cr6,sret  a vehicle the player chose: spawn it like a chosen vehicle"),
+            new ExeWord(0x82D640F0, 0x00000000, 0x39600000, "li r11,0  L.O.G.'s own vehicle: spawn it the original way (no parts-inventory check)"),
+            new ExeWord(0x82D640F4, 0x00000000, 0x38210060, "addi r1,r1,0x60"),
+            new ExeWord(0x82D640F8, 0x00000000, 0x8001FFF8, "lwz r0,-0x8(r1)"),
+            new ExeWord(0x82D640FC, 0x00000000, 0x7C0803A6, "mtlr r0"),
+            new ExeWord(0x82D64100, 0x00000000, 0x4E800020, "blr"),
+            new ExeWord(0x82D64104, 0x00000000, 0x81730000, "lwz r11,0(r19)"),
+            new ExeWord(0x82D64108, 0x00000000, 0x2B0B0000, "cmplwi cr6,r11,0"),
+            new ExeWord(0x82D6410C, 0x00000000, 0x4D9A0020, "beqlr cr6  marker without blueprint: the game uses the chosen vehicle anyway"),
+            new ExeWord(0x82D64110, 0x00000000, 0x7C0802A6, "mflr r0"),
+            new ExeWord(0x82D64114, 0x00000000, 0x9001FFF8, "stw r0,-0x8(r1)"),
+            new ExeWord(0x82D64118, 0x00000000, 0x9421FFA0, "stwu r1,-0x60(r1)"),
+            new ExeWord(0x82D6411C, 0x00000000, 0x80770004, "lwz r3,0x4(r23)  challenge record (first type-1 entry of the challenge's list)"),
+            new ExeWord(0x82D64120, 0x00000000, 0x2B030000, "cmplwi cr6,r3,0"),
+            new ExeWord(0x82D64124, 0x00000000, 0x419A0058, "beq cr6,keep"),
+            new ExeWord(0x82D64128, 0x00000000, 0x81430000, "lwz r10,0(r3)"),
+            new ExeWord(0x82D6412C, 0x00000000, 0x2F0A0000, "cmpwi cr6,r10,0"),
+            new ExeWord(0x82D64130, 0x00000000, 0x419A004C, "beq cr6,keep"),
+            new ExeWord(0x82D64134, 0x00000000, 0x2F0A0001, "cmpwi cr6,r10,1"),
+            new ExeWord(0x82D64138, 0x00000000, 0x419A0010, "beq cr6,found"),
+            new ExeWord(0x82D6413C, 0x00000000, 0x8143000C, "lwz r10,0xC(r3)"),
+            new ExeWord(0x82D64140, 0x00000000, 0x7C6A1A14, "add r3,r10,r3"),
+            new ExeWord(0x82D64144, 0x00000000, 0x4BFFFFDC, "b walk"),
+            new ExeWord(0x82D64148, 0x00000000, 0x81430088, "lwz r10,0x88(r3)"),
+            new ExeWord(0x82D6414C, 0x00000000, 0x2F0A0000, "cmpwi cr6,r10,0"),
+            new ExeWord(0x82D64150, 0x00000000, 0x409A002C, "bne cr6,keep  not a L.O.G.'s Choice challenge"),
+            new ExeWord(0x82D64154, 0x00000000, 0x4BFFFEAD, "bl allowed  TT trophy earned?"),
+            new ExeWord(0x82D64158, 0x00000000, 0x2F030000, "cmpwi cr6,r3,0"),
+            new ExeWord(0x82D6415C, 0x00000000, 0x419A0020, "beq cr6,keep"),
+            new ExeWord(0x82D64160, 0x00000000, 0x1D7A0060, "mulli r11,r26,96"),
+            new ExeWord(0x82D64164, 0x00000000, 0x7D6BBA14, "add r11,r11,r23"),
+            new ExeWord(0x82D64168, 0x00000000, 0x396B05D0, "addi r11,r11,0x5D0  the player's chosen vehicle (Choose Vehicle)"),
+            new ExeWord(0x82D6416C, 0x00000000, 0x814B0000, "lwz r10,0(r11)"),
+            new ExeWord(0x82D64170, 0x00000000, 0x2B0A0000, "cmplwi cr6,r10,0"),
+            new ExeWord(0x82D64174, 0x00000000, 0x419A0008, "beq cr6,keep"),
+            new ExeWord(0x82D64178, 0x00000000, 0x7D735B78, "mr r19,r11  spawn the chosen vehicle instead of the marker's"),
+            new ExeWord(0x82D6417C, 0x00000000, 0x81730000, "lwz r11,0(r19)"),
+            new ExeWord(0x82D64180, 0x00000000, 0x38210060, "addi r1,r1,0x60"),
+            new ExeWord(0x82D64184, 0x00000000, 0x8001FFF8, "lwz r0,-0x8(r1)"),
+            new ExeWord(0x82D64188, 0x00000000, 0x7C0803A6, "mtlr r0"),
+            new ExeWord(0x82D6418C, 0x00000000, 0x4E800020, "blr"),
+        });
+
+    public static readonly ExeMod VehicleSpinLimit = new(
+        "vehicle-spin-limit",
+        "Stable fast vehicles (spin limit 6.85 rad/s)",
+        "Every vehicle is one Havok rigid body whose motion state allows up to 202.8 rad/s of angular velocity (hkUFloat8 0x7F at body +0x110 +0x7D). With strong engines (Super engine) the wheel contact forces at high speed (kerbs, ramps, landings, other vehicles) give the body impulses that start it spinning and hopping; in the air nothing slows a spin down except the small angular damping. The wheel force routine 0x82231A80 now sets that limit to 6.85 rad/s (0x4C, a little over one turn per second) on the vehicle body every frame, so vehicles can still roll, flip and turn sharply but no longer whirl. Havok clamps the angular velocity itself. Vehicles without wheels are not changed.",
+        "Xenia 2026-10-05: see MERGE.md (body byte read back 0x4C each frame; a 12 rad/s spin written into the body is clamped to <= 6.85 rad/s in the next frame).",
+        new[]
+        {
+            new ExeWord(0x82231AAC, 0x815C07C0, 0x48B326F5, "bl 0x82d641a0"),
+            new ExeWord(0x82D641A0, 0x00000000, 0x815C07C0, "lwz r10,0x7C0(r28)  the vehicle's rigid body (the replaced instruction)"),
+            new ExeWord(0x82D641A4, 0x00000000, 0x2B0A0000, "cmplwi cr6,r10,0"),
+            new ExeWord(0x82D641A8, 0x00000000, 0x4D9A0020, "beqlr cr6"),
+            new ExeWord(0x82D641AC, 0x00000000, 0x3800004C, "li r0,0x4C  hkUFloat8 0x4C = 6.85 rad/s (retail 0x7F = 202.8)"),
+            new ExeWord(0x82D641B0, 0x00000000, 0x980A018D, "stb r0,0x18D(r10)  body +0x110 motion state +0x7D m_maxAngularVelocity"),
+            new ExeWord(0x82D641B4, 0x00000000, 0x4E800020, "blr"),
+        });
+
+    public static readonly ExeMod TownNoCeiling = new(
+        "town-no-ceiling",
+        "No ceiling: fly as high as you want (Showdown Town lid removed, world top raised)",
+        "Two parts. (1) Showdown Town's world collision (aid_havok_banjox_background_showdowntown_default, bundle 234cec) has an invisible lid over the town: 24 triangles, flat at y 106.8 over most of the town and rising like a tent to y 214 above the centre; helicopters and planes hit it and slide up to its peak. The tweak carries a world edit (asset-patch op) that shrinks those 24 triangles to a speck at the peak (only when the asset is the retail one, so a replaced town collision is never damaged). (2) The world box top (the reset ceiling) is level collision top + 100; the box builder 0x822EB698 now adds another 1948 on Y max only (top + 2048; the bottom and X/Z are unchanged, so it combines with world-bounds-2048), so flying high no longer resets Banjo in any world.",
+        "Xenia 2026-10-05: see MERGE.md.",
+        new[]
+        {
+            new ExeWord(0x822EB938, 0xD1A300D4, 0x48A78888, "b 0x82d641c0"),
+            new ExeWord(0x82D641C0, 0x00000000, 0x3D0082D6, "lis r8,0x82D6"),
+            new ExeWord(0x82D641C4, 0x00000000, 0xC18841D4, "lfs f12,0x41D4(r8)  1948.0 (below)"),
+            new ExeWord(0x82D641C8, 0x00000000, 0xEDAD602A, "fadds f13,f13,f12  max.y + 100 + 1948"),
+            new ExeWord(0x82D641CC, 0x00000000, 0xD1A300D4, "stfs f13,0xD4(r3)  W+0x624 world box max.y (the replaced instruction, raised)"),
+            new ExeWord(0x82D641D0, 0x00000000, 0x4B58776C, "b 0x822EB93C"),
+            new ExeWord(0x82D641D4, 0x00000000, 0x44F38000, ".float 1948.0"),
+        });
+
+    /// <summary>World edit of the "No ceiling" tweak: the Showdown Town lid triangles shrunk to a speck at their peak (vertices 41100..41116 of the town collision mesh, apex 41113 kept; guarded by the retail values).</summary>
+    public static readonly IReadOnlyList<IReadOnlyList<string>> TownNoCeilingOps = new[]
+    {
+        new[] { "asset-patch", "234cec", "aid_havok_banjox_background_showdowntown_default",
+            "DB700=C3E41B59:BFB13BFA", "DB704=42D5B2B2:4356011B", "DB708=441BD0E6:43196C32", "DB70C=C3E41B59:BFB13BFA", "DB710=42D5B2B2:4356011B", "DB714=43214682:43193110",
+            "DB718=3EC61FD5:BF940309", "DB71C=42D5B2B2:4356011B", "DB720=441BD0E6:43196C32", "DB724=C39C8FCE:BFA81397", "DB728=42D5B2B2:4356011B", "DB72C=431D3B44:4319308C",
+            "DB730=BEC52859:BF940FAF", "DB734=42D5B2B2:4356011B", "DB738=43EA3B59:43195862", "DB73C=43A5727C:BF7DB800", "DB740=42D5B2B2:4356011B", "DB744=441BD0E6:43196C32",
+            "DB748=43A5727C:BF7DB800", "DB74C=42D5B2B2:4356011B", "DB750=431D8D5E:43193096", "DB754=438220C7:BF836157", "DB758=42D5B2B2:4356011B", "DB75C=431B5EB3:4319304F",
+            "DB760=C3E41B59:BFB13BFA", "DB764=42D5B2B2:4356011B", "DB768=C402996D:4318D98D", "DB76C=BEC52859:BF940FAF", "DB770=42D5B2B2:4356011B", "DB774=C34534D5:4319032D",
+            "DB778=3EC61FD5:BF940309", "DB77C=42D5B2B2:4356011B", "DB780=C402996D:4318D98D", "DB784=43A5727C:BF7DB800", "DB788=42D5B2B2:4356011B", "DB78C=C402996D:4318D98D",
+            "DB790=BF941C55:BF941C55", "DB794=43082BDB:435604DC", "DB798=43C28F01:43194E3A", "DB7A8=43439EB2:BF878456", "DB7AC=43082BDB:435604DC", "DB7B0=43193007:43193007",
+            "DB7B4=BF941C55:BF941C55", "DB7B8=43082BDB:435604DC", "DB7BC=C2A57BE7:431911D4", "DB7C0=C345EF24:BFA0B454", "DB7C4=43082BDB:435604DC", "DB7C8=43193007:43193007" },
+    };
+
+    /// <summary>World edits that belong to a tweak (by mod id): NB Multiplayer puts them into the tweak mod (Ops).</summary>
+    public static IReadOnlyDictionary<string, IReadOnlyList<IReadOnlyList<string>>> TweakOps => new Dictionary<string, IReadOnlyList<IReadOnlyList<string>>>
+    {
+        [TownNoCeiling.Id] = TownNoCeilingOps,
+    };
+
+    // ---- mods agent 2026-10-05: end ----
     /// <summary>
     /// Vehicle part limit P (251..2000) — the same patch as <see cref="VehiclePartLimit400"/> with P in the three limit
     /// compares, the preview loader clamp, and the two stack frames that hold one u32 per block grown by align16(4·(P−250))
@@ -1341,11 +1551,16 @@ public static class ExePatches
         (PhotoCameraUnlimited, "Free photo camera", "The photo-mode camera can fly anywhere."),
         (DeveloperAllParts, "All parts unlocked", "A new game starts with every vehicle part unlocked (the developers' part list)."),
         (DeveloperMainMenu, "Developer main menu", "The title screen opens the developers' hidden main menu."),
+        (UnlimitedPartQuantity, "Unlimited part quantities", "9999 of every part you own in Mumbo's garage (no more 4-engine limit)."),
+        (TownFlightThrust, "Planes fly in town", "Propellers and jets push in Showdown Town like in the other worlds."),
+        (TownNoCeiling, "No ceiling", "Removes Showdown Town's invisible roof and lets you fly far higher in every world without a reset."),
+        (VehicleSpinLimit, "Stable fast vehicles", "Vehicles with strong engines no longer spin wildly in the air (spin speed limit)."),
+        (LogsChoiceUnlock, "L.O.G.'s Choice unlock", "After you win the TT trophy of a L.O.G.'s Choice game, Choose Vehicle unlocks there."),
     };
 
     public static string FamilyOf(string id) => id.StartsWith("vehicle-part-limit") ? "vehicle-part-limit" : id.StartsWith("garage-build-area") ? "garage-build-area" : "";
 
-    public static readonly IReadOnlyList<ExeMod> All = new[] { ChangeVehicleInTown, TownVehiclesNormalRules, AiSpringTimer, TownAiRestartOnChangeVehicle, DeveloperMainMenu, DeveloperAllParts, WorldBounds2048, NoEscapeReset, TownNpcPathGuard, CoopRemoteDamage, CoopSharedTime, CoopWorldRuns, CoopRemoteVehicle, CoopProjectiles, CoopOnFoot, TownGarageReturnVehicle, UnknownPartsSafe, CharacterSelect, SnowFollowsCamera, DrawDistanceX4, PhotoCameraUnlimited, PauseOpensPhotos, GarageBuildArea31, VehiclePartLimit400 };
+    public static readonly IReadOnlyList<ExeMod> All = new[] { ChangeVehicleInTown, TownVehiclesNormalRules, AiSpringTimer, TownAiRestartOnChangeVehicle, DeveloperMainMenu, DeveloperAllParts, WorldBounds2048, NoEscapeReset, TownNpcPathGuard, CoopRemoteDamage, CoopSharedTime, CoopWorldRuns, CoopRemoteVehicle, CoopProjectiles, CoopOnFoot, TownGarageReturnVehicle, UnknownPartsSafe, SmallRoomMatchmaking, CharacterSelect, SnowFollowsCamera, DrawDistanceX4, PhotoCameraUnlimited, PauseOpensPhotos, GarageBuildArea31, VehiclePartLimit400, TownFlightThrust, UnlimitedPartQuantity, LogsChoiceUnlock, VehicleSpinLimit, TownNoCeiling };
 
     /// <summary>Checks that every patched word currently holds its original value in the decrypted image.</summary>
     public static List<string> Check(byte[] image, uint imageBase, ExeMod mod)

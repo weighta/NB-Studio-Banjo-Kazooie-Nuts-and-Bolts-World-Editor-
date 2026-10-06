@@ -103,8 +103,8 @@ public sealed class TextPanel : UserControl
         var check = LocText.Parse(part.Data);
         if (check.Strings.Count != _text.Strings.Count) throw new InvalidDataException("text table failed validation");
         var bytes = _caff.Write();
-        File.WriteAllBytes(_path, bytes);
-        _ws.Log(Path.GetRelativePath(_ws.Game.Root, _path), "edited text table " + ((TableItem)_table.SelectedItem!).Name);
+        // through the workspace: history copy, and a hard link to the original game is replaced, not written through
+        _ws.SaveFile(_path, bytes, "edited text table " + ((TableItem)_table.SelectedItem!).Name);
         _save.Enabled = false;
         Log?.Invoke($"Saved text table → {Path.GetRelativePath(_ws.Game.Root, _path)} ({bytes.Length:N0} bytes)");
     }

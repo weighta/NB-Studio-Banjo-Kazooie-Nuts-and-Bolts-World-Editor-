@@ -114,7 +114,7 @@ public static class ModelImporter
         // instanced draws (index = vertex*4 + instance) would draw imported geometry with random instance transforms:
         // with a material mapping their buffers are simply left out (hidden unless kept); otherwise refuse
         var instancedVbs = m.Draws.Where(x => x.Instanced).Select(x => x.VbRecord).ToHashSet();
-        if (instancedVbs.Count > 0)
+        if (instancedVbs.Count > 0 && meshes.Count > 0)   // no meshes at all: every draw (instanced ones too) draws nothing
         {
             bool mapped = meshes.Any(x => m.Draws.Any(d => ObjExporter.DiffuseTexture(d) is string t && string.Equals(ObjExporter.TextureFileStem(t), x.Name, StringComparison.OrdinalIgnoreCase)));
             if (!mapped) throw new InvalidDataException("this model uses instanced draws (index = vertex*4 + instance); imported geometry would be drawn with random instance transforms. Use a model without instanced draws as the target/template (see NB.Cli model-survey: 'instanced 0'), or import by material.");
@@ -203,13 +203,15 @@ public static class ModelImporter
             }
             // one vertex buffer holding every distinct mesh of this group, each draw indexing its own slice
             var distinct = drawMesh.Where(x => x != null).Distinct().ToList();
-            var combined = new ImportMesh { Name = string.Join("+", distinct.Select(x => x!.Name).Distinct()), Normals = new(), UVs = distinct.All(x => x!.UVs != null) ? new() : null };
+            var combined = new ImportMesh { Name = string.Join("+", distinct.Select(x => x!.Name).Distinct()), Normals = new(), UVs = distinct.All(x => x!.UVs != null) ? new() : null,
+                UVs2 = distinct.All(x => x!.UVs2 != null) ? new() : null };
             var baseOf = new Dictionary<ImportMesh, int>();
             foreach (var x in distinct)
             {
                 baseOf[x!] = combined.Positions.Count;
                 combined.Positions.AddRange(x!.Positions); combined.Normals.AddRange(x.Normals!);
                 if (combined.UVs != null) combined.UVs.AddRange(x.UVs!);
+                if (combined.UVs2 != null) combined.UVs2.AddRange(x.UVs2!);
                 combined.Triangles.AddRange(x.Triangles.Select(t => t + baseOf[x]));
             }
             if (combined.Positions.Count > 0xFFFF) throw new InvalidDataException($"vertex buffer {gi} would need {combined.Positions.Count} vertices; at most 65535 fit 16-bit indices");
@@ -267,13 +269,13 @@ public static class ModelImporter
         var res = new List<ImportMesh>();
         foreach (var tl in tiles)
         {
-            var sub = new ImportMesh { Name = m.Name, Normals = m.Normals != null ? new() : null, UVs = m.UVs != null ? new() : null };
+            var sub = new ImportMesh { Name = m.Name, Normals = m.Normals != null ? new() : null, UVs = m.UVs != null ? new() : null, UVs2 = m.UVs2 != null ? new() : null };
             foreach (var t in tl) for (int k = 0; k < 3; k++) sub.Triangles.Add(m.Triangles[3 * t + k]);
             // re-index the tile's vertices
             var map = new Dictionary<int, int>(); var tri = new List<int>();
             foreach (var v in sub.Triangles)
             {
-                if (!map.TryGetValue(v, out int nv)) { nv = sub.Positions.Count; map[v] = nv; sub.Positions.Add(m.Positions[v]); sub.Normals?.Add(m.Normals![v]); sub.UVs?.Add(m.UVs![v]); }
+                if (!map.TryGetValue(v, out int nv)) { nv = sub.Positions.Count; map[v] = nv; sub.Positions.Add(m.Positions[v]); sub.Normals?.Add(m.Normals![v]); sub.UVs?.Add(m.UVs![v]); sub.UVs2?.Add(m.UVs2![v]); }
                 tri.Add(nv);
             }
             sub.Triangles = tri;
@@ -293,7 +295,7 @@ public static class ModelImporter
         {
             if (cur == null || map!.Count + 3 > maxVerts)
             {
-                cur = new ImportMesh { Name = m.Name, Normals = m.Normals != null ? new() : null, UVs = m.UVs != null ? new() : null };
+                cur = new ImportMesh { Name = m.Name, Normals = m.Normals != null ? new() : null, UVs = m.UVs != null ? new() : null, UVs2 = m.UVs2 != null ? new() : null };
                 map = new(); parts.Add(cur);
             }
             for (int k = 0; k < 3; k++)
@@ -305,6 +307,7 @@ public static class ModelImporter
                     cur.Positions.Add(m.Positions[v]);
                     cur.Normals?.Add(m.Normals![v]);
                     cur.UVs?.Add(m.UVs![v]);
+                    cur.UVs2?.Add(m.UVs2![v]);
                 }
                 cur.Triangles.Add(nv);
             }
@@ -316,12 +319,13 @@ public static class ModelImporter
     static ImportMesh Merge(List<ImportMesh> list)
     {
         if (list.Count == 1) return list[0];
-        var r = new ImportMesh { Name = list[0].Name, Normals = new(), UVs = list.All(x => x.UVs != null) ? new() : null };
+        var r = new ImportMesh { Name = list[0].Name, Normals = new(), UVs = list.All(x => x.UVs != null) ? new() : null, UVs2 = list.All(x => x.UVs2 != null) ? new() : null };
         foreach (var x in list)
         {
             int b = r.Positions.Count;
             r.Positions.AddRange(x.Positions); r.Normals.AddRange(x.Normals ?? ObjReader.ComputeNormals(x));
             if (r.UVs != null) r.UVs.AddRange(x.UVs!);
+            if (r.UVs2 != null) r.UVs2.AddRange(x.UVs2!);
             r.Triangles.AddRange(x.Triangles.Select(t => t + b));
         }
         return r;
@@ -373,7 +377,12 @@ public static class ModelImporter
             Store(outp, dst + pos.Offset, pos, new Vector4(p, 1));
             if (nrm != null && mesh.Normals != null) Store(outp, dst + nrm.Offset, nrm, new Vector4(mesh.Normals[i], ModelAsset.Fetch(outp, dst + nrm.Offset, nrm).W));
             if (tan != null && tangents != null) Store(outp, dst + tan.Offset, tan, new Vector4(tangents[i], ModelAsset.Fetch(outp, dst + tan.Offset, tan).W));
-            foreach (var ue in uvs) Store(outp, dst + ue.Offset, ue, new Vector4(mesh.UVs != null ? mesh.UVs[i] : Vector2.Zero, 0, 1));
+            for (int u = 0; u < uvs.Count; u++)
+            {
+                // a second UV set (lightmap / AO coordinates) goes to the second float2 channel when the mesh has one
+                var t = u == 1 && mesh.UVs2 != null ? mesh.UVs2[i] : mesh.UVs != null ? mesh.UVs[i] : Vector2.Zero;
+                Store(outp, dst + uvs[u].Offset, uvs[u], new Vector4(t, 0, 1));
+            }
             for (int c = 0; c < colEls.Count; c++) Array.Copy(colAvg[c], 0, outp, dst + colEls[c].Offset, 4);
         }
         if (uv != null && mesh.UVs == null) notes.Add($"'{mesh.Name}': no texture coordinates in the OBJ (UVs set to 0)");

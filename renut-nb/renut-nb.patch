@@ -1,6 +1,6 @@
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -20,6 +20,10 @@
+@@ -20,6 +20,11 @@
  	src/renut_engine/perf/frame_stats.cpp
  	src/renut_engine/game/frontend_debug_menu.cpp
  	src/renut_engine/app/crash_dump.cpp
@@ -8,6 +8,7 @@
 +    src/nb/nbpatch.cpp
 +    src/nb/nb_remote_pad.cpp
 +    src/nb/nb_fixes.cpp
++    src/nb/nb_window.cpp
  )
  
  if(WIN32)
@@ -24,26 +25,46 @@
  "config/renut_gpu_funcs.toml"
 --- a/src/renut_app.h
 +++ b/src/renut_app.h
-@@ -7,6 +7,7 @@
+@@ -7,6 +7,10 @@
  #include "renut_engine/gpu/overlay/app_integration.h"
  #include "renut_engine/app/crash_dump.h"
  #include "renut_engine/app/app_paths.h"
 +#include "nb/nb_remote_pad.h"
++#include "nb/nb_window.h"
++#include "nb/nb_fixes.h"
++#include <rex/ui/keybinds.h>
  #include <rex/ui/window.h>
  //#include <rex/discord_rpc.h>
  #include <functional>
-@@ -53,6 +54,11 @@
+@@ -53,6 +57,13 @@
      //     rex::cvar::LoadConfig("renut.toml"); 
      // }
  
-+    // NB: the virtual controller of NB's tools / NB Multiplayer (--nb_remote_input_port).
++    // NB: the virtual controller of NB's tools / NB Multiplayer (--nb_remote_input_port) and the game fixes that
++    // need the runtime (src/nb/nb_fixes.cpp).
 +    void OnPostSetup() override {
 +        nb::InstallRemotePad(runtime(), window());
++        nb::InstallFixes(runtime());
 +    }
 +
      // reNut's dialogs live in its own overlay (gpu/overlay_ui.h); the SDK's
      // drawer keeps only its own menus.
      void OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) override {
+@@ -75,7 +86,14 @@
+     // Native renderer: the SDK runs without its GPU backend and the overlay is
+     // drawn by renut::gpu.
+     void OnPreSetup(rex::RuntimeConfig& config) override {
++        nb::PreferWindowedStart();   // NB: start in a window unless fullscreen was asked for
+         renut::gpu::ConfigureRuntime(config);
++    }
++
++    // NB: F11 / Alt+Enter toggle full screen; every other key goes to the SDK's key binds as before.
++    void OnKeyDown(rex::ui::KeyEvent& e) override {
++        if (nb::HandleWindowKeys(window(), e)) return;
++        rex::ui::ProcessKeyEvent(e);
+     }
+ 
+     std::unique_ptr<rex::ui::ImmediateDrawer> OnCreateImmediateDrawer() override {
 --- a/src/renut_engine/ui/path_setup_wizard.h
 +++ b/src/renut_engine/ui/path_setup_wizard.h
 @@ -1,5 +1,6 @@
@@ -53,10 +74,11 @@
  #include "imgui.h"
  #include "renut_engine/app/path_config_store.h"
  #include "renut_engine/gpu/overlay/overlay_ui.h"
-@@ -27,6 +28,18 @@
+@@ -26,6 +27,18 @@
+         CompletionFn on_complete)
      {
          app_name_ = app_name;
- 
++
 +        // NB Multiplayer (and other launchers) pass the folders on the command line
 +        // (--game_data_root, --user_data_root): use them as they are, without the
 +        // wizard or the saved file, so every edition can have its own game folder.
@@ -68,7 +90,263 @@
 +            on_complete(cfg);
 +            return true;
 +        }
-+
+ 
          // First-run check — if a valid saved config exists, skip the wizard entirely
          if (auto saved = PathConfigStore::TryLoad(app_name)) {
-             rex::PathConfig cfg;
+--- a/src/renut_engine/gpu/d3d/hooks/draw.cpp
++++ b/src/renut_engine/gpu/d3d/hooks/draw.cpp
+@@ -34,6 +34,7 @@
+ #include "renut_engine/gpu/backend/queued.h"
+ #include "renut_engine/gpu/backend/render_thread.h"
+ #include "renut_engine/gpu/render/surfaces.h"
++#include "renut_engine/gpu/render/textures.h"
+ #include "renut_engine/gpu/backend/video.h"
+ 
+ using namespace renut::gpu;
+@@ -259,6 +260,9 @@
+   } else if (Active()) {
+     QueueResolve(device, flags, rect, dest_texture, dest_x, dest_y, dest_level, dest_slice,
+                  has_color ? color : nullptr, clear_z, clear_stencil);
++    // NB: a color resolve into level 0 the CPU may lock and read (Take Photo).
++    if (dest_texture && (flags & 7) != 4 && dest_level == 0 && dest_slice == 0)
++      NoteResolveForReadback(dest_texture);
+   }
+   native::Resolve(native::DeviceAt(device), flags, dest_texture, clear_z, clear_stencil,
+                   parameters);
+--- a/src/renut_engine/gpu/d3d/hooks/resource.cpp
++++ b/src/renut_engine/gpu/d3d/hooks/resource.cpp
+@@ -692,6 +692,52 @@
+   return LockResource(buffer, 0, base, 0, base, LoadU32(buffer + 0x1C), flags | 2);
+ }
+ 
++// NB: resolve destinations the CPU reads. The host renderer keeps what a Resolve writes on the GPU, so guest memory
++// under a resolve destination holds no picture. N&B's Take Photo (0x82535F20) resolves the back buffer into a
++// temporary 8_8_8_8 texture, locks it (D3D::LockSurface) and untiles it on the CPU into the photo it encodes as JPEG
++// and shows as the preview, which came out black. A Resolve notes its destination (NoteResolveForReadback); the next
++// lock of its level 0 reads the host texture back and writes it to guest memory as the GPU would have: components in
++// the destination's order (X and Z exchanged where the guest resolve stores them so), its endian swap and tiling.
++std::mutex g_readback_mutex;
++std::unordered_set<u32> g_readback_pages;  // base pages of 8_8_8_8 destinations resolved since their last lock
++
++bool TakeResolveForReadback(u32 base_page) {
++  std::lock_guard lock(g_readback_mutex);
++  return g_readback_pages.erase(base_page) != 0;
++}
++
++void ReadBackResolve(u32 texture, u32 address, u32 row_pitch) {
++  std::vector<uint8_t> rgba;
++  uint32_t width = 0, height = 0;
++  bool swap_red_blue = false, ok = false;
++  render_thread::Queue([&] { ok = ReadResolveTextureLocked(texture, rgba, width, height, swap_red_blue); });
++  render_thread::Drain();
++  const auto *header = GuestPtr<const d3d::BaseTexture>(texture);
++  u8 *base = GuestPtr<u8>(address);
++  if (!ok || !header || !base)
++    return;
++  const TextureFetch fetch = TextureFetch::FromHeader(header->Format);
++  const TextureLevelLayout layout = GetTextureLevelLayout(fetch, 0);
++  const bool tiled = fetch.Tiled();
++  const u32 endian = fetch.Endian();
++  for (uint32_t y = 0; y < height; ++y) {
++    for (uint32_t x = 0; x < width; ++x) {
++      const uint8_t *t = &rgba[(size_t(y) * width + x) * 4];
++      uint8_t texel[4] = {t[0], t[1], t[2], t[3]};
++      if (swap_red_blue)
++        std::swap(texel[0], texel[2]);
++      SwapEndian(endian, texel, texel, 4);
++      const size_t offset = tiled ? TiledOffset2D(x, y, layout.pitch_texels, 2)
++                                  : size_t(y) * row_pitch + size_t(x) * 4;
++      std::memcpy(base + offset, texel, 4);
++    }
++  }
++  static std::atomic<uint32_t> count{0};
++  const uint32_t n = count.fetch_add(1) + 1;
++  if (n <= 4 || n % 256 == 0)
++    RGPU_INFO("NB: resolve destination {:08X} ({}x{}) read back for the CPU ({} so far)", texture, width, height, n);
++}
++
+ // D3D::LockSurface(D3DBaseTexture*, 0, ArrayIndex, Level, Flags, DWORD *pAddress,
+ //     DWORD *pRowPitch, DWORD *pSliceBytes, DWORD *pTailOffset) [0x82655838]:
+ // the row pitch reported is per row of blocks.
+@@ -701,6 +747,8 @@
+   const u32 dword1 = LoadU32(texture + 0x20);
+   u32 block_width, block_height;
+   BlockSize(dword1 & 0x3F, block_width, block_height);
++  if (level == 0 && slice == 0 && TakeResolveForReadback(dword1 & ~0xFFFu))
++    ReadBackResolve(texture, sub.address, sub.row_pitch);
+   row_pitch = sub.row_pitch * block_height;
+   slice_bytes = sub.slice_bytes;
+   tail_offset = sub.tail_offset;
+@@ -1726,3 +1774,16 @@
+ REX_HOOK(D3D_BlockSizeOfGpuFormat, BlockSizeOfGpuFormat_hook);
+ REX_HOOK(D3D_AlignTextureDimensions, AlignTextureDimensions_hook);
+ REX_HOOK(D3D_GetMipTailLevelOffsetCoords, GetMipTailLevelOffsetCoords_hook);
++
++namespace renut::gpu {
++
++// NB: see ReadBackResolve.
++void NoteResolveForReadback(u32 dest_texture) {
++  const u32 dword1 = LoadU32(dest_texture + 0x20);
++  if ((dword1 & 0x3F) != u32(GpuTextureFormat::Fmt8_8_8_8))
++    return;
++  std::lock_guard lock(g_readback_mutex);
++  g_readback_pages.insert(dword1 & ~0xFFFu);
++}
++
++} // namespace renut::gpu
+--- a/src/renut_engine/gpu/render/textures.cpp
++++ b/src/renut_engine/gpu/render/textures.cpp
+@@ -18,6 +18,7 @@
+ #include "renut_engine/gpu/guest/guest_memory.h"
+ #include "renut_engine/gpu/log.h"
+ #include "renut_engine/gpu/backend/video.h"
++#include "renut_engine/gpu/backend/video_internal.h"
+ 
+ namespace renut::gpu {
+ 
+@@ -1256,4 +1257,125 @@
+ 
+ } // namespace
+ 
++// NB: a resolve destination's level 0 read back from the GPU as 8-bit RGBA texels of its guest size (see textures.h).
++namespace {
++
++float HalfToFloat(uint16_t h) {
++  const uint32_t sign = uint32_t(h >> 15) << 31, exp = (h >> 10) & 0x1F, mant = h & 0x3FF;
++  uint32_t bits;
++  if (exp == 0)
++    return std::ldexp(float(mant), -24) * (sign ? -1.0f : 1.0f);
++  if (exp == 31)
++    bits = sign | 0x7F800000u | (mant << 13);
++  else
++    bits = sign | ((exp + 112) << 23) | (mant << 13);
++  return std::bit_cast<float>(bits);
++}
++
++uint8_t UnitToByte(float v) {
++  if (!(v > 0.0f))
++    return 0;
++  if (v >= 1.0f)
++    return 255;
++  return uint8_t(v * 255.0f + 0.5f);
++}
++
++// One host texel at 'p' as R, G, B, A bytes; false for a format this does not read.
++bool HostTexelRgba(plume::RenderFormat format, const uint8_t *p, uint8_t out[4]) {
++  using F = plume::RenderFormat;
++  switch (format) {
++  case F::R8G8B8A8_UNORM:
++    std::memcpy(out, p, 4);
++    return true;
++  case F::B8G8R8A8_UNORM:
++    out[0] = p[2]; out[1] = p[1]; out[2] = p[0]; out[3] = p[3];
++    return true;
++  case F::R16G16B16A16_UNORM:
++    for (int c = 0; c < 4; ++c) {
++      uint16_t v;
++      std::memcpy(&v, p + c * 2, 2);
++      out[c] = uint8_t((uint32_t(v) * 255u + 32767u) / 65535u);
++    }
++    return true;
++  case F::R16G16B16A16_FLOAT:
++    for (int c = 0; c < 4; ++c) {
++      uint16_t v;
++      std::memcpy(&v, p + c * 2, 2);
++      out[c] = UnitToByte(HalfToFloat(v));
++    }
++    return true;
++  default:
++    return false;
++  }
++}
++
++uint32_t HostTexelBytes(plume::RenderFormat format) {
++  using F = plume::RenderFormat;
++  return format == F::R16G16B16A16_UNORM || format == F::R16G16B16A16_FLOAT ? 8 : 4;
++}
++
++} // namespace
++
++bool ReadResolveTextureLocked(u32 texture_va, std::vector<uint8_t> &rgba, uint32_t &width,
++                              uint32_t &height, bool &swap_red_blue) {
++  HostTexture *t = FindHostTextureLocked(texture_va);
++  if (!t || !t->gpu_written || !t->render_target || !t->texture || t->words ||
++      t->dimension != TextureDimension::Tex2D || t->stacked || t->depth != 1)
++    return false;
++  uint8_t probe[4];
++  const uint8_t zero[8] = {};
++  if (!HostTexelRgba(t->host_format, zero, probe))
++    return false;
++  auto &s = State();
++  if (!Video::EnsureCommandListLocked())
++    return false;
++  const uint32_t scale = std::max(1u, t->scale);
++  const uint32_t host_w = t->width * scale, host_h = t->height * scale;
++  const uint32_t texel_bytes = HostTexelBytes(t->host_format);
++  const uint32_t row_texels = (host_w + 63u) & ~63u;  // row pitch: a multiple of 256 bytes
++  const uint64_t row_pitch = uint64_t(row_texels) * texel_bytes;
++  const uint64_t size = row_pitch * host_h;
++  std::unique_ptr<plume::RenderBuffer> buffer =
++      Video::Device()->createBuffer(plume::RenderBufferDesc::ReadbackBuffer(size));
++  if (!buffer)
++    return false;
++  plume::RenderCommandList *cmd = s.command_list;
++  TransitionTextureLocked(t, plume::RenderTextureLayout::COPY_SOURCE);
++  plume::RenderTextureCopyLocation dst = plume::RenderTextureCopyLocation::PlacedFootprint(
++      buffer.get(), t->host_format, host_w, host_h, 1, row_texels);
++  // plume's D3D12 copyTextureRegion reads the destination's texture for its sample positions
++  // even for a buffer footprint: give it the source (single-sampled, no custom positions).
++  dst.texture = t->texture.get();
++  cmd->copyTextureRegion(dst, plume::RenderTextureCopyLocation::Subresource(t->texture.get()));
++  TransitionTextureLocked(t, plume::RenderTextureLayout::SHADER_READ);
++  detail::SubmitAndWaitLocked(s);
++  const auto *data = static_cast<const uint8_t *>(buffer->map());
++  if (!data)
++    return false;
++  width = t->width;
++  height = t->height;
++  swap_red_blue = t->view_swap_red_blue;
++  rgba.assign(size_t(width) * height * 4, 0);
++  for (uint32_t y = 0; y < height; ++y) {
++    for (uint32_t x = 0; x < width; ++x) {
++      uint32_t sum[4] = {};
++      for (uint32_t sy = 0; sy < scale; ++sy) {
++        const uint8_t *row = data + (uint64_t(y) * scale + sy) * row_pitch;
++        for (uint32_t sx = 0; sx < scale; ++sx) {
++          uint8_t texel[4];
++          HostTexelRgba(t->host_format, row + (uint64_t(x) * scale + sx) * texel_bytes, texel);
++          for (int c = 0; c < 4; ++c)
++            sum[c] += texel[c];
++        }
++      }
++      uint8_t *out = &rgba[(size_t(y) * width + x) * 4];
++      for (int c = 0; c < 4; ++c)
++        out[c] = uint8_t((sum[c] + scale * scale / 2) / (scale * scale));
++    }
++  }
++  buffer->unmap();
++  Video::RetireLocked(std::move(buffer));
++  return true;
++}
++
+ } // namespace renut::gpu
+--- a/src/renut_engine/gpu/render/textures.h
++++ b/src/renut_engine/gpu/render/textures.h
+@@ -178,6 +178,17 @@
+ // the source does not have). Its texture and layout only; kept for reuse.
+ HostTexture *ResolveStagingLocked(const HostTexture *dest);
+ 
++// NB: the content of a color resolve destination (2D, level 0) as 8-bit R, G, B, A texels of its guest size (the host
++// 'scale' averaged), read back from the GPU: submits the open command list and waits for it. 'swap_red_blue': the
++// guest stores this destination with X and Z exchanged (HostTexture::view_swap_red_blue). False when 'texture_va' is
++// no such destination or its host format is not one this reads.
++bool ReadResolveTextureLocked(u32 texture_va, std::vector<uint8_t> &rgba, uint32_t &width,
++                              uint32_t &height, bool &swap_red_blue);
++
++// NB: called by D3D's Resolve (guest thread) for a color resolve into level 0 of 'dest_texture': its next
++// D3D::LockSurface reads the picture back into guest memory (d3d/hooks/resource.cpp, ReadBackResolve).
++void NoteResolveForReadback(u32 dest_texture);
++
+ // Bindless sampler slot matching the device fetch constant's sampler state.
+ // 'lod_scale' (TextureBinding::lod_scale): a texture with host levels, which
+ // are sampled to LOD log2(lod_scale) with linear blending between them.

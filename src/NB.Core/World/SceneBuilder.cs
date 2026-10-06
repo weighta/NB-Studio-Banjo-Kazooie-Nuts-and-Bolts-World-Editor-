@@ -48,6 +48,43 @@ public static class SceneBuilder
         public List<WaterDef>? Water { get; set; }
         /// <summary>Chunk-12 instance whose record is copied for new instances (index in the original world).</summary>
         public int InstanceTemplate { get; set; }
+        /// <summary>Sun, ambient and fog written into the world's light setups (Source import: light_environment /
+        /// env_fog_controller).</summary>
+        public LightDef? Light { get; set; }
+        /// <summary>Executable mods switched on in the workspace (e.g. world-bounds-2048, no-escape-reset).</summary>
+        public List<string> ExeMods { get; set; } = new();
+        /// <summary>Removes the world's grass layers (background chunk 17 count = 0): the game scatters grass over the old
+        /// terrain's height tiles even when the terrain is gone.</summary>
+        public bool NoGrass { get; set; }
+        /// <summary>Moves every record of marker assets by an offset (keeping their layout), e.g. the old town's objects
+        /// below an imported map onto a hidden floor.</summary>
+        public List<MarkerShiftDef> MarkerShift { get; set; } = new();
+    }
+    public sealed class MarkerShiftDef
+    {
+        public string Asset { get; set; } = "";
+        public float[] Offset { get; set; } = new float[3];
+        /// <summary>Records kept in place: "type" or "type:index" (e.g. "4:84" = the player spawn).</summary>
+        public List<string> Except { get; set; } = new();
+    }
+    /// <summary>
+    /// Light-setup values (Atmosphere.cs LightSetup). Colours "RRGGBB"; sun elevation / azimuth in degrees (game sun
+    /// direction = (-cos e sin a, sin e, -cos e cos a)). Null fields keep the setup's own value. <see cref="Setups"/>:
+    /// short names ("main", "morning" ...) to change; empty = every light setup of the world.
+    /// </summary>
+    public sealed class LightDef
+    {
+        public string? Ambient { get; set; }
+        public string? Sun { get; set; }
+        public float? Intensity { get; set; }
+        public float? Elevation { get; set; }
+        public float? Azimuth { get; set; }
+        public bool? FogOn { get; set; }
+        public float? FogStart { get; set; }
+        public float? FogEnd { get; set; }
+        public float? FogMax { get; set; }
+        public string? FogColour { get; set; }
+        public List<string> Setups { get; set; } = new();
     }
     public sealed class TemplateDef
     {
@@ -68,9 +105,13 @@ public static class SceneBuilder
         /// <summary>"box", "none", "mesh" (the model's own geometry) or "mesh:path.obj".</summary>
         public string Collision { get; set; } = "box";
         public float Cull { get; set; } = 1e6f;
+        /// <summary>This model's ambient-occlusion texture (e.g. a baked lightmap page; sampled with the second UV set),
+        /// instead of the template's neutral AO.</summary>
+        public string? Ao { get; set; }
     }
     public sealed class TerrainDef
     {
+        /// <summary>Terrain geometry; "" or "none" = the world's terrain draws nothing (geometry comes from models).</summary>
         public string Obj { get; set; } = "";
         /// <summary>OBJ material name → (existing terrain material stem to reuse, new texture to show).</summary>
         public Dictionary<string, TerrainMaterial> Materials { get; set; } = new();
@@ -87,6 +128,9 @@ public static class SceneBuilder
         public float Yaw { get; set; }
         public float Scale { get; set; } = 1f;
         public bool Collision { get; set; } = true;
+        /// <summary>Optional full transform (row-major 3x4: three rotation/scale rows, then the translation); replaces
+        /// pos / yaw / scale when given (props with pitch and roll).</summary>
+        public float[]? Matrix { get; set; }
     }
     /// <summary>Moves a kept original scenery instance (exact instance name): new position, and yaw in degrees if given.</summary>
     public sealed class MoveDef { public string Name { get; set; } = ""; public float[] Pos { get; set; } = new float[3]; public float? Yaw { get; set; } public float Scale { get; set; } = 1f; }
@@ -105,7 +149,9 @@ public static class SceneBuilder
 
     public sealed class Report
     {
-        public int Textures, Models, Instances, Hidden, Markers, TerrainTriangles, CollisionTriangles, WaterTriangles;
+        public int Textures, Models, Instances, Hidden, Markers, TerrainTriangles, CollisionTriangles, WaterTriangles, LightSetups;
+        /// <summary>Size of the saved world bundle (bytes).</summary>
+        public long BundleBytes;
         public readonly List<string> Notes = new();
         public readonly List<string> Errors = new();
     }
@@ -178,7 +224,7 @@ public static class SceneBuilder
                 var o = new ModelFactory.Options
                 {
                     Template = td.Model, Name = m.Name, Meshes = ObjReader.ReadAny(P(m.Obj)), SingleMaterial = Tex(m.Texture),
-                    NeutralAo = td.Ao != null ? Tex(td.Ao) : null, Specular = td.Spec != null ? Tex(td.Spec) : null, FlatNormal = td.FlatNormal,
+                    NeutralAo = m.Ao != null ? Tex(m.Ao) : td.Ao != null ? Tex(td.Ao) : null, Specular = td.Spec != null ? Tex(td.Spec) : null, FlatNormal = td.FlatNormal,
                     CullDistance = m.Cull,
                 };
                 o.Retarget[td.Colour] = Tex(m.Texture);
@@ -205,17 +251,19 @@ public static class SceneBuilder
                         if (sc.Terrain.NeutralParallax != null && st.Contains("parallax")) ModelEdit.RetargetTexture(caff, b, st, Tex(sc.Terrain.NeutralParallax), exact: true);
                         else if (sc.Terrain.FlatNormal != null && (st.Contains("normal") || st.EndsWith("_norm") || st.Contains("_norm_") || st.Contains("bump"))) ModelEdit.RetargetTexture(caff, b, st, sc.Terrain.FlatNormal);
                     }
-                var meshes = ObjReader.ReadAny(P(sc.Terrain.Obj));
+                bool noTerrain = string.IsNullOrEmpty(sc.Terrain.Obj) || sc.Terrain.Obj.Equals("none", StringComparison.OrdinalIgnoreCase);
+                var meshes = noTerrain ? new List<ImportMesh>() : ObjReader.ReadAny(P(sc.Terrain.Obj));
                 foreach (var mesh in meshes)
                     mesh.Name = sc.Terrain.Materials.TryGetValue(mesh.Name, out var tm) ? Tex(tm.Texture) : mesh.Name;
-                var ir = ModelImporter.Replace(caff, b, meshes, spatialTiles: sc.FitCullingTree);
+                var ir = ModelImporter.Replace(caff, b, meshes, spatialTiles: sc.FitCullingTree && !noTerrain);
                 rep.TerrainTriangles = ir.Triangles;
                 rep.Notes.AddRange(ir.Notes.Where(n => n.StartsWith("mapping") || n.StartsWith("warning") || n.StartsWith("material")).Select(n => "terrain: " + n));
                 ModelEdit.SetLodDistances(caff, b, 1e6f, 1f, keepLod0: true);
                 // the culling tree still holds the original town's boxes: cover the new terrain everywhere
                 var tmin = new System.Numerics.Vector3(float.MaxValue); var tmax = new System.Numerics.Vector3(float.MinValue);
                 foreach (var mesh in meshes) foreach (var p in mesh.Positions) { tmin = System.Numerics.Vector3.Min(tmin, p); tmax = System.Numerics.Vector3.Max(tmax, p); }
-                if (sc.FitCullingTree)
+                if (noTerrain) rep.Notes.Add("terrain: geometry removed (every terrain draw is empty)");
+                else if (sc.FitCullingTree)
                 {
                     var (filled, emptied) = ModelEdit.FitCullCells(caff, b);
                     rep.Notes.Add($"terrain culling cells refitted: {filled} with geometry, {emptied} emptied (spatial tiles of {ModelImporter.TileTriangles} triangles)");
@@ -310,6 +358,8 @@ public static class SceneBuilder
                     if (Sym(model) == 0) throw new InvalidDataException($"model {model} does not exist");
                     uint? hid = d.Collision && Sym(havok) > 0 ? AssetIds.IdOf(havok) : null;
                     var world = Matrix4x4.CreateScale(d.Scale) * Matrix4x4.CreateRotationY(d.Yaw * MathF.PI / 180) * Matrix4x4.CreateTranslation(d.Pos[0], d.Pos[1], d.Pos[2]);
+                    if (d.Matrix is { Length: 12 } x)
+                        world = new Matrix4x4(x[0], x[1], x[2], 0, x[3], x[4], x[5], 0, x[6], x[7], x[8], 0, x[9], x[10], x[11], 1);
                     batch.Add(new InstanceEditor.NewInstance(AssetIds.IdOf(model)!.Value, hid, world, d.Model));
                 }
                 catch (Exception e) { rep.Errors.Add($"instance {d.Model}: {e.Message}"); }
@@ -321,7 +371,27 @@ public static class SceneBuilder
                 catch (Exception e) { rep.Errors.Add($"instances: {e.Message}"); }
             }
         }
-        // 6. markers (world bundle)
+        // 6. markers (world bundle): shifts first, then the explicit moves (a moved record wins)
+        foreach (var ms in sc.MarkerShift)
+        {
+            try
+            {
+                int s = caff.Symbols.FindIndex(x => AssetIds.DisplayName(x) == ms.Asset) + 1;
+                if (s == 0) throw new InvalidDataException($"marker asset {ms.Asset} not in bundle {bundle:x6}");
+                var ma = MarkerAsset.Parse(caff, s);
+                var off = new Vector3(ms.Offset[0], ms.Offset[1], ms.Offset[2]);
+                int moved = 0;
+                foreach (var r in ma.Records)
+                {
+                    if (ms.Except.Any(e => e == r.Type.ToString() || e == $"{r.Type}:{r.Index}")) continue;
+                    r.Position += off;
+                    MarkerAsset.WriteTransform(caff, s, r);
+                    moved++;
+                }
+                rep.Notes.Add($"markers {ms.Asset}: {moved} of {ma.Records.Count} record(s) moved by {off}");
+            }
+            catch (Exception e) { rep.Errors.Add($"marker shift {ms.Asset}: {e.Message}"); }
+        }
         foreach (var mk in sc.Markers)
         {
             try
@@ -340,6 +410,34 @@ public static class SceneBuilder
             }
             catch (Exception e) { rep.Errors.Add($"marker {mk.Asset} #{mk.Index}: {e.Message}"); }
         }
+        if (sc.NoGrass)
+        {
+            try
+            {
+                var m = ModelAsset.Parse(caff, bg(), geometry: false);
+                if (m.Chunks.TryGetValue(17, out int c17))
+                {
+                    var d = m.View.Data(".data");
+                    int n = NB.Core.IO.BE.S32(d, c17);
+                    NB.Core.IO.BE.W32(d, c17, 0u);
+                    rep.Notes.Add($"grass: {n} layer(s) removed (chunk 17 count 0)");
+                }
+            }
+            catch (Exception e) { rep.Errors.Add($"grass: {e.Message}"); }
+        }
+        // 7. light setups
+        if (sc.Light != null)
+        {
+            try { rep.LightSetups = ApplyLight(caff, sc.Light, rep.Notes); }
+            catch (Exception e) { rep.Errors.Add($"light: {e.Message}"); }
+        }
+        if (sc.ExeMods.Count > 0)
+        {
+            var added = sc.ExeMods.Where(m => !ws.Manifest.ExeMods.Contains(m)).ToList();
+            ws.Manifest.ExeMods.AddRange(added);
+            if (added.Count > 0) ws.SaveManifest();
+            rep.Notes.Add($"exe mods: {string.Join(", ", sc.ExeMods)}{(added.Count > 0 ? $" ({added.Count} switched on)" : " (already on)")}");
+        }
         if (sc.CompactGpu)
         {
             Step("compact");
@@ -347,13 +445,14 @@ public static class SceneBuilder
         }
         Step("saving");
         ws.SaveResident(bundle, caff, $"scene build {Path.GetFileName(scenePath)}: {rep.Textures} textures, {rep.Models} models, {rep.Instances} instances, {rep.Hidden} hidden, terrain {rep.TerrainTriangles} tris, collision {rep.CollisionTriangles} tris");
+        try { rep.BundleBytes = new FileInfo(ws.Game.ResidentPath(bundle)).Length; } catch (IOException) { }
         progress?.Report(("done", 1));
         return rep;
     }
 
     /// <summary>
     /// Frees model vertex/index memory in a resident bundle (B24). With <paramref name="stripHidden"/>, models reached only
-    /// from hidden background instances (y below -200) and referenced by no other asset get their geometry replaced by
+    /// from hidden background instances (y below -10000) and referenced by no other asset get their geometry replaced by
     /// a block of zeros (<see cref="GpuCompactor.StripGeometry"/>). Then every model drops its unreferenced .gpu bytes
     /// (<see cref="GpuCompactor.Compact"/>). Returns report lines.
     /// </summary>
@@ -367,7 +466,8 @@ public static class SceneBuilder
         int stripped = 0, stripFail = 0;
         if (stripHidden)
         {
-            var hidden = ModelAsset.Parse(caff, bgSym, geometry: false).Instances.Where(i => i.World.M42 < -200).Select(i => i.Index).ToHashSet();
+            // hidden = sunk by 20,000 (or the old hide at y -20000); imported maps can reach far below y -200 (Source import)
+            var hidden = ModelAsset.Parse(caff, bgSym, geometry: false).Instances.Where(i => i.World.M42 < -10000).Select(i => i.Index).ToHashSet();
             var only = ModelEdit.HiddenOnlyModels(caff, bgSym, hidden);
             // the background and its collision asset (which holds the per-instance collision lists) own the hidden instances
             int bgHavok = caff.Symbols.FindIndex(s => AssetIds.DisplayName(s) == AssetIds.DisplayName(we.BackgroundModel).Replace("aid_model_", "aid_havok_")) + 1;
@@ -401,6 +501,43 @@ public static class SceneBuilder
         long after = caff.Parts.Where(p => caff.SectionOf(p).Name == ".gpu").Sum(p => (long)p.Data.Length);
         notes.Add($"compact: {stripped} models stripped ({stripFail} could not be), {compacted} compacted ({skipped} skipped); .gpu {before / 1048576.0:F1} MB -> {after / 1048576.0:F1} MB");
         return notes;
+    }
+
+    /// <summary>Writes <paramref name="l"/> into the world bundle's light setups (all, or those named in Setups). Returns
+    /// the number of setups changed.</summary>
+    public static int ApplyLight(CaffFile caff, LightDef l, List<string> notes)
+    {
+        static uint Rgb(string s) => Convert.ToUInt32(s.TrimStart('#'), 16) & 0xFFFFFF;
+        int n = 0;
+        for (int s = 1; s <= caff.Symbols.Count; s++)
+        {
+            var name = AssetIds.DisplayName(caff.Symbols[s - 1]);
+            if (!name.StartsWith("aid_script_banjox_lightsetup_")) continue;
+            var part = caff.PartsOf(s).FirstOrDefault(p => caff.SectionOf(p).Name == ".data");
+            if (part == null) continue;
+            int fog = LightSetup.FindFog(part.Data);
+            if (fog < 0) continue;
+            var ls = new LightSetup { Name = name, Symbol = s, Data = part.Data, FogCommand = fog };
+            if (l.Setups.Count > 0 && !l.Setups.Any(x => x.Equals(ls.ShortName, StringComparison.OrdinalIgnoreCase))) continue;
+            var v = ls.Values;
+            const float Deg = MathF.PI / 180;
+            ls.Values = v with
+            {
+                Ambient = l.Ambient != null ? Rgb(l.Ambient) : v.Ambient,
+                Sun = l.Sun != null ? Rgb(l.Sun) : v.Sun,
+                Intensity = l.Intensity ?? v.Intensity,
+                SunElevation = l.Elevation is float e ? e * Deg : v.SunElevation,
+                SunAzimuth = l.Azimuth is float a ? a * Deg : v.SunAzimuth,
+                FogOn = l.FogOn ?? v.FogOn,
+                FogStart = l.FogStart ?? v.FogStart,
+                FogEnd = l.FogEnd ?? v.FogEnd,
+                FogMax = l.FogMax ?? v.FogMax,
+                FogColour = l.FogColour != null ? Rgb(l.FogColour) : v.FogColour,
+            };
+            notes.Add($"light {ls.ShortName}: {v} -> {ls.Values}");
+            n++;
+        }
+        return n;
     }
 
     /// <summary>Texture names in scene files may omit the "aid_texture_banjox_" prefix.</summary>

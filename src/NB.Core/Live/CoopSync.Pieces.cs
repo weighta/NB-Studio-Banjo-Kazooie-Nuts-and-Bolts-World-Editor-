@@ -78,8 +78,11 @@ public sealed partial class CoopSync
         LocalBlocksLost = false;
         if (LocalDesign == null || _localVeh == 0 || _designVeh != _localVeh || !_origBlocks.TryGetValue(_localVeh, out var orig)) return res;
         var now = DateTime.UtcNow;
+        if (_editing) return res;                                            // in-place edit: no pieces, no damage
         var map = BlockMap(_localVeh, force: true);
         if (map.Count == 0) return res;
+        // parts the player called back (RB magnet: the same block objects rejoin the vehicle) can break off again
+        if (_localMissingSeen.Count > 0) _localMissingSeen.RemoveWhere(map.ContainsKey);
         // newly missing blocks -> the pieces they are on now
         foreach (var (blk, g) in orig)
         {

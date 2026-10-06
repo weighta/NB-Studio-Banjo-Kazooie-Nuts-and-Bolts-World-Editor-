@@ -31,6 +31,11 @@ public sealed class RoomRelay : IDisposable
     Timer? _status;
     long _lastForwarded = -1, _lastDropped = -1;
     readonly ConcurrentDictionary<(uint, uint), long> _flows = new();   // (src vip, dst vip) -> packets
+    /// <summary>Diagnostics (env NB_RELAY_TRACE=1): per (src:port, dst:port, session key) packet/byte counts in the status line.</summary>
+    static readonly bool Trace = Environment.GetEnvironmentVariable("NB_RELAY_TRACE") == "1";
+    readonly ConcurrentDictionary<(uint, ushort, uint, ushort, ulong), (long Packets, long Bytes)> _detail = new();
+    /// <summary>Diagnostics (env NB_RELAY_DUMP=N): hex dump of the first N data packets of every (src, dst, key) flow.</summary>
+    static readonly int Dump = int.TryParse(Environment.GetEnvironmentVariable("NB_RELAY_DUMP"), out var nd) ? nd : 0;
 
     public RoomRelay(Func<uint, IPAddress?> owner, Func<IPAddress, bool> isLocal) { _owner = owner; _isLocal = isLocal; }
 
@@ -87,6 +92,13 @@ public sealed class RoomRelay : IDisposable
             _sockets[(src, sport)] = from;                    // hello or data: (re)learn this socket's endpoint
             if (type != 1) continue;
             _flows.AddOrUpdate((src, dst), 1, (_, n) => n + 1);
+            if (Trace)
+            {
+                ulong key = pkt.Length >= 24 ? (ulong)U32(pkt, 16) << 32 | U32(pkt, 20) : 0;
+                var d = _detail.AddOrUpdate((src, sport, dst, dport, key), (1, pkt.Length - 24), (_, v) => (v.Packets + 1, v.Bytes + pkt.Length - 24));
+                if (d.Packets <= Dump && pkt.Length > 24)
+                    Log?.Invoke($"{DateTime.Now:HH:mm:ss.fff} relay dump {VipText(src)}:{sport} -> {VipText(dst)}:{dport} key {key:X16} #{d.Packets} {pkt.Length - 24} B: {Convert.ToHexString(pkt, 24, Math.Min(pkt.Length - 24, 160))}");
+            }
             if (dst == 0xFFFFFFFF || (dst & 0xFF) == 0xFF)
             {
                 foreach (var (key, ep) in _sockets)
@@ -131,5 +143,8 @@ public sealed class RoomRelay : IDisposable
         var flows = string.Join(", ", _flows.Select(kv => $"{VipText(kv.Key.Item1)}->{(kv.Key.Item2 == 0xFFFFFFFF ? "broadcast" : VipText(kv.Key.Item2))} {kv.Value}"));
         var socks = string.Join(", ", _sockets.Select(kv => $"{VipText(kv.Key.Vip)}:{kv.Key.Port}={kv.Value}"));
         Log?.Invoke($"relay: {f} forwarded, {d} dropped; flows [{flows}]; sockets [{socks}]");
+        if (Trace)
+            foreach (var kv in _detail.OrderBy(kv => kv.Key.Item5).ThenBy(kv => kv.Key.Item1))
+                Log?.Invoke($"relay:   {VipText(kv.Key.Item1)}:{kv.Key.Item2} -> {VipText(kv.Key.Item3)}:{kv.Key.Item4} key {kv.Key.Item5:X16}: {kv.Value.Packets} pkts {kv.Value.Bytes} B");
     }
 }

@@ -1,0 +1,1 @@
+{"steps": [{"op": "copy", "srcBundle": "685374", "src": "aid_objparams_banjox_actor_banjo", "dstBundle": "685374", "name": "aid_objparams_banjox_actor_charsel_kazooie"}, {"op": "u32", "bundle": "685374", "asset": "aid_objparams_banjox_actor_charsel_kazooie", "off": 192, "val": "040526D0"}]}

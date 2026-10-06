@@ -47,6 +47,8 @@ public partial class MainWindow : Window
     {
         var ed = CurrentEdition;
         bool has = ed.Mods.Any(m => m.Id == NB.Core.Mods.Characters.ModId);
+        // an edition without Character Select has nothing to choose: the card goes away
+        CharacterCard.Visibility = has ? Visibility.Visible : Visibility.Collapsed;
         var cur = NB.Core.Mods.Characters.Get(S.Character);
         CharacterPanel.Children.Clear();
         var head = new DockPanel { Margin = new Thickness(0, 0, 0, 8) };
@@ -79,11 +81,13 @@ public partial class MainWindow : Window
             sub.Text = !has
                 ? "Add the Character Select mod to this edition (Mods & editions) to play as someone else."
                 : c.Index == 0 ? "You play as Banjo."
-                : $"You play as {c.Name.Replace(" (floating backpack)", "")}" + (c.TownOnly ? " in Showdown Town (Banjo elsewhere)" : "") +
-                  ". It applies the next time you enter a level: start or continue a game, or come back from Mumbo's garage. In co-op the others see you as them too.";
+                : $"You play as {c.Name.Replace(" (floating backpack)", "")}" + (c.TownOnly
+                    ? $" in Showdown Town. {c.Name} lives in Showdown Town only: in the game worlds you are Banjo, and {c.Name} again as soon as you are back in town."
+                    : " everywhere, in Showdown Town and in the game worlds.") +
+                  " It applies the next time you enter a level: start or continue a game, or come back from Mumbo's garage. In co-op the others see you as them too.";
         }
         Group("Everywhere", NB.Core.Mods.Characters.All.Where(c => !c.TownOnly));
-        Group("In Showdown Town", NB.Core.Mods.Characters.All.Where(c => c.TownOnly));
+        Group("In Showdown Town only (Banjo in the game worlds)", NB.Core.Mods.Characters.All.Where(c => c.TownOnly));
         Explain();
     }
 
@@ -420,6 +424,19 @@ public partial class MainWindow : Window
 
     bool _engineNoticeShown;
 
+    /// <summary>The steps to get into the same game, for the room's kind of edition.</summary>
+    static string HowToPlay(bool coop, bool allUnlocked) => coop
+        ? "1. Everyone starts the game from NB Multiplayer (Launch the game / Join).\n" +
+          "2. At the title press A and choose SINGLE PLAYER.\n" +
+          (allUnlocked
+              ? "3. Choose RESUME SAVED GAME: the room uses the all-unlocked save, so everyone starts in Showdown Town with everything unlocked.\n"
+              : "3. RESUME SAVED GAME continues your own adventure, START NEW GAME begins a new one. Everyone plays their own save: nobody needs the host's.\n") +
+          "4. Co-op happens in Showdown Town: as soon as you are all in town you see each other. Worlds, Acts and Mumbo's garage are played on your own; you meet again when you come back to town."
+        : "1. Everyone starts the game from NB Multiplayer (Launch the game / Join).\n" +
+          "2. In the game choose MULTIPLAYER, then Xbox LIVE (a new profile asks to start a save: choose Yes).\n" +
+          "3. Friends land in the host's party automatically. The host sets MATCH CHOICE to \"Play a game with my party\", picks a race or sport and starts it.\n" +
+          "4. Or matchmaking: RANKED MATCH / PLAYER MATCH pick a random game and start about 20 seconds after the first search once 2 or more players are in the lobby.";
+
     void Solo_Click(object sender, RoutedEventArgs e)
     {
         if (!Ready()) return;
@@ -651,6 +668,7 @@ public partial class MainWindow : Window
         HostAddressText.Text = steam
             ? $"Through Steam as {Steamworks.SteamClient.Name}. On your home network friends can also use {ip}:{Net.Port}   -   edition: {edition.Name}"
             : $"Friends can also join with {ip}:{Net.Port}   -   edition: {edition.Name}";
+        HowToText.Text = HowToPlay(edition.IsCoop, S.UseAllUnlockedSave);
         HostSetup.Visibility = Visibility.Collapsed;
         HostRunning.Visibility = Visibility.Visible;
         InternetTestButton.Visibility = PublicOption.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
@@ -729,6 +747,7 @@ public partial class MainWindow : Window
             try { File.AppendAllText(log, $"{DateTime.Now:HH:mm:ss.fff} {what}: {(done ? (t.IsFaulted ? "failed " + t.Exception?.InnerException?.Message : "ok") : "still running after 6 s, left behind")} ({sw.ElapsedMilliseconds} ms){Environment.NewLine}"); }
             catch (Exception) { }
         }
+        if (server != null) await Step("telling players the room closed", () => coopNet?.CloseRoom());   // the host (also when the app closes)
         await Step("co-op", () => coop?.Dispose());
         await Step("co-op network", () => coopNet?.Dispose());
         await Step("room server", () => server?.Stop());
@@ -825,9 +844,8 @@ public partial class MainWindow : Window
                     : $"{room.Name} runs a different NB Multiplayer version (co-op protocol {room.Coop.Protocol}, yours {CoopNet.Protocol}). Update both to the latest version.", "Bad", false);
                 return;
             }
-            ShowJoin(CurrentEdition.IsCoop
-                ? $"Joined {room.Name} ({room.Edition}). In the game choose SINGLE PLAYER and load your save (or start a new game): you see each other once you are both in Showdown Town."
-                : $"Joining {room.Name} ({room.Edition}). In the game open MULTIPLAYER, then Xbox LIVE: you join the host's party automatically.", "Good", false);
+            ShowJoin((CurrentEdition.IsCoop ? $"Joined {room.Name}'s co-op room ({room.Edition})." : $"Joining {room.Name}'s room ({room.Edition}).") +
+                "\n" + HowToPlay(CurrentEdition.IsCoop, room.Coop?.AllUnlockedSave == true), "Good", false);
             StartJoined();
         }
         finally
@@ -961,7 +979,7 @@ public partial class MainWindow : Window
     {
         if (_pendingJoin is not { } j) return;
         S.LastJoin = JoinBox.Text.Trim(); S.Save();
-        _room = (j.Host, j.Port);
+        _room = (j.Host, j.Port); _roomSeen = false; _roomMisses = 0;
         JoinAnywayButton.Visibility = Visibility.Collapsed;
         if (CurrentEdition.IsCoop)
         {
@@ -1097,6 +1115,26 @@ public partial class MainWindow : Window
     }
 
     bool _gameWasRunning;
+    bool _roomSeen; int _roomMisses;
+
+    /// <summary>
+    /// Joiner: the host closed the room (or its PC went away). Leaves the room, and asks whether to close the game,
+    /// which can't reach the host's game any more.
+    /// </summary>
+    async Task HostDisconnectedAsync(bool closedByHost)
+    {
+        _room = null; _roomSeen = false; _roomMisses = 0;
+        await ShutdownRoomAsync(client: true);
+        RoomDot.Fill = B("Bad"); RoomStatus.Text = "Host disconnected";
+        RoomCard.Visibility = Visibility.Collapsed;
+        ShowJoin(closedByHost ? "Host disconnected: the host closed the room." : "Host disconnected: the host's room can't be reached any more.", "Bad", false);
+        if (_game is { HasExited: false } g &&
+            MessageBox.Show(this, $"Host disconnected.\n\n{(closedByHost ? "The host closed the room." : "The host's room can't be reached any more.")} " +
+                "Your game is no longer connected to the others. Close the game now?", "NB Multiplayer", MessageBoxButton.YesNo, MessageBoxImage.Information) == MessageBoxResult.Yes)
+        {
+            try { g.CloseMainWindow(); if (!g.WaitForExit(8000)) g.Kill(); } catch (Exception) { }
+        }
+    }
 
     async Task TickAsync()
     {
@@ -1112,7 +1150,14 @@ public partial class MainWindow : Window
             RoomDot.Fill = B("Sub"); RoomStatus.Text = "Not in a room";
             return;
         }
-        if (_coopNet != null) { ShowCoopRoom(); return; }
+        if (_coopNet != null)
+        {
+            // joiner: the host closed the room, or stopped answering while our game is connected
+            if (_server == null && (_coopNet.HostClosed ||
+                (running && _coopNet.LastHostReply != DateTime.MinValue && DateTime.UtcNow - _coopNet.LastHostReply > TimeSpan.FromSeconds(20))))
+            { await HostDisconnectedAsync(_coopNet.HostClosed); return; }
+            ShowCoopRoom(); return;
+        }
         _polling = true;
         try
         {
@@ -1120,8 +1165,11 @@ public partial class MainWindow : Window
             if (info == null)
             {
                 RoomDot.Fill = B("Bad"); RoomStatus.Text = "Room not reachable";
+                // joiner: the room was there and is gone now (three checks in a row): the host closed it
+                if (_server == null && _roomSeen && ++_roomMisses >= 3) { _polling = false; await HostDisconnectedAsync(false); }
                 return;
             }
+            _roomSeen = true; _roomMisses = 0;
             RoomDot.Fill = B("Good");
             RoomStatus.Text = _server != null ? $"Hosting ({info.Players.Count} in room)" : $"In {info.Name}";
             RoomCard.Visibility = Visibility.Visible;

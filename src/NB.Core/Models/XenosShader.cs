@@ -172,7 +172,11 @@ public sealed class XenosShader
 
     /// <summary>A texture-coordinate interpolator written by the vertex shader: UV set (0 first float2 vertex element, 1 the
     /// next) and, when transformed, the rows (cu, cv, 0, c) with out = cu*u + cv*v + c.</summary>
-    public sealed record UvSource(int Set, Vector4? RowX, Vector4? RowY);
+    public sealed record UvSource(int Set, Vector4? RowX, Vector4? RowY, bool Swap = false);
+
+    /// <summary>Key of an interpolator's second half (.zw) in <see cref="InterpolatorUvs"/>: the vertex shaders pack two
+    /// coordinate sets into one interpolator (fabric grass: o1.xy = third set, o1.zw = fourth set swapped).</summary>
+    public const int ZwKey = 0x100;
 
     /// <summary>
     /// Interpolators the vertex shader fills straight from a UV vertex element, copied (max r,r) or transformed by two dp4
@@ -212,6 +216,13 @@ public sealed class XenosShader
             {
                 bool ok = ((i.VMask & 1) == 0 || Comp(i.Srcs[0], 0) == 0) && ((i.VMask & 2) == 0 || Comp(i.Srcs[0], 1) == 1);
                 if (ok && (i.VMask & 3) == 3) res[k] = new UvSource(uvOffsets.IndexOf(e0.Off), null, null);
+                // the second half: a coordinate set copied to .zw, in order (u, v) or swapped (v, u)
+                if ((i.VMask & 12) == 12)
+                {
+                    int cz = Comp(i.Srcs[0], 2), cw = Comp(i.Srcs[0], 3);
+                    if (cz == 0 && cw == 1) res[k | ZwKey] = new UvSource(uvOffsets.IndexOf(e0.Off), null, null);
+                    else if (cz == 1 && cw == 0) res[k | ZwKey] = new UvSource(uvOffsets.IndexOf(e0.Off), null, null, Swap: true);
+                }
                 continue;
             }
             if (vn == "dp4")
@@ -226,10 +237,20 @@ public sealed class XenosShader
                     switch (Comp(i.Srcs[t], c)) { case 0: r.X += rc; break; case 1: r.Y += rc; break; case 3: r.W += rc; break; case 2: break; default: bad |= rc != 0; break; }
                 }
                 if (bad) continue;
-                if (!partial.TryGetValue(k, out var pr)) partial[k] = pr = (uvOffsets.IndexOf(e1.Off), new Vector4?[2]);
-                if ((i.VMask & 1) != 0) pr.Rows[0] = r;
-                if ((i.VMask & 2) != 0) pr.Rows[1] = r;
-                if (pr.Rows[0] != null && pr.Rows[1] != null) res[k] = new UvSource(pr.Set, pr.Rows[0], pr.Rows[1]);
+                if ((i.VMask & 3) != 0)
+                {
+                    if (!partial.TryGetValue(k, out var pr)) partial[k] = pr = (uvOffsets.IndexOf(e1.Off), new Vector4?[2]);
+                    if ((i.VMask & 1) != 0) pr.Rows[0] = r;
+                    if ((i.VMask & 2) != 0) pr.Rows[1] = r;
+                    if (pr.Rows[0] != null && pr.Rows[1] != null) res[k] = new UvSource(pr.Set, pr.Rows[0], pr.Rows[1]);
+                }
+                if ((i.VMask & 12) != 0)
+                {
+                    if (!partial.TryGetValue(k | ZwKey, out var pz)) partial[k | ZwKey] = pz = (uvOffsets.IndexOf(e1.Off), new Vector4?[2]);
+                    if ((i.VMask & 4) != 0) pz.Rows[0] = r;
+                    if ((i.VMask & 8) != 0) pz.Rows[1] = r;
+                    if (pz.Rows[0] != null && pz.Rows[1] != null) res[k | ZwKey] = new UvSource(pz.Set, pz.Rows[0], pz.Rows[1]);
+                }
             }
         }
         return res;
@@ -309,16 +330,16 @@ public static class XenosTranslator
     /// <summary>Translates the shader of a draw. <paramref name="material"/> = constant registers the stream set (their
     /// values come from the draw); <paramref name="hasColours"/> / <paramref name="hasUv2"/> describe the vertex data.</summary>
     public static ShaderTranslation Translate(XenosShader sh, IReadOnlyDictionary<int, Vector4> material, bool hasColours, bool hasUv2,
-        IReadOnlyDictionary<int, XenosShader.UvSource>? uvs = null)
+        IReadOnlyDictionary<int, XenosShader.UvSource>? uvs = null, bool hasUv3 = false)
     {
         var t = new ShaderTranslation();
-        try { Run(sh, material, hasColours, hasUv2, t, uvs); }
+        try { Run(sh, material, hasColours, hasUv2, t, uvs, hasUv3); }
         catch (Exception e) { t.Fail = "exception: " + e.Message; }
         return t;
     }
 
     static void Run(XenosShader sh, IReadOnlyDictionary<int, Vector4> material, bool hasColours, bool hasUv2, ShaderTranslation t,
-        IReadOnlyDictionary<int, XenosShader.UvSource>? uvs)
+        IReadOnlyDictionary<int, XenosShader.UvSource>? uvs, bool hasUv3 = false)
     {
         var code = sh.Code;
         bool IsLiteral(int r) => sh.Literals.ContainsKey(r);
@@ -614,13 +635,21 @@ public static class XenosTranslator
         string Input(int r)
         {
             // raw interpolators read by translated code
-            if (uvs != null && uvs.TryGetValue(r, out var us) && us.Set is 0 or 1 && (us.Set == 0 || hasUv2))
+            string? Half(int key, int slot)
             {
-                // the vertex shader's texture-coordinate transform, as two uniform rows
-                string g = us.Set == 1 ? "gUV2" : "gUV";
-                if (us.RowX == null) return $"vec4({g}, 0.0, 1.0)";
-                int kx = AddConst(1000 + 2 * r, us.RowX.Value), ky = AddConst(1001 + 2 * r, us.RowY!.Value);
-                return $"vec4(dot(vec4({g}, 0.0, 1.0), uC[{kx}]), dot(vec4({g}, 0.0, 1.0), uC[{ky}]), 0.0, 1.0)";
+                // one coordinate pair of the interpolator as the vertex shader writes it (copy, swapped copy or two rows)
+                if (uvs == null || !uvs.TryGetValue(key, out var us)) return null;
+                if (!(us.Set == 0 || us.Set == 1 && hasUv2 || us.Set == 2 && hasUv3)) return null;
+                string g = us.Set switch { 1 => "gUV2", 2 => "gUV3", _ => "gUV" };
+                if (us.RowX == null) return us.Swap ? $"{g}.yx" : g;
+                int kx = AddConst(1000 + 2 * r + slot * 100, us.RowX.Value), ky = AddConst(1001 + 2 * r + slot * 100, us.RowY!.Value);
+                return $"vec2(dot(vec4({g}, 0.0, 1.0), uC[{kx}]), dot(vec4({g}, 0.0, 1.0), uC[{ky}]))";
+            }
+            var hx = Half(r, 0); var hz = Half(r | XenosShader.ZwKey, 1);
+            if (hx != null || hz != null)
+            {
+                string xy = hx ?? (uvInputs.Contains(r) ? ((hasUv2 && UvSet(r) == 1) ? "gUV2" : "gUV") : "vec2(0.0)");
+                return $"vec4({xy}, {hz ?? "0.0, 1.0"})";
             }
             if (uvInputs.Contains(r)) return (hasUv2 && UvSet(r) == 1) ? "vec4(gUV2, 0.0, 1.0)" : "vec4(gUV, 0.0, 1.0)";
             if (posInputs.Contains(r)) return "vec4(gPos, 1.0)";

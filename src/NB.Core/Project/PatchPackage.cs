@@ -253,6 +253,12 @@ public static class PatchPackage
             Created = fixedTime, Category = "tweak", Multiplayer = "world",
         };
         man.ExeMods.Add(new PatchExeMod { Id = mod.Id, Name = mod.Name, Words = mod.Words.Select(w => new[] { w.Address, w.Original, w.Patched }).ToList() });
+        if (Mods.ExePatches.TweakOps.TryGetValue(mod.Id, out var ops))
+        {
+            // tweaks with a world edit (e.g. No ceiling: the town collision lid) carry it as ops, replayed after every mod's files
+            man.Format = 3;
+            man.Ops = ops.Select(o => o.ToList()).ToList();
+        }
         var baked = Bake(xb, man);
         man.Files.Add(new PatchFile { Path = "default.xex", Kind = "xexmods", SourceSha256 = Sha(xb), SourceSize = xb.Length, TargetSha256 = Sha(baked),
                                       TargetSize = baked.Length, LiteralBytes = 4 * mod.Words.Count });

@@ -192,6 +192,18 @@ public sealed class Workspace
         Log(Path.GetRelativePath(Game.Root, path), description);
     }
 
+    /// <summary>Replaces any working-copy file (text tables in Debug/11 or loctext/…): the old version goes to the
+    /// history, the new one is written through a temp file and moved over, so a hard link to the original game is broken
+    /// instead of written through.</summary>
+    public void SaveFile(string path, byte[] bytes, string description)
+    {
+        Snapshot(path);
+        var tmp = path + ".tmp";
+        File.WriteAllBytes(tmp, bytes);
+        File.Move(tmp, path, true);
+        Log(Path.GetRelativePath(Game.Root, path), description);
+    }
+
     public void SaveStream(uint bundle, BundleArchive a, string description)
     {
         var path = Game.StreamPath(bundle);

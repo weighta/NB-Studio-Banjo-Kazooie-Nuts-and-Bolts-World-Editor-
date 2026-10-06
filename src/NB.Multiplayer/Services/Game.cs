@@ -39,7 +39,7 @@ public static class GameLauncher
         if (edition.IsVanilla) SetProjectTweaks(Path.Combine(edition.GameDir, "default.xex"), AlwaysOn);
         else { Editions.EnsureSafety(edition.GameDir); SetProjectTweaks(null, null); }
         Saves.PrepareLaunch(allUnlocked ?? s.UseAllUnlockedSave, forRoom: allUnlocked == true && !s.UseAllUnlockedSave);
-        var args = new List<string>();
+        var args = new List<string>(XeniaGameOptions);
         var extra = Environment.GetEnvironmentVariable("NB_XENIA_EXTRA");   // testing: extra Xenia options
         if (!string.IsNullOrWhiteSpace(extra)) args.AddRange(extra.Split(' ', StringSplitOptions.RemoveEmptyEntries));
         int apiPort = int.TryParse(apiHostPort.Split(':').ElementAtOrDefault(1), out var ap) ? ap : Net.Port;
@@ -83,7 +83,7 @@ public static class GameLauncher
         Editions.EnsureSafety(gameDir);   // only NB Multiplayer's own editions are changed
         SetProjectTweaks(xex, (projectExeMods ?? Array.Empty<string>()).Concat(AlwaysOn).Distinct().ToList());
         Saves.PrepareLaunch(s.UseAllUnlockedSave);
-        var args = new List<string>();
+        var args = new List<string>(XeniaGameOptions);
         var extra = Environment.GetEnvironmentVariable("NB_XENIA_EXTRA");
         if (!string.IsNullOrWhiteSpace(extra)) args.AddRange(extra.Split(' ', StringSplitOptions.RemoveEmptyEntries));
         args.AddRange(new[]
@@ -93,6 +93,14 @@ public static class GameLauncher
         });
         return StartDetached(XeniaExe, args, Path.GetDirectoryName(XeniaExe)!);
     }
+
+    /// <summary>
+    /// Xenia options every game gets. readback_resolve: the game's Take Photo (pause menu > Photos &amp; Videos) renders the
+    /// picture, resolves it into a texture and reads that texture on the CPU to make the JPEG and the preview. The NB Xenia
+    /// build defaults to no readback ("none"), so photos came out black; "fast" copies resolves back to game memory one
+    /// frame late, without stalling the GPU (Xenia Canary's own default since December 2025).
+    /// </summary>
+    public static readonly string[] XeniaGameOptions = { "--readback_resolve=fast" };
 
     /// <summary>
     /// Xenia loads patch files from &lt;storage root&gt;\patches for every game with a matching executable. A project's

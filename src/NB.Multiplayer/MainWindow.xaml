@@ -163,6 +163,12 @@
                                         <TextBlock x:Name="HostAddressText" Style="{StaticResource SubText}" Margin="0,4,0,0"/>
                                         <Border CornerRadius="8" Background="#1A1B22" Padding="12" Margin="0,12,0,0">
                                             <StackPanel>
+                                                <TextBlock Text="How to play together" FontWeight="SemiBold" FontSize="13"/>
+                                                <TextBlock x:Name="HowToText" Style="{StaticResource SubText}" FontSize="12.5" Margin="0,4,0,0" TextWrapping="Wrap"/>
+                                            </StackPanel>
+                                        </Border>
+                                        <Border CornerRadius="8" Background="#1A1B22" Padding="12" Margin="0,12,0,0">
+                                            <StackPanel>
                                                 <TextBlock x:Name="ReachText" FontSize="13"/>
                                                 <Button x:Name="InternetTestButton" Style="{StaticResource Link}" Content="Test from the internet (asks canyouseeme.org)"
                                                         Margin="0,6,0,0" HorizontalAlignment="Left" Click="InternetTest_Click"/>
@@ -221,7 +227,8 @@
                                 <TextBlock Style="{StaticResource SubText}" Margin="0,6,0,0" FontSize="13.5" LineHeight="21">
                                     1. Open MULTIPLAYER, then Xbox LIVE. (A new profile asks to start a new save: choose Yes.)<LineBreak/>
                                     2. Host: set MATCH CHOICE to "Play a game with my party". Friends who join appear in MY PARTY by themselves.<LineBreak/>
-                                    3. Host: choose a race or sport under CHOSEN GAME, then START. Don't press B on the party screen (it leaves the party).
+                                    3. Host: choose a race or sport under CHOSEN GAME (RB switches between the race and sport lists), then START. Don't press B on the party screen (it leaves the party).<LineBreak/>
+                                    Matchmaking: RANKED MATCH and PLAYER MATCH work in a room too. They pick a random game for everyone who searches at the same time and start about 20 seconds after the first player starts searching, as soon as 2 or more players are in the lobby. A party searches together.
                                 </TextBlock>
                             </StackPanel>
                         </Border>
@@ -275,11 +282,11 @@
                                                 ToolTip="The same, plus the seven ULTRA parts in Mumbo's Motors"/>
                                     </StackPanel>
                                     <StackPanel>
-                                        <TextBlock Text="Showdown Town co-op (preview)" Style="{StaticResource H2}"/>
+                                        <TextBlock Text="Showdown Town co-op" Style="{StaticResource H2}"/>
                                         <TextBlock Style="{StaticResource SubText}" Margin="0,4,16,0" TextWrapping="Wrap"
-                                                   Text="Play the single-player game together. Everyone plays their own save; NB Multiplayer drives the other players' vehicles through your Showdown Town (Banjo in a trolley), and you can bump into each other. Town vehicles break apart, and you can change or build vehicles anywhere in town."/>
+                                                   Text="Play the single-player game together. Everyone plays their own save; NB Multiplayer shows the other players in your Showdown Town, in their own vehicles and as their own characters, and you can bump into each other. Town vehicles break apart, and you can change or build vehicles anywhere in town."/>
                                         <TextBlock Style="{StaticResource SubText}" Margin="0,6,16,0" FontSize="12" TextWrapping="Wrap"
-                                                   Text="Every vehicle part is unlocked in the co-op edition, whatever your save has. Preview: players on foot, their own vehicle designs, damage between players, shared crates and Acts are not synced yet."/>
+                                                   Text="Every vehicle part is unlocked in the co-op edition, whatever your save has. Synced in town: vehicles and their designs, parts you recall or edit, damage and shots, players on foot, characters, the time of day and the minimap. Not shared yet: crates, Jiggies and Acts (each player plays their own)."/>
                                     </StackPanel>
                                 </DockPanel>
                             </Border>

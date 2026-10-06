@@ -12,11 +12,14 @@ Showdown Town co-op and Character Select as Xenia does.
 | Executable-mod layer | `src/nb/nbpatch.*` + `NB.Cli renut-layer` / `renut-layer-apply` | NB's game-code mods patch words of `default.xex`. reNut compiles the original code ahead of time, so at every word an NB mod replaces (109 sites of 24 mods) the generated code checks memory: when the word differs from the original, a small PowerPC interpreter runs the patched code (and the mod code it branches to) and the function continues where that code returns to original code. One reNut build runs every edition, with mods on or off. |
 | Virtual controller | `src/nb/nb_remote_pad.*` | `--nb_remote_input_port N`: the same UDP controller protocol as NB's Xenia build (NB's test tools). Sends button events too, which the menus read. |
 | Launch paths | `renut-nb.patch` (path wizard) | `--game_data_root` / `--user_data_root` on the command line skip the path wizard, so every edition starts with its own game folder. |
-| Game fix | `src/nb/nb_fixes.cpp`, `config/nb_fixes.toml` | reNut's timing exposes races in the game's loading code. `0x82364250` read a table slot before it was filled (null read, crash at the title screen): an empty slot now skips to the unlock at the end of the function. |
+| Window | `src/nb/nb_window.*`, `renut-nb.patch` (`renut_app.h`) | reNut starts in a window (unless `--fullscreen true` or `fullscreen = true` in renut.toml asks for full screen); **F11** or **Alt+Enter** switch between window and full screen. Alt+F4 closes the game as usual. |
+| Game fixes | `src/nb/nb_fixes.*`, `config/nb_fixes.toml` | reNut's timing exposes races in the game's loading code. `0x82364250` read a table slot before it was filled (null read, crash at the title screen): an empty slot now skips to the unlock at the end of the function. When the intro movie ends, its XAudio engine shuts down and unregisters its render client while the SDK's audio worker is still running that client's callback; the frame then went to a client without a driver (crash in `AudioSystem::SubmitFrame`, the most common title-screen crash). The callbacks are now counted while they run and the unregister waits for them, as on the console. |
+| Photos | `renut-nb.patch` (`gpu/d3d/hooks`, `gpu/render/textures.*`) | The game's Take Photo resolves the picture into a texture and reads it on the CPU (JPEG and preview). reNut keeps resolves on the GPU, so photos were black: a resolve destination the game then locks is now read back into game memory (tiled, in the game's byte order), once per lock. |
 | MSVC compatibility | `src/nb/msvc_compat.cpp` | The SDK's prebuilt libraries need one STL helper that Visual Studio 2022 before 17.14 lacks. |
 
-Known issue: the title screen can still crash now and then (about one start in sixteen in tests, in the game's heap code,
-with or without NB's mods). NB Multiplayer restarts reNut automatically when it crashes within half a minute of starting.
+Known issue: the title screen can still crash now and then (about one start in twelve or fewer in tests, in the game's
+heap code, with or without NB's mods). NB Multiplayer restarts reNut automatically when it crashes within half a minute of
+starting.
 
 How NB Multiplayer uses it: editions carry their mods in their own `default.xex`, which reNut loads; for your own game
 folder and NB Studio projects, NB Multiplayer writes the mod words into the running game. Co-op and Character Select

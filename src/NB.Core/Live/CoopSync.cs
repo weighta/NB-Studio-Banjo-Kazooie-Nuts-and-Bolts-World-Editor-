@@ -162,6 +162,8 @@ public sealed partial class CoopSync
         foreach (var v in _apart.Keys.Where(v => !puppets.Contains(v)).ToList()) _apart.Remove(v);
         foreach (var v in _offSince.Keys.Where(v => !puppets.Contains(v)).ToList()) _offSince.Remove(v);
         foreach (var v in _noBody.Keys.Where(v => !puppets.Contains(v)).ToList()) _noBody.Remove(v);
+        foreach (var v in _everMissing.Keys.Where(v => !puppets.Contains(v)).ToList()) { _everMissing.Remove(v); _reattachAt.Remove(v); _backSince.Remove(v); }
+        _lockedEmpty.RemoveWhere(v => !puppets.Contains(v));
         foreach (var v in _origBlocks.Keys.Where(v => !puppets.Contains(v) && v != _designVeh).ToList()) _origBlocks.Remove(v);
         ForgetPieces(puppets);
     }
@@ -210,10 +212,10 @@ public sealed partial class CoopSync
         _localVeh = 0; _localBody = 0;
         // Mumbo's garage (Build Vehicle from town; its own level): the others show where the player left town
         if (Ptr(level) && _x.U32(level) == GarageLevel && _x.U32(LoadingScene) != LoadingTips && _lastTownAt != DateTime.MinValue)
-            return new CoopState { Mode = CoopMode.Garage, Position = _lastTownPos, Rotation = Quaternion.Identity };
-        if (!Ptr(level) || !TownLevels.Contains(_x.U32(level)) || _x.U32(level + 0x58) != 1 || _x.U32(LoadingScene) == LoadingTips) return default;
+        { NoteAway(); return new CoopState { Mode = CoopMode.Garage, Position = _lastTownPos, Rotation = Quaternion.Identity }; }
+        if (!Ptr(level) || !TownLevels.Contains(_x.U32(level)) || _x.U32(level + 0x58) != 1 || _x.U32(LoadingScene) == LoadingTips) { NoteAway(); return default; }
         uint avatar = _x.U32(level + 0xA44);
-        if (!Ptr(avatar) || _x.U32(avatar) != AvatarVtable) return default;
+        if (!Ptr(avatar) || _x.U32(avatar) != AvatarVtable) { NoteAway(); return default; }
         var town = ReadTown(avatar);
         if (town.Shown && Finite(town)) { _lastTownPos = town.Position; _lastTownAt = DateTime.UtcNow; }
         return town;
@@ -242,10 +244,20 @@ public sealed partial class CoopSync
         {
             Mode = CoopMode.OnFoot, Position = _x.V3(avatar + 0x50), Velocity = _x.V3(avatar + 0xD0),
             Rotation = float.IsFinite(yaw) ? Quaternion.CreateFromAxisAngle(Vector3.UnitY, yaw) : Quaternion.Identity,
-            BodyState = (ushort)(bs < 1000 && !VehicleBodyState(bs) ? bs : 0),
+            // sent as the puppets may show it (older receivers set any state they get: a Jig-O-Vend's WrenchIt crashed them)
+            BodyState = PuppetBodyState((ushort)(bs < 1000 && !VehicleBodyState(bs) ? bs : 0)),
         };
         if (!Finite(foot)) foot = new CoopState { Mode = CoopMode.OnFoot, Position = _x.PlayerPosition, Rotation = Quaternion.Identity };
-        if (_localBody == 0) return WithMenus(foot);
+        // editing the vehicle in place (B beside it, on foot): the others see the vehicle-edit icon and keep the old shape
+        // until the edit is done; then the vehicle is serialized again and their puppets are rebuilt with the new design
+        bool editing = WatchEdits();
+        if (_localBody == 0)
+        {
+            // on foot the parked vehicle's design still counts (an edit made on foot reaches the others' parked puppet)
+            if (LocalDesign != null && DesignVehicleAlive()) foot.Design = LocalDesign.Hash;
+            if (editing && Finite(foot)) { foot.Mode = CoopMode.Building; foot.BodyState = 0; }
+            return WithMenus(foot);
+        }
         var st = new CoopState
         {
             Mode = CoopMode.Vehicle, Position = _x.V3(_localBody), Rotation = Q(_localBody + 0x40),
@@ -260,6 +272,7 @@ public sealed partial class CoopSync
         st.Blueprint = _localVeh != 0 ? _x.U32(_localVeh + 0x18A4) : 0;
         st.Design = LocalDesign != null && _designVeh == _localVeh ? LocalDesign.Hash : 0;
         var res = Finite(st) ? st : Finite(foot) ? foot : default;
+        if (editing && res.Mode == CoopMode.Vehicle) res.Mode = CoopMode.Building;
         return WithMenus(res);
     }
 
@@ -295,6 +308,7 @@ public sealed partial class CoopSync
     /// </summary>
     public void Apply(IReadOnlyDictionary<long, CoopRemote> remotes)
     {
+        EnterTown();                                                       // a new town load: the last town's objects are gone
         Rescan();
         if (HasRespawn)
         {
@@ -309,7 +323,9 @@ public sealed partial class CoopSync
             FootEnd(gone, _assigned[gone]);
             _free.Add(_assigned[gone]); _assigned.Remove(gone);
         }
-        foreach (var id in _walkers.Keys.Where(k => !_assigned.ContainsKey(k)).ToList()) FootEnd(id, 0);
+        // (back into the vehicle they left: a seat that could not run at once - another command under way - is tried again
+        // here; with 0 the driver was left behind hidden, and the player came back with a puppet nobody could get out of)
+        foreach (var id in _walkers.Keys.Where(k => !_assigned.ContainsKey(k)).ToList()) FootEnd(id, _walkers[id].Puppet);
         int shown = 0;
         foreach (var (id, r) in remotes.OrderBy(kv => kv.Key))
         {
@@ -318,7 +334,7 @@ public sealed partial class CoopSync
             if (!_assigned.TryGetValue(id, out var veh))
             {
                 if (_free.Count == 0) continue;
-                veh = PickPuppet(r); _free.Remove(veh); _assigned[id] = veh;
+                veh = PickPuppet(id, r); _free.Remove(veh); _assigned[id] = veh; _lastPuppet[id] = veh;
                 _hidden.Remove(veh);
                 _apart.Remove(veh);
                 if (!Quiet(veh) && Alive(veh) && Finite(st)) Teleport(BodyOf(_x, veh), Apart(veh, st.Position, teleport: true) + new Vector3(0, 0.5f, 0));   // appears where the player is (beside us if that is here)
@@ -345,6 +361,8 @@ public sealed partial class CoopSync
             shown++;
         }
         foreach (var v in _free) if (!Quiet(v) && Alive(v)) Hide(v, BodyOf(_x, v));
+        foreach (var v in _vehicles) if (!Quiet(v) && Alive(v)) LockEntry(v);
+        BuryTick();
         PostDamage();
         PumpVehicles(remotes);
         SteerPieces();
@@ -528,8 +546,12 @@ public sealed partial class CoopSync
             float dmg = BE.F32(ring, o + 4);
             LastHitMaterial = BE.U32(ring, o + 8);
             // collisions are already real in both games (each player's own vehicle hits the other's puppet there): the
-            // world (material 0) and vehicle blocks (2) are not sent; weapons (laser 0x2F, projectiles) and explosions (-1) are
-            if (LastHitMaterial is 0 or 2) continue;
+            // world (material 0) and vehicle blocks (2) are not sent; weapons (laser 0x2F, projectiles) and explosions (-1) are.
+            // Material 1 is a collision too (2026-10-05: a stream of 0.01..0.7 damage contacts while puppets drive or stand,
+            // never from a weapon): it was forwarded as weapon damage, so the other player's real vehicle took damage and
+            // lost parts nobody caused - few in Xenia (5 / 12 in a minute of driving), many under reNut, which steps the
+            // physics more often (34 / 162 contacts in a few minutes)
+            if (LastHitMaterial is 0 or 1 or 2) continue;
             if (byVeh.TryGetValue(veh, out var id) && dmg > 0 && dmg < 1e6f) res[id] = res.GetValueOrDefault(id) + dmg;
         }
         _hitsRead = count;
@@ -605,6 +627,30 @@ public sealed partial class CoopSync
     }
 
     const uint DrawOff = 0x1C0, LayerMask = 0x3F, HiddenLayer = 9, VehicleLayer = 7;
+
+    /// <summary>
+    /// Nobody gets into another player's vehicle. A puppet whose player is out on foot stands there with an empty seat,
+    /// and Banjo could get in with Y (verified 2026-10-05: [A+0xC3C] = the puppet, body state 35 DriveVehicle; then the
+    /// puppet respawn threw him out and the other player's puppet was rebuilt). Vehicle flags +0x18D0:
+    /// bit 0x400 - the avatar's interaction builder 0x82236CE8 marks the vehicle's entry disabled (0x82237204) and the
+    /// enter step refuses a selected one (0x824613C8); the game's own town rule sets it on every town vehicle (0x82569B60,
+    /// removed by the co-op edition's town-vehicles-normal-rules). It alone did NOT stop a Y press right beside the vehicle.
+    /// bit 0x100 - the other enter path refuses it (0x824614C0, also 0x82460E10): with it the Y prompt is gone and Y does
+    /// nothing (verified both ways on the same empty puppet). The game sets it itself (0x82608EA0) and clears it when it
+    /// seats someone through 0x82406618 (0x8260A2FC); it is set here only while the puppet's seat is empty and cleared
+    /// again once its driver is back (the co-op SEAT goes through 0x8260D7C0 directly).
+    /// </summary>
+    const uint VehicleFlags = 0x18D0, NoEntry = 0x400, NoEntryEmpty = 0x100;
+    readonly HashSet<uint> _lockedEmpty = new();
+
+    void LockEntry(uint veh)
+    {
+        uint f = _x.U32(veh + VehicleFlags), want = f | NoEntry;
+        if (DriverOf(veh) == 0) { want |= NoEntryEmpty; _lockedEmpty.Add(veh); }
+        else if (_lockedEmpty.Remove(veh)) want &= ~NoEntryEmpty;
+        if (want == f) return;
+        var b = new byte[4]; BE.W32(b, 0, want); _x.Write(veh + VehicleFlags, b);
+    }
 
     void SetHidden(uint veh, bool hidden)
     {

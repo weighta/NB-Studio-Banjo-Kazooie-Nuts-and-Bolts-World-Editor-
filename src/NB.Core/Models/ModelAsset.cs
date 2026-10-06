@@ -60,6 +60,9 @@ public sealed class MeshDraw
     /// <summary>Instanced draws: the number of instance slots packed into each index (4 for Showdown Town's windows and
     /// doors, 32 for vehicle body blocks such as body_heavy_cube: 24 vertices, raw indices up to 767). 1 otherwise.</summary>
     public int InstanceStride = 1;
+    /// <summary>Instanced triangle lists: the instance slot (raw index mod <see cref="InstanceStride"/>) of each index,
+    /// parallel to <see cref="Indices"/>. Grass tiles use it: each slot is one tile placed by the game (see GrassLayer).</summary>
+    public int[]? Slots;
     /// <summary>Rendergraph node of the draw (draw op 0x30 +16; -1 for op 0x01). LOD levels select nodes.</summary>
     public int Node = -1;
     /// <summary>Draw block (stream op 0x17 = {u32 block, u32 end offset}) the draw belongs to; -1 outside any block.
@@ -67,6 +70,8 @@ public sealed class MeshDraw
     public int Block = -1;
     /// <summary>Second texture coordinate set (contact-occlusion / blend maps use it), when the layout has one.</summary>
     public Vector2[]? UVs2;
+    /// <summary>Third texture coordinate set (Nutty Acres' fabric materials: the ripped-edge alpha of fabric grass).</summary>
+    public Vector2[]? UVs3;
     /// <summary>Tangents (the second 2:10:10:10 element of normal-mapped layouts).</summary>
     public Vector3[]? Tangents;
     /// <summary>Material section flags (stream op 0x15 +8) in effect at this draw: low nibble 1 = opaque, 2 = alpha
@@ -613,6 +618,7 @@ public sealed class ModelAsset
                 if (k > 1)
                 {
                     dr.Instanced = true; dr.InstanceStride = k;
+                    if (dr.Primitive == 4) dr.Slots = idx.Select(i => i % k).ToArray();
                     for (int i = 0; i < idx.Length; i++) if (idx[i] != 0xFFFF || dr.Primitive != 5) idx[i] /= k;
                 }
                 dr.Indices = dr.Primitive switch { 4 => idx, 5 => StripToList(idx), _ => idx };
@@ -630,6 +636,7 @@ public sealed class ModelAsset
             foreach (var dr in grp.Where(x => !x.Instanced))
             {
                 dr.Instanced = true; dr.InstanceStride = k;
+                if (dr.Primitive == 4) dr.Slots = dr.Indices.Select(i => i % k).ToArray();
                 for (int i = 0; i < dr.Indices.Length; i++) dr.Indices[i] /= k;
             }
         }
@@ -682,6 +689,7 @@ public sealed class ModelAsset
         var pos = dr.Layout.FirstOrDefault(e => e.Offset == 0) ?? dr.Layout.First();
         var uv = dr.Layout.FirstOrDefault(e => e.Format is VtxFormat.k_16_16_FLOAT or VtxFormat.k_32_32_FLOAT);
         var uv2 = uv == null ? null : dr.Layout.FirstOrDefault(e => e != uv && e.Offset > uv.Offset && e.Format is VtxFormat.k_16_16_FLOAT or VtxFormat.k_32_32_FLOAT);
+        var uv3 = uv2 == null ? null : dr.Layout.Where(e => e.Offset > uv2.Offset && e.Format is VtxFormat.k_16_16_FLOAT or VtxFormat.k_32_32_FLOAT).OrderBy(e => e.Offset).FirstOrDefault();
         var nrm = dr.Layout.FirstOrDefault(e => e != pos && e.Format is VtxFormat.k_2_10_10_10 or VtxFormat.k_10_11_11 or VtxFormat.k_11_11_10);
         var tan = nrm == null ? null : dr.Layout.FirstOrDefault(e => e != pos && e != nrm && e.Offset > nrm.Offset && e.Format is VtxFormat.k_2_10_10_10 or VtxFormat.k_10_11_11 or VtxFormat.k_11_11_10);
         // vertex colour: a normalized 8:8:8:8 element, unless the layout is skinned (then it holds the blend weights)
@@ -690,6 +698,7 @@ public sealed class ModelAsset
         dr.Positions = new Vector3[n];
         if (uv != null) dr.UVs = new Vector2[n];
         if (uv2 != null) dr.UVs2 = new Vector2[n];
+        if (uv3 != null) dr.UVs3 = new Vector2[n];
         if (nrm != null) dr.Normals = new Vector3[n];
         if (tan != null) dr.Tangents = new Vector3[n];
         if (col != null) dr.Colors = new uint[n];
@@ -702,6 +711,7 @@ public sealed class ModelAsset
             if (uv != null) { var t = Fetch(g, b + uv.Offset, uv); dr.UVs![i] = new Vector2(t.X, t.Y); }
             if (nrm != null) { var t = Fetch(g, b + nrm.Offset, nrm); dr.Normals![i] = Vector3.Normalize(new Vector3(t.X, t.Y, t.Z) + new Vector3(1e-9f)); }
             if (uv2 != null) { var t = Fetch(g, b + uv2.Offset, uv2); dr.UVs2![i] = new Vector2(t.X, t.Y); }
+            if (uv3 != null) { var t = Fetch(g, b + uv3.Offset, uv3); dr.UVs3![i] = new Vector2(t.X, t.Y); }
             if (tan != null) { var t = Fetch(g, b + tan.Offset, tan); dr.Tangents![i] = Vector3.Normalize(new Vector3(t.X, t.Y, t.Z) + new Vector3(1e-9f)); }
             if (col != null) dr.Colors![i] = BE.U32(g, b + col.Offset);   // raw big-endian word: memory bytes 0..3 = bits 31..0
         }

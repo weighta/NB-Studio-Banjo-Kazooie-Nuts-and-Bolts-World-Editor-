@@ -8,3 +8,37 @@ address = 0x823642D8
 name = "nbfix_empty_slot"
 registers = ["r31"]
 jump_address_on_true = 0x82364340
+
+# XAudio's render callback (XAUDIO::CEngine::Process, 0x82664B70, which the SDK's audio worker runs outside its lock)
+# ends in XAudioSubmitRenderDriverFrame (via CXenonRenderer::Process). When the intro movie ends its XAudio engine shuts
+# down and unregisters the render client while such a callback runs (title screen loading); the frame then went to a
+# client with no driver (crash in AudioSystem::SubmitFrame, about one start in three when started the way NB
+# Multiplayer starts reNut). On the console an unregister waits for a running callback: the callbacks are counted
+# while they run (enter / leave) and the unregister calls wait until none runs (at most 1 s). A frame that still finds
+# no driver is dropped.
+[[midasm_hook]]
+address = 0x82664B70
+name = "nbfix_audio_enter"
+registers = []
+
+[[midasm_hook]]
+address = 0x826676D4
+name = "nbfix_audio_submit"
+registers = ["r3", "r4"]
+jump_address_on_true = 0x826676D8
+
+[[midasm_hook]]
+address = 0x82664D30
+name = "nbfix_audio_leave"
+registers = []
+
+# XAudioUnregisterRenderDriverClient in CXenonRenderer's destructor (0x826675C0) and in 0x826676F0.
+[[midasm_hook]]
+address = 0x8266763C
+name = "nbfix_audio_unregister"
+registers = []
+
+[[midasm_hook]]
+address = 0x8266771C
+name = "nbfix_audio_unregister2"
+registers = []

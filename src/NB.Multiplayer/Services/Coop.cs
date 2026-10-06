@@ -226,6 +226,19 @@ public sealed class CoopNet : IDisposable
         Send(p);
     }
 
+    /// <summary>Joiner: the host said it closed the room.</summary>
+    public volatile bool HostClosed;
+    /// <summary>Joiner: when the host last answered a ping (MinValue = not yet: pings run while the game is attached).</summary>
+    public DateTime LastHostReply = DateTime.MinValue;
+
+    /// <summary>Host: tells every joiner the room is closing (sent a few times: UDP can drop one).</summary>
+    public void CloseRoom()
+    {
+        if (!_isHost) return;
+        var p = Header(13, 32);
+        for (int i = 0; i < 3; i++) { Send(p); Thread.Sleep(30); }
+    }
+
     /// <summary>The local game closed (or the player left): the others hide this player's puppet at once.</summary>
     public void Leave()
     {
@@ -280,9 +293,13 @@ public sealed class CoopNet : IDisposable
             case 5:   // ping: the host answers at once
                 if (_isHost && reply != null) { _peers[from] = (reply, DateTime.UtcNow); var q = (byte[])p.Clone(); q[4] = 6; Try(() => reply(q)); }
                 return;
+            case 13:  // the host closed the room
+                if (!_isHost) HostClosed = true;
+                return;
             case 6:   // pong: round trip to the host
                 if (!_isHost)
                 {
+                    LastHostReply = DateTime.UtcNow;
                     double rtt = (uint)_clock.ElapsedMilliseconds - BE.U32(p, 8);
                     if (rtt >= 0 && rtt < 5000) RoundTripMs = RoundTripMs == 0 ? rtt : RoundTripMs * 0.8 + rtt * 0.2;
                 }
@@ -495,7 +512,11 @@ public sealed class CoopService : IDisposable
                 }
                 if (_local.Mode is CoopMode.Absent or CoopMode.Garage)
                 {
-                    Status = x!.Player == 0 ? "Waiting for gameplay (load a save or start a new game)..." : "Waiting for Showdown Town...";
+                    var ch = NB.Core.Mods.Characters.ByIndex(_character);
+                    Status = x!.Player == 0 ? "Waiting for gameplay (load a save or start a new game)..."
+                        : ch.TownOnly && sync.HasCharselMod
+                            ? $"Waiting for Showdown Town... (outside the town you are Banjo: {ch.Name} is a Showdown Town character and is back as soon as you return to town)"
+                            : "Waiting for Showdown Town...";
                     Thread.Sleep(100); continue;
                 }
                 // steering the puppets runs faster than the network (the game simulates at 60 Hz; between two writes the
@@ -589,7 +610,7 @@ public sealed class CoopService : IDisposable
         try
         {
             File.AppendAllText(LogPath, $"{DateTime.Now:HH:mm:ss.fff} gap {_maxGap}ms scan {sync.LastScanMs:F0}ms remotes {remotes.Count} " +
-                $"shots replayed {shots?.Replayed} skipped {shots?.Skipped} locked {shots?.Locked} retargeted {shots?.Retargeted} pieces {sync.PieceTicks}/{sync.PiecesPlaced} teleports {sync.Teleports} walking {sync.Walking} chars {sync.CharacterStatus} foot {string.Join(",", sync.FootRequests.Select(kv => kv.Key + ":" + kv.Value))} " +
+                $"shots replayed {shots?.Replayed} skipped {shots?.Skipped} locked {shots?.Locked} retargeted {shots?.Retargeted} pieces {sync.PieceTicks}/{sync.PiecesPlaced} reattached {sync.Reattached} towns {sync.TownSessions} teleports {sync.Teleports} walking {sync.Walking} chars {sync.CharacterStatus} foot {string.Join(",", sync.FootRequests.Select(kv => kv.Key + ":" + kv.Value))} " +
                 $"vreq {string.Join(",", sync.VehicleRequests.Select(kv => kv.Key + ":" + kv.Value))} sent {rate} | {sync.Assignments} | {sync.LastVehicleEvent}" + Environment.NewLine);
         }
         catch (IOException) { }

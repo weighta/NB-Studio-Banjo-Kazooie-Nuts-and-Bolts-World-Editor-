@@ -83,7 +83,7 @@ public sealed partial class SceneViewport
             case "--show":
             {
                 var what = next(); bool on = next() == "on";
-                switch (what) { case "markers": ShowMarkers = on; break; case "paths": ShowPaths = on; break; case "terrain": ShowTerrain = on; break; case "scenery": ShowScenery = on; break; case "objects": ShowObjects = on; break; }
+                switch (what) { case "markers": ShowMarkers = on; break; case "paths": ShowPaths = on; break; case "terrain": ShowTerrain = on; break; case "scenery": ShowScenery = on; break; case "objects": ShowObjects = on; break; case "grass": ShowGrass = on; break; }
                 Refresh3D(); log($"script: show {what} {on}"); return true;
             }
             case "--key":
@@ -148,6 +148,12 @@ public sealed partial class SceneViewport
                 Render();
                 if (v.Length < 5 || v[4] != 0) OnMouseUp(null, new MouseEventArgs(MouseButtons.Left, 1, v[2], v[3], 0));
                 log($"script: drag {v[0]},{v[1]} -> {v[2]},{v[3]}; selection at {(Selected != null ? Fmt(Selected.Transform.Translation) : "-")}; transforming {Transforming}"); return true;
+            }
+            case "--mouse-up":
+            {
+                var v = next().Split(',').Select(int.Parse).ToArray();
+                OnMouseUp(null, new MouseEventArgs(MouseButtons.Left, 1, v[0], v[1], 0)); Render();
+                log($"script: mouse up at {v[0]},{v[1]}; transforming {Transforming}" + (Selected != null ? $"; selection at {Fmt(Selected.Transform.Translation)}" : "")); return true;
             }
             case "--mode-cycle":
             {
@@ -220,6 +226,40 @@ public sealed partial class SceneViewport
                 var sd = Vector3.Normalize(_r.Lighting.SunDirection);
                 var h2 = RayScene(p0 + sd * 0.05f, sd);
                 log($"script: sunray from {Fmt(p0)} ({hit.O.Name}) towards {Fmt(sd)}: " + (h2.O == null ? "lit" : $"blocked by {h2.O.Name} ({NB.Core.Formats.AssetIds.DisplayName(h2.M!.View.Name)}) draw #{h2.D} flags {h2.M.Draws[h2.D].SectionFlags:X} at {h2.T:0.0} units, point {Fmt(p0 + sd * h2.T)}"));
+                return true;
+            }
+            case "--grass-wait":
+            {
+                // waits until the grass layers are laid out (background task), then renders a frame and reports
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                while (!GrassReady && Scene != null && Scene.Grass.Count > 0 && sw.ElapsedMilliseconds < 120000) { Application.DoEvents(); await Task.Delay(100); }
+                Render();
+                log($"script: {GrassInfo} (after {sw.ElapsedMilliseconds} ms); last frame drew {_r.GrassTilesDrawn} grass tiles");
+                return true;
+            }
+            case "--sel-collision":
+            {
+                ShowSelectionCollision = next() == "on"; Render();
+                log($"script: selection collision {(ShowSelectionCollision ? "on" : "off")}: {SelectionCollisionInfo}"); return true;
+            }
+            case "--grass-debug": _r.GrassDebug = int.Parse(next()); _gl.Invalidate(); log($"script: grass debug {_r.GrassDebug}"); return true;
+            case "--grass-light": _r.GrassLightScale = F(next()); _gl.Invalidate(); log($"script: grass light scale {_r.GrassLightScale}"); return true;
+            case "--sel-mat":
+            {
+                // materials of the selected object's model (debugging: which textures, blend, translated shader)
+                if (Selected?.Model == null) { log("script: no model selected"); return true; }
+                var mdl = Selected.Model;
+                for (int di = 0; di < mdl.Draws.Count; di++)
+                {
+                    var d = mdl.Draws[di]; var mi = MaterialInfo.Of(d);
+                    log($"script: draw #{di} node {d.Node} flags {d.SectionFlags:X} blend {mi.Blend} base {mi.Base} alpha {mi.AlphaTex} uv2 {(d.UVs2 != null)} layout [{string.Join(" ", d.Layout)}]");
+                    if (d.ColourVertexShader is { } vsx && d.Passes.Length > 0)
+                        log("    interpolators: " + string.Join(" ", XenosShader.InterpolatorUvs(vsx, d.Passes[0].VsConstants, d.Layout).OrderBy(k => k.Key).Select(k => $"{(k.Key & 0xFF)}{((k.Key & XenosShader.ZwKey) != 0 ? ".zw" : ".xy")}=set{k.Value.Set}{(k.Value.Swap ? " swapped" : "")}{(k.Value.RowX != null ? $" rows {k.Value.RowX} {k.Value.RowY}" : "")}")) + $"; uv sets decoded: {(d.UVs != null ? 1 : 0) + (d.UVs2 != null ? 1 : 0) + (d.UVs3 != null ? 1 : 0)}");
+                    if (mi.Shader is { } tr) { log($"    shader: {tr}; uv2 samplers [{string.Join(",", tr.SamplerUv2)}]"); if (di == 0) log(tr.Body); }
+                    else if (d.ColourShader is { } sh2) log("    not translated: " + XenosTranslator.Translate(sh2, d.Passes.Length > 0 ? d.Passes[0].Constants : d.PixelConstants, d.Colors != null, d.UVs2 != null).Fail);
+                    if (di == 0 && d.ColourShader is { } sh3) log(sh3.Disassemble());
+                    if (di == 0 && d.ColourVertexShader is { } vs3) log(vs3.Disassemble());
+                }
                 return true;
             }
             case "--sel-info":

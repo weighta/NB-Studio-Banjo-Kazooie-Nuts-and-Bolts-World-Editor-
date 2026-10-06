@@ -644,6 +644,8 @@ public sealed class RoomServer : IDisposable
                     PrivateSlots = (int)(Num(j, "privateSlotsCount") ?? 0), Port = (int)(Num(j, "port") ?? 36000),
                 };
                 s.SetXLast(Str(j, "xlast_src"));
+                if (Environment.GetEnvironmentVariable("NB_DUMP_XLAST") is { Length: > 0 } dumpTo && s.XLastSrc != null && !File.Exists(dumpTo))
+                    File.WriteAllText(dumpTo, s.XLastSrc);   // diagnostics: the title's XLast (base64 gzip UTF-16 XML)
                 _sessions[s.Key] = s;   // upsert: re-creating an id resets members/properties like the reference
                 if (s.Advertised)
                 {
