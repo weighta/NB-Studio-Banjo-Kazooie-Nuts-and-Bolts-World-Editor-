@@ -273,7 +273,7 @@ public sealed class LightBaker
     public Vector3 Direct(Vector3 p, Vector3 n, int seed)
     {
         var sum = Vector3.Zero;
-        var o = p + n * 0.5f;
+        var o = p + n * 1f;
         foreach (var l in _lights)
         {
             var dl = l.Pos - p;

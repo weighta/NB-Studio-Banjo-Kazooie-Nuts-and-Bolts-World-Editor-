@@ -16,8 +16,11 @@ public sealed class VmfImportDialog : Form
     readonly NumericUpDown _exposure = new() { DecimalPlaces = 2, Increment = 0.1m, Minimum = 0.1m, Maximum = 5, Value = 1, Width = 60 };
     readonly ComboBox _texSize = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 70 };
     readonly CheckBox _bake = new() { Text = "Bake lights (light, light_spot, light_environment) into lightmaps", Checked = true, AutoSize = true };
-    readonly CheckBox _sky3d = new() { Text = "Drop the 3D skybox (room around sky_camera)", Checked = true, AutoSize = true };
-    readonly CheckBox _skyCol = new() { Text = "Sky brushes collide (invisible boundary)", Checked = true, AutoSize = true };
+    readonly ComboBox _sky3d = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 230 };
+    readonly CheckBox _skyReplica = new() { Text = "Skip the skybox's replica of the map", Checked = true, AutoSize = true };
+    readonly NumericUpDown _skyLuxel = new() { DecimalPlaces = 1, Increment = 0.5m, Minimum = 0.5m, Maximum = 16, Value = 1, Width = 50 };
+    readonly NumericUpDown _skyStep = new() { DecimalPlaces = 0, Minimum = 1, Maximum = 8, Value = 2, Width = 45 };
+    readonly CheckBox _skyCol = new() { Text = "Sky walls (tools/toolsskybox brushes) stay as invisible walls", Checked = false, AutoSize = true };
     readonly CheckBox _playerClip = new() { Text = "Player clips collide", Checked = false, AutoSize = true };
     readonly CheckBox _townObjects = new() { Text = "Move the town's characters and objects out of the way", Checked = true, AutoSize = true };
     readonly CheckBox _garage = new() { Text = "Keep Mumbo's Motors (garage entrance)", Checked = false, AutoSize = true };
@@ -37,7 +40,8 @@ public sealed class VmfImportDialog : Form
             var o = new VmfImportOptions
             {
                 Scale = (float)_scale.Value, GameFolder = _game.Text.Length > 0 ? _game.Text : null, MaterialFolder = _mats.Text.Length > 0 ? _mats.Text : null,
-                Drop3DSkybox = _sky3d.Checked, SkyCollision = _skyCol.Checked, PlayerClipCollision = _playerClip.Checked,
+                Skybox = (Skybox3DMode)_sky3d.SelectedIndex, SkipSkyboxInsideMap = _skyReplica.Checked, SkyLuxelScale = (float)_skyLuxel.Value,
+                SkyCollisionStep = (int)_skyStep.Value, KeepSkyBrushes = _skyCol.Checked, PlayerClipCollision = _playerClip.Checked,
                 RemoveTownObjects = _townObjects.Checked, KeepGarage = _garage.Checked, SpawnAtGroundHeight = _spawnHeight.Checked,
                 IncludeProps = _includeProps.Checked, PropFolder = _props.Text.Length > 0 ? _props.Text : null,
                 MaxTextureSize = int.Parse((string)_texSize.SelectedItem!),
@@ -75,7 +79,10 @@ public sealed class VmfImportDialog : Form
         opts.SetFlowBreak(_texSize, true);
         opts.Controls.Add(_bake); Lbl("Luxel (Source units):"); opts.Controls.Add(_luxel); Lbl("Exposure:"); opts.Controls.Add(_exposure);
         opts.SetFlowBreak(_exposure, true);
-        foreach (var c in new Control[] { _sky3d, _skyCol, _playerClip, _spawnHeight, _townObjects, _garage }) opts.Controls.Add(c);
+        _sky3d.Items.AddRange(new object[] { "3D skybox: port as full-size terrain", "3D skybox: drop", "3D skybox: keep in place (tiny)" }); _sky3d.SelectedIndex = 0;
+        opts.Controls.Add(_sky3d); opts.Controls.Add(_skyReplica); Lbl("Skybox luxel x:"); opts.Controls.Add(_skyLuxel); Lbl("collision every n-th row:"); opts.Controls.Add(_skyStep);
+        opts.SetFlowBreak(_skyStep, true);
+        foreach (var c in new Control[] { _skyCol, _playerClip, _spawnHeight, _townObjects, _garage }) opts.Controls.Add(c);
         opts.SetFlowBreak(_garage, true);
         opts.Controls.Add(_includeProps); opts.Controls.Add(_props);
         var pb = new Button { Text = "Browse…", AutoSize = true };
@@ -131,7 +138,10 @@ public sealed class VmfImportDialog : Form
             Cursor = Cursors.WaitCursor;
             var map = VmfMap.Load(_file.Text);
             var plan = VmfImporter.Plan(map, Options, _world);
-            var lines = VmfImporter.Describe(plan);
+            // the memory budget first (it decides whether the map runs on a real console), then the details
+            var lines = VmfImporter.Budget(plan);
+            lines.Add("");
+            lines.AddRange(VmfImporter.Describe(plan).Where(x => !x.StartsWith("memory budget") && !x.StartsWith("  ") ));
             lines.Add("");
             lines.Add("materials (triangles, texture, source):");
             lines.AddRange(plan.Materials.Select(m => $"  {m.Material,-48} {m.Triangles,7}  {m.OutW}x{m.OutH}  {m.Source}"));

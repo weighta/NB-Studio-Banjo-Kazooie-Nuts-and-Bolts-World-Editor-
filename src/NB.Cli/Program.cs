@@ -913,7 +913,8 @@ static class Program
                     // options: --scale s  --offset x,y,z  --world hex  --materials dir  --props  --prop-folder dir  --prop-zup
                     //          --placeholders  --no-prop-collision  --no-light  --no-fog  --no-water  --no-spawn  --keep-bounds
                     //          --keep-garage  --keep-town-objects  --tex-size n  --gen-size n  --chunk n  --assumed-size n
-                    //          --game <Source game / Garry's Mod folder>  --keep-skybox  --no-sky-collision
+                    //          --game <Source game / Garry's Mod folder>  --skybox port|drop|inplace  --skybox-replica  --sky-luxel x
+                    //          --sky-collision-step n  --sky-walls (keep sky shell brushes as invisible walls)
                     //          bake: --no-bake --luxel u --exposure x --gamma g --bounce b --sky-samples n --page n --game-ambient a --game-sun s
                     bool import = args[0] == "vmf-import";
                     string vmf = import ? args[2] : args[1];
@@ -945,8 +946,12 @@ static class Program
                             case "--assumed-size": o.AssumedTextureSize = int.Parse(args[++i]); break;
                             case "--chunk": o.ChunkTriangles = int.Parse(args[++i]); break;
                             case "--game": o.GameFolder = args[++i]; break;
-                            case "--keep-skybox": o.Drop3DSkybox = false; break;
-                            case "--no-sky-collision": o.SkyCollision = false; break;
+                            case "--skybox": o.Skybox = Enum.Parse<NB.Core.SourceEngine.Skybox3DMode>(args[++i], true); break;   // port | drop | inplace
+                            case "--keep-skybox": o.Skybox = NB.Core.SourceEngine.Skybox3DMode.InPlace; break;
+                            case "--skybox-replica": o.SkipSkyboxInsideMap = false; break;
+                            case "--sky-luxel": o.SkyLuxelScale = Fl(args[++i]); break;
+                            case "--sky-collision-step": o.SkyCollisionStep = int.Parse(args[++i]); break;
+                            case "--sky-walls": o.KeepSkyBrushes = true; break;
                             case "--player-clips": o.PlayerClipCollision = true; break;
                             case "--no-bake": o.Bake.Enabled = false; break;
                             case "--luxel": o.Bake.LuxelSize = Fl(args[++i]); break;

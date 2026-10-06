@@ -12,6 +12,8 @@ using NB.Core.World;
 namespace NB.Core.SourceEngine;
 
 /// <summary>Options of a Source map import (NB Studio Tools > Import Source Map, NB.Cli vmf-import).</summary>
+public enum Skybox3DMode { Port, Drop, InPlace }
+
 public sealed class VmfImportOptions
 {
     /// <summary>Game units (1 unit = 1 m) per Source unit (1 Source unit = 1 inch = 0.0254 m). The default 0.04 makes the
@@ -40,10 +42,22 @@ public sealed class VmfImportOptions
     public bool PropPlaceholders;
     public bool PropCollision = true;
     public bool Light = true, Fog = true, Water = true, Spawn = true;
-    /// <summary>Drop the 3D skybox (the room around sky_camera and everything in it).</summary>
-    public bool Drop3DSkybox = true;
-    /// <summary>Faces with tools/toolsskybox still collide (an invisible boundary like in Source); false = open to the void.</summary>
-    public bool SkyCollision = true;
+    /// <summary>What happens to the 3D skybox (the sealed room around sky_camera): Port = its brushes, displacements,
+    /// lights and props become real terrain at full size around the map (world = (p - sky_camera) * scale, Source's own
+    /// 3D-skybox mapping); Drop = removed; InPlace = imported where it is in the map (tiny, far away).</summary>
+    public Skybox3DMode Skybox = Skybox3DMode.Port;
+    /// <summary>Ported skybox brushes whose full-size horizontal (X/Y) bounds lie inside the playable map's footprint are
+    /// skipped: they are the scaled-down replica of the map that the 3D skybox keeps under the real one.</summary>
+    public bool SkipSkyboxInsideMap = true;
+    /// <summary>Lightmap luxel size of ported skybox geometry, in skybox units (x the bake's luxel size): the skybox is
+    /// scaled up (16x), so its luxels are 16x coarser in the world and memory stays bounded.</summary>
+    public float SkyLuxelScale = 1f;
+    /// <summary>Collision of ported skybox displacements uses every n-th grid row/column (2 = a quarter of the triangles).</summary>
+    public int SkyCollisionStep = 2;
+    /// <summary>Brushes with a tools/toolsskybox(2d) face (the sky shell around the map) keep their collision as an
+    /// invisible boundary like in Source. Off (default): the whole brush is removed (no mesh, no collision, no light
+    /// blocking), so you can drive out past where the sky walls were.</summary>
+    public bool KeepSkyBrushes;
     /// <summary>tools/toolsplayerclip collides. Off by default: player clips are gameplay barriers (lobby pens that
     /// triggers and teleports open in Source; gm_hide's spawn pen wedged the vehicle, verified in Xenia), and the
     /// game's vehicles are not Source players. tools/toolsclip (blocks everything) always collides.</summary>
@@ -106,6 +120,8 @@ public sealed class VmfFace
     public int Page = -1, X, Y, W, H;
     public Vector3 Origin, T1, T2;      // Source coordinates: luxel (i, j) centre = Origin + T1 * i + T2 * j (planar faces)
     public List<Vector2>? Uv2;          // per surface vertex, in texels of the page
+    /// <summary>Ported 3D-skybox geometry: Surface is in skybox coordinates (lit in skybox space, scaled at output).</summary>
+    public bool Sky3D;
 }
 
 /// <summary>Faces of one material that become one model.</summary>
@@ -135,6 +151,13 @@ public sealed class VmfPlan
     public string? LightSource, FogSource;
     public string? Skybox3D;
     public int SkyboxBrushes, SkyboxEntities;
+    /// <summary>Sky shell brushes removed (a tools/toolsskybox face), ported skybox brushes, skybox brushes skipped as the
+    /// replica under the map, and the ported terrain's render / collision triangles and luxels.</summary>
+    public int SkyShellBrushes, SkyPorted, SkySkippedReplica, SkyTriangles, SkyCollisionTriangles, SkyLuxels;
+    public double SkyScale;
+    public DVec3 SkyCamera;
+    /// <summary>Game-space box of all collision (the world box the game builds from it) and its edges.</summary>
+    public Vector3 CollisionMin, CollisionMax;
     public string? ContentSource;
     public int ContentFound, ContentMissing;
     public Vector3 Min, Max;
@@ -148,6 +171,10 @@ public sealed class VmfPlan
     /// <summary>Estimated bytes the import adds to the world bundle (geometry, textures, collision, instances).</summary>
     public long AddedBytes;
     public long GeometryBytes, TextureBytes, LightmapBytes, CollisionBytes, PropBytes;
+    /// <summary>The parts of geometry / lightmaps / collision that belong to the ported skybox terrain.</summary>
+    public long SkyGeometryBytes, SkyLightmapBytes, SkyCollisionBytes;
+    public int MaxTextureSize; public float LuxelSize, SkyLuxelScale = 1; public int SkyCollisionStep = 1;
+    public bool UnlimitedBounds;
     /// <summary>Estimate for the props if they were included (from the game's .vvd vertex counts).</summary>
     public long PropBudgetBytes; public int PropBudgetVertices;
     /// <summary>World bundle size after hiding the original scenery, before the import (measured for Showdown Town).</summary>
@@ -161,6 +188,9 @@ public sealed class VmfPlan
     internal readonly List<int> CollisionTris = new();
     internal readonly List<Vector3> OccluderTris = new();   // Source coordinates, 3 per triangle
     internal readonly List<bool> OccluderSky = new();       // per occluder triangle: a sky face (sun and sky rays end there lit)
+    internal readonly List<Vector3> SkyOccluderTris = new(); // ported skybox geometry, skybox coordinates
+    internal readonly List<bool> SkyOccluderSky = new();
+    internal List<BakeLight> SkyLights = new();
     internal readonly List<Vector3> WaterTris = new();
     internal readonly List<(VmfPropPlan Prop, Matrix4x4 World)> PropPlacements = new();
     internal readonly Dictionary<VmfPropPlan, List<ImportMesh>> PropMeshes = new();
@@ -207,6 +237,8 @@ public static class VmfImporter
     /// <summary>Measured: Showdown Town with every scenery instance hidden, the terrain emptied and the hidden models
     /// stripped (an import of a small test map, minus its own size): 149.3 MB.</summary>
     public const long TownBaselineBytes = 156_500_000;
+    /// <summary>Strongest fog an imported map gets (game light-setup fog max opacity; the town uses 0.33..0.62).</summary>
+    public const float MaxFog = 0.5f;
     /// <summary>Per-unit costs used by the estimate (bytes).</summary>
     public const int BytesPerVertex = 28, BytesPerTriangle = 6, ModelOverhead = 24 * 1024, InstanceBytes = 512, CollisionBytesPerTriangle = 48;
 
@@ -284,9 +316,15 @@ public static class VmfImporter
         plan.Content = content;
 
         // 3D skybox
-        (DVec3 Min, DVec3 Max)? sky = o.Drop3DSkybox ? Skybox3D(map, plan) : null;
+        (DVec3 Min, DVec3 Max)? sky = o.Skybox != Skybox3DMode.InPlace ? Skybox3D(map, plan) : null;
+        bool port = sky != null && o.Skybox == Skybox3DMode.Port;
         bool InSky(DVec3 p) => sky is { } b && p.X >= b.Min.X && p.Y >= b.Min.Y && p.Z >= b.Min.Z && p.X <= b.Max.X && p.Y <= b.Max.Y && p.Z <= b.Max.Z;
-        plan.Keep = e => e.Origin is not DVec3 org || !InSky(org);
+        // entities whose position does not matter (light_environment often sits in the skybox room) are always kept
+        bool Global(VmfEntity e) => GlobalClasses.Contains(e.ClassName);
+        plan.Keep = e => Global(e) || e.Origin is not DVec3 org || !InSky(org);
+        double skyK = plan.SkyScale; var cam = plan.SkyCamera;
+        DVec3 SkyToWorld(DVec3 p) => (p - cam) * skyK;
+        Vector3 GS(DVec3 p) => G(SkyToWorld(p));
         if (o.SpawnAtGroundHeight && SpawnClasses.SelectMany(c => map.Entities.Where(e => e.ClassName.Equals(c, StringComparison.OrdinalIgnoreCase)))
                 .Where(e => e.Origin != null && plan.Keep(e)).OrderByDescending(e => (int.TryParse(e.Get("spawnflags"), out int f) ? f : 0) & 1).FirstOrDefault() is { } sp0)
         {
@@ -310,20 +348,38 @@ public static class VmfImporter
             return u;
         }
 
-        var solids = map.AllSolids.ToList();
+        // the map first (its bounds decide which skybox brushes are the replica under it), then the skybox
+        bool SolidInSky(VmfSolid x) => sky != null && x.Sides.All(sd => InSky(sd.P0) && InSky(sd.P1) && InSky(sd.P2));
+        var solids = map.AllSolids.Select(x => (Solid: x, Sky: SolidInSky(x))).OrderBy(x => x.Sky).ToList();
         var faces = new List<VmfFace>();
         var mn = new Vector3(float.MaxValue); var mx = new Vector3(float.MinValue);
+        var mainMin = new DVec3(double.MaxValue, double.MaxValue, double.MaxValue); var mainMax = new DVec3(double.MinValue, double.MinValue, double.MinValue);
         int done = 0;
-        foreach (var solid in solids)
+        foreach (var (solid, inSky) in solids)
         {
             if (++done % 500 == 0) progress?.Report(($"brushes {done}/{solids.Count}", 0.5 * done / solids.Count));
             var use = ClassUse(solid.Owner);
             if (use == null) { plan.SkippedClasses[solid.Owner] = plan.SkippedClasses.GetValueOrDefault(solid.Owner) + 1; continue; }
-            if (sky != null && solid.Sides.All(x => InSky(x.P0) && InSky(x.P1) && InSky(x.P2))) { plan.SkyboxBrushes++; continue; }
-            plan.Brushes++;
+            // sky shell: a brush with a skybox face is removed entirely (the 3D skybox room's walls always)
+            if (solid.Sides.Any(x => IsSkyMaterial(x.Material)) && (!o.KeepSkyBrushes || inSky)) { plan.SkyShellBrushes++; continue; }
+            if (inSky && !port) { plan.SkyboxBrushes++; continue; }
             var surfaces = BrushMesher.Mesh(solid, out int bad);
             plan.Degenerate += bad;
-            if (sky != null && surfaces.Count > 0 && surfaces.All(x => x.Positions.All(InSky))) { plan.SkyboxBrushes++; plan.Brushes--; continue; }
+            if (inSky)
+            {
+                // full-size bounds of the skybox brush; within the map's horizontal footprint = the replica of the
+                // playable area (heights are not compared: replicas are often a little thicker or lower than the map)
+                var smin = new DVec3(double.MaxValue, double.MaxValue, double.MaxValue); var smax = new DVec3(double.MinValue, double.MinValue, double.MinValue);
+                foreach (var q in surfaces.SelectMany(x => x.Positions)) { var w = SkyToWorld(q); smin = Min(smin, w); smax = Max(smax, w); }
+                const double Eps = 8;
+                if (o.SkipSkyboxInsideMap && surfaces.Count > 0 && mainMin.X < mainMax.X &&
+                    smin.X >= mainMin.X - Eps && smin.Y >= mainMin.Y - Eps && smax.X <= mainMax.X + Eps && smax.Y <= mainMax.Y + Eps)
+                { plan.SkySkippedReplica++; continue; }
+                plan.SkyPorted++;
+            }
+            else foreach (var q in surfaces.SelectMany(x => x.Positions)) { mainMin = Min(mainMin, q); mainMax = Max(mainMax, q); }
+            plan.Brushes++;
+            Func<DVec3, Vector3> GX = inSky ? GS : G;
             // a brush with a water material anywhere is a water volume in Source (not solid, not drawn): its top face
             // becomes a water region
             bool waterBrush = use.Value.Water || solid.Sides.Any(x => x.Disp == null && Use(x.Material).Water);
@@ -334,7 +390,6 @@ public static class VmfImporter
                 bool draw = use.Value.Draw && mu.Draw, collide = use.Value.Collide && mu.Collide, water = false, occlude = shadows && mu.Occlude;
                 bool skyFace = shadows && mu.Why is "sky" or "sky shader";
                 if (skyFace) occlude = true;
-                if (mu.Why == "sky" && !o.SkyCollision) collide = false;
                 if (!o.PlayerClipCollision && surf.Material.StartsWith("TOOLS/TOOLSPLAYERCLIP", StringComparison.OrdinalIgnoreCase)) collide = false;
                 if (surf.Displacement)
                 {
@@ -348,7 +403,7 @@ public static class VmfImporter
                     water = o.Water && (mu.Water || use.Value.Water);
                 }
                 if (!draw && !collide && !water && !occlude) continue;
-                var pos = surf.Positions.Select(G).ToList();
+                var pos = surf.Positions.Select(GX).ToList();
                 if (water)
                 {
                     // the top of a water brush becomes a water region (horizontal triangles); its other sides are skipped
@@ -363,26 +418,31 @@ public static class VmfImporter
                 }
                 if (occlude)
                 {
-                    for (int k = 0; k + 2 < surf.Triangles.Count; k += 3)
+                    var ot = inSky ? plan.SkyOccluderTris : plan.OccluderTris; var os = inSky ? plan.SkyOccluderSky : plan.OccluderSky;
+                    for (int t3 = 0; t3 + 2 < surf.Triangles.Count; t3 += 3)
                     {
-                        for (int j = 0; j < 3; j++) { var p = surf.Positions[surf.Triangles[k + j]]; plan.OccluderTris.Add(new Vector3((float)p.X, (float)p.Y, (float)p.Z)); }
-                        plan.OccluderSky.Add(skyFace);
+                        for (int j = 0; j < 3; j++) { var p = surf.Positions[surf.Triangles[t3 + j]]; ot.Add(new Vector3((float)p.X, (float)p.Y, (float)p.Z)); }
+                        os.Add(skyFace);
                     }
                     plan.OccluderTriangles += surf.Triangles.Count / 3;
                 }
                 if (collide)
                 {
+                    // far skybox terrain: displacements collide with a coarser grid
+                    var (cp, ct) = inSky && surf.Displacement && o.SkyCollisionStep > 1 ? DecimateDisplacement(surf, o.SkyCollisionStep) : (surf.Positions, surf.Triangles);
                     int b0 = plan.CollisionPositions.Count;
-                    plan.CollisionPositions.AddRange(pos);
-                    foreach (var t in surf.Triangles) plan.CollisionTris.Add(b0 + t);
-                    plan.CollisionTriangles += surf.Triangles.Count / 3;
+                    plan.CollisionPositions.AddRange(ReferenceEquals(cp, surf.Positions) ? pos : cp.Select(GX));
+                    foreach (var t in ct) plan.CollisionTris.Add(b0 + t);
+                    plan.CollisionTriangles += ct.Count / 3;
+                    if (inSky) plan.SkyCollisionTriangles += ct.Count / 3;
                 }
                 if (!draw) continue;
                 plan.Faces++;
                 foreach (var p in pos) { mn = Vector3.Min(mn, p); mx = Vector3.Max(mx, p); }
                 var mp = mats[surf.Material];
                 mp.Faces++; mp.Triangles += surf.Triangles.Count / 3;
-                faces.Add(new VmfFace { Surface = surf, Material = mp, Centroid = pos.Aggregate(Vector3.Zero, (a, b) => a + b) / pos.Count });
+                if (inSky) plan.SkyTriangles += surf.Triangles.Count / 3;
+                faces.Add(new VmfFace { Surface = surf, Material = mp, Centroid = pos.Aggregate(Vector3.Zero, (a, b) => a + b) / pos.Count, Sky3D = inSky });
             }
         }
         plan.BrushEntities = map.Entities.Count(e => e.Solids.Count > 0 && ClassUse(e.ClassName) != null);
@@ -403,7 +463,8 @@ public static class VmfImporter
         if (o.Bake.Enabled)
         {
             plan.Lights = LightBaker.LightsFrom(map, o.Bake, plan.Keep, plan.Notes);
-            LayoutLightmaps(plan, o.Bake);
+            if (port) plan.SkyLights = LightBaker.LightsFrom(map, o.Bake, e => e.Origin is DVec3 org && InSky(org) && !Global(e), new List<string>());
+            LayoutLightmaps(plan, o.Bake, o.SkyLuxelScale);
         }
         progress?.Report(("entities", 0.7));
 
@@ -421,7 +482,8 @@ public static class VmfImporter
         if (plan.Spawn is Vector3 sp && plan.CollisionTriangles > 0 && !HasFloorBelow(plan, sp)) plan.Warnings.Add($"no collision below the player start ({sp.X:F1}, {sp.Y:F1}, {sp.Z:F1}): the player would fall");
 
         // props
-        var props = map.Entities.Where(e => PropClasses.Contains(e.ClassName, StringComparer.OrdinalIgnoreCase) && e.Get("model").Length > 0 && plan.Keep(e)).ToList();
+        bool PropInSky(VmfEntity e) => port && e.Origin is DVec3 org && InSky(org);
+        var props = map.Entities.Where(e => PropClasses.Contains(e.ClassName, StringComparer.OrdinalIgnoreCase) && e.Get("model").Length > 0 && (plan.Keep(e) || PropInSky(e))).ToList();
         plan.PropInstances = props.Count;
         var byModel = new Dictionary<string, VmfPropPlan>(StringComparer.OrdinalIgnoreCase);
         foreach (var e in props)
@@ -432,10 +494,26 @@ public static class VmfImporter
         }
         plan.Props = byModel.Values.OrderByDescending(p => p.Instances).ToList();
         if (content != null) PropBudget(plan, content);
-        if (o.IncludeProps) PrepareProps(plan, props, byModel, o, G);
+        if (o.IncludeProps) PrepareProps(plan, props, byModel, o, e => PropInSky(e) ? (GS(e.Origin ?? cam), skyK) : (G(e.Origin ?? DVec3.Zero), 1.0));
         else if (props.Count > 0) plan.Notes.Add($"{props.Count} prop(s) of {byModel.Count} model(s) not imported (props are off)");
 
         if (plan.Faces > 0) { plan.Min = mn; plan.Max = mx; }
+        if (plan.CollisionPositions.Count > 0)
+        {
+            plan.CollisionMin = plan.CollisionPositions.Aggregate(Vector3.Min); plan.CollisionMax = plan.CollisionPositions.Aggregate(Vector3.Max);
+        }
+        if (port)
+        {
+            plan.Skybox3D = plan.Skybox3D?.Replace(" dropped", "") + $": ported at x{skyK:G3} as terrain";
+            // the skybox camera's fog covers the far terrain in Source; the game has one fog, so its end reaches the farther of the two
+            var skyCam = map.Entities.First(e => e.ClassName.Equals("sky_camera", StringComparison.OrdinalIgnoreCase) && e.Origin != null);
+            if (o.Fog && skyCam.Get("fogenable", "0") != "0" && plan.Light?.FogEnd is float fe &&
+                double.TryParse(skyCam.Get("fogend"), NumberStyles.Float, CultureInfo.InvariantCulture, out double sfe) && sfe * o.Scale > fe)
+            {
+                plan.Light.FogEnd = (float)(sfe * o.Scale);
+                plan.Notes.Add($"fog end {fe:G4} -> {plan.Light.FogEnd:G4} units (sky_camera fogend {sfe:G6}) so the far terrain shows");
+            }
+        }
         progress?.Report(("estimate", 0.9));
         Estimate(plan, o, world);
         if (plan.Degenerate > 0) plan.Notes.Add($"{plan.Degenerate} brush side(s) without area skipped (invalid or fully clipped planes)");
@@ -443,7 +521,9 @@ public static class VmfImporter
         var hidden = plan.MaterialUses.Where(kv => !kv.Value.Draw && kv.Value.Why.Length > 0 && !kv.Key.StartsWith("TOOLS/", StringComparison.OrdinalIgnoreCase)).ToList();
         if (hidden.Count > 0) plan.Notes.Add($"not drawn ({hidden.Count} materials): " + string.Join(", ", hidden.Take(12).Select(kv => $"{kv.Key} ({kv.Value.Why})")) + (hidden.Count > 12 ? " ..." : ""));
         float ext = MathF.Max(mx.X - mn.X, mx.Z - mn.Z);
-        if (plan.Faces > 0 && MathF.Max(MathF.Max(MathF.Abs(mn.X), MathF.Abs(mx.X)), MathF.Max(MathF.Abs(mn.Z), MathF.Abs(mx.Z))) > 1900) plan.Warnings.Add($"the map reaches beyond +/-1900 units at this scale: the world bounds mod allows +/-2048");
+        if (plan.Faces > 0 && MathF.Max(MathF.Max(MathF.Abs(mn.X), MathF.Abs(mx.X)), MathF.Max(MathF.Abs(mn.Z), MathF.Abs(mx.Z))) > 4000)
+            plan.Warnings.Add("the map reaches beyond +/-4000 game units: far geometry may be past the game's camera range; lower the scale");
+        if (plan.SkyShellBrushes > 0) plan.Notes.Add($"{plan.SkyShellBrushes} sky brush(es) (tools/toolsskybox) {(o.KeepSkyBrushes ? "of the 3D skybox room " : "")}removed: no mesh, no collision");
         if (plan.Faces > 0 && ext < 20) plan.Warnings.Add($"the map is only {ext:F1} units wide at this scale: raise the scale");
         if (plan.RenderTriangles == 0) plan.Warnings.Add("nothing to draw (no visible brush faces)");
         return plan;
@@ -491,12 +571,51 @@ public static class VmfImporter
                     }
                 }
         if (dist.Any(x => x == double.MaxValue)) { plan.Notes.Add("sky_camera is not inside a closed room: 3D skybox not removed"); return null; }
+        plan.SkyCamera = c;
+        plan.SkyScale = double.TryParse(cam.Get("scale"), NumberStyles.Float, CultureInfo.InvariantCulture, out double sc) && sc > 0 ? sc : 16;
         // the room plus its walls (up to 64 units thick)
         var min = new DVec3(c.X - dist[1] - 64, c.Y - dist[3] - 64, c.Z - dist[5] - 64);
         var max = new DVec3(c.X + dist[0] + 64, c.Y + dist[2] + 64, c.Z + dist[4] + 64);
         plan.Skybox3D = $"sky_camera #{cam.Id} at {cam.Get("origin")}: room {min} .. {max} dropped";
-        plan.SkyboxEntities = map.Entities.Count(e => e.Origin is DVec3 p && p.X >= min.X && p.Y >= min.Y && p.Z >= min.Z && p.X <= max.X && p.Y <= max.Y && p.Z <= max.Z);
+        plan.SkyboxEntities = map.Entities.Count(e => !GlobalClasses.Contains(e.ClassName) && e.Origin is DVec3 p && p.X >= min.X && p.Y >= min.Y && p.Z >= min.Z && p.X <= max.X && p.Y <= max.Y && p.Z <= max.Z);
         return (min, max);
+    }
+
+    static DVec3 Min(DVec3 a, DVec3 b) => new(Math.Min(a.X, b.X), Math.Min(a.Y, b.Y), Math.Min(a.Z, b.Z));
+    static DVec3 Max(DVec3 a, DVec3 b) => new(Math.Max(a.X, b.X), Math.Max(a.Y, b.Y), Math.Max(a.Z, b.Z));
+
+    /// <summary>tools/toolsskybox and tools/toolsskybox2d (any case).</summary>
+    public static bool IsSkyMaterial(string m) => m.StartsWith("TOOLS/TOOLSSKYBOX", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Entities whose position is irrelevant (never dropped with the 3D skybox).</summary>
+    static readonly HashSet<string> GlobalClasses = new(StringComparer.OrdinalIgnoreCase) { "light_environment", "env_fog_controller", "env_sun", "shadow_control", "sky_camera", "worldspawn", "env_tonemap_controller", "water_lod_control" };
+
+    /// <summary>Collision of a displacement on every <paramref name="step"/>-th grid row and column (the last one always),
+    /// facing the side's front.</summary>
+    static (List<DVec3>, List<int>) DecimateDisplacement(BrushSurface s, int step)
+    {
+        int n = (int)Math.Round(Math.Sqrt(s.Positions.Count));
+        var idx = new List<int>();
+        for (int i = 0; i < n; i += step) idx.Add(i);
+        if (idx[^1] != n - 1) idx.Add(n - 1);
+        int m = idx.Count;
+        var pos = new List<DVec3>(m * m);
+        foreach (int r in idx) foreach (int c in idx) pos.Add(s.Positions[r * n + c]);
+        var tris = new List<int>();
+        var front = s.Side.Normal;
+        void Tri(int a, int b, int c)
+        {
+            var fn = DVec3.Cross(pos[b] - pos[a], pos[c] - pos[a]);
+            if (DVec3.Dot(fn, front) < 0) (b, c) = (c, b);
+            tris.Add(a); tris.Add(b); tris.Add(c);
+        }
+        for (int r = 0; r + 1 < m; r++)
+            for (int c = 0; c + 1 < m; c++)
+            {
+                int a = r * m + c, b = (r + 1) * m + c, cc = (r + 1) * m + c + 1, d = r * m + c + 1;
+                Tri(a, b, cc); Tri(a, cc, d);
+            }
+        return (pos, tris);
     }
 
     static double RayTri(DVec3 o, DVec3 d, DVec3 a, DVec3 b, DVec3 c)
@@ -541,13 +660,13 @@ public static class VmfImporter
     /// <summary>Luxel rectangles per face (planar: a grid on the face plane along its texture axes; displacements: their
     /// own grid) and shelf packing per chunk into pages (a chunk never spans pages; a chunk that does not fit an empty
     /// page is split).</summary>
-    static void LayoutLightmaps(VmfPlan plan, LightBakeOptions b)
+    static void LayoutLightmaps(VmfPlan plan, LightBakeOptions b, float skyLuxelScale = 1f)
     {
         int P = b.PageSize;
         foreach (var f in plan.Chunks.SelectMany(c => c.Faces))
         {
             var s = f.Surface;
-            float lux = b.LuxelSize;
+            float lux = b.LuxelSize * (f.Sky3D ? skyLuxelScale : 1f);   // skybox units: x scale coarser in the world
             if (s.Displacement)
             {
                 int n = (int)Math.Round(Math.Sqrt(s.Positions.Count));
@@ -611,6 +730,7 @@ public static class VmfImporter
         plan.Chunks = result;
         plan.LightmapPages = pages.Count;
         plan.Luxels = plan.Chunks.SelectMany(c => c.Faces).Sum(f => f.W * f.H);
+        plan.SkyLuxels = plan.Chunks.SelectMany(c => c.Faces).Where(f => f.Sky3D).Sum(f => f.W * f.H);
     }
 
     /// <summary>Shelf packing of (W+2) x (H+2) rectangles continuing from a page cursor.</summary>
@@ -646,6 +766,9 @@ public static class VmfImporter
         }
         if (plan.Light?.Sun is string sh) { uint rgb = Convert.ToUInt32(sh, 16); gameSunCol = new Vector3((rgb >> 16 & 255) / 255f, (rgb >> 8 & 255) / 255f, (rgb & 255) / 255f); }
         var baker = new LightBaker(b, bvh, plan.Lights, plan.ToSun, plan.SunColour, plan.SkyColour, gameSun, gameSunCol);
+        // ported skybox geometry is lit in skybox space, by the skybox's own lights and blockers (as vrad lit it)
+        var skyBaker = plan.SkyOccluderTris.Count > 0 || plan.SkyLights.Count > 0
+            ? new LightBaker(b, new TriangleBvh(plan.SkyOccluderTris, plan.SkyOccluderSky), plan.SkyLights, plan.ToSun, plan.SunColour, plan.SkyColour, gameSun, gameSunCol) : baker;
         var lin = new Vector3[plan.LightmapPages][];
         var nrm = new Vector3[plan.LightmapPages][];
         var used = new bool[plan.LightmapPages][];
@@ -655,7 +778,7 @@ public static class VmfImporter
         var sw = System.Diagnostics.Stopwatch.StartNew();
         Parallel.ForEach(all, new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount - 1) }, f =>
         {
-            BakeFace(f, baker, lin[f.Page], nrm[f.Page], used[f.Page], P);
+            BakeFace(f, f.Sky3D ? skyBaker : baker, lin[f.Page], nrm[f.Page], used[f.Page], P);
             int d = Interlocked.Increment(ref done);
             if (d % 200 == 0) progress?.Report(($"lightmaps {d}/{all.Count} faces", (double)d / all.Count));
         });
@@ -672,7 +795,7 @@ public static class VmfImporter
             }
             pages.Add(px);
         }
-        plan.Notes.Add($"light bake: {all.Count} faces, {plan.Luxels:N0} luxels on {plan.LightmapPages} page(s) of {P}, {baker.Rays:N0} rays, {sw.Elapsed.TotalSeconds:F1}s");
+        plan.Notes.Add($"light bake: {all.Count} faces, {plan.Luxels:N0} luxels on {plan.LightmapPages} page(s) of {P}, {baker.Rays + (skyBaker != baker ? skyBaker.Rays : 0):N0} rays, {sw.Elapsed.TotalSeconds:F1}s");
         return pages;
     }
 
@@ -693,7 +816,11 @@ public static class VmfImporter
                     float fr = (float)j / Math.Max(1, H - 1) * (n - 1), fc = (float)i / Math.Max(1, W - 1) * (n - 1);
                     int r0 = Math.Min((int)fr, n - 2), c0 = Math.Min((int)fc, n - 2);
                     float tr = fr - r0, tc = fc - c0;
-                    var p = Vector3.Lerp(Vector3.Lerp(P3(r0, c0), P3(r0, c0 + 1), tc), Vector3.Lerp(P3(r0 + 1, c0), P3(r0 + 1, c0 + 1), tc), tr);
+                    // the point on the displacement's own triangles (BrushMesher alternates the cell diagonals): a bilinear
+                    // point can lie under the surface and shadow itself (checkerboard lightmaps on hills)
+                    Vector3 a = P3(r0, c0), pb = P3(r0 + 1, c0), pc = P3(r0 + 1, c0 + 1), pd = P3(r0, c0 + 1), p;
+                    if (((r0 + c0) & 1) == 0) p = tr >= tc ? a + (pb - a) * (tr - tc) + (pc - a) * tc : a + (pc - a) * tr + (pd - a) * (tc - tr);
+                    else p = tr + tc <= 1 ? a + (pb - a) * tr + (pd - a) * tc : pc + (pb - pc) * (1 - tc) + (pd - pc) * (1 - tr);
                     var nv = Vector3.Normalize(Vector3.Lerp(Vector3.Lerp(N3(r0, c0), N3(r0, c0 + 1), tc), Vector3.Lerp(N3(r0 + 1, c0), N3(r0 + 1, c0 + 1), tc), tr));
                     light[j * W + i] = baker.Direct(p, nv, (f.Page * P + f.Y + j) * P + f.X + i);
                     gameN[j * W + i] = new Vector3(nv.X, nv.Z, -nv.Y);
@@ -817,7 +944,7 @@ public static class VmfImporter
     {
         var l = new SceneBuilder.LightDef();
         bool any = false, bake = o.Bake.Enabled;
-        var env = map.Entities.FirstOrDefault(e => e.ClassName.Equals("light_environment", StringComparison.OrdinalIgnoreCase) && plan.Keep(e));
+        var env = map.Entities.FirstOrDefault(e => e.ClassName.Equals("light_environment", StringComparison.OrdinalIgnoreCase));
         if (env != null)
         {
             var (r, g, b, br) = VmfMap.Colour(env.Get("_light", "255 255 255 200"));
@@ -869,7 +996,10 @@ public static class VmfImporter
             l.FogColour = Hex(r, g, b);
             l.FogStart = (float)(F("fogstart", 500) * o.Scale);
             l.FogEnd = (float)Math.Max(F("fogend", 2000) * o.Scale, (l.FogStart ?? 0) + 1);
-            l.FogMax = on ? (float)Math.Clamp(F("fogmaxdensity", 1), 0, 1) : 0f;
+            // the game's fog closes in much faster than Source's (a Source max density of 1 is a white-out in game:
+            // verified in Xenia on snowy_dream), so the strength is capped and the start pushed out a little
+            l.FogMax = on ? (float)Math.Clamp(F("fogmaxdensity", 1), 0, MaxFog) : 0f;
+            l.FogStart = Math.Max(l.FogStart ?? 0, (l.FogEnd ?? 0) * 0.04f);
             plan.FogSource = $"env_fog_controller #{fog.Id}: {(on ? "on" : "off (fog cleared)")}, colour {l.FogColour}, {l.FogStart:G4}..{l.FogEnd:G4} units, max {l.FogMax:G3}";
             any = true;
         }
@@ -1099,7 +1229,7 @@ public static class VmfImporter
         };
     }
 
-    static void PrepareProps(VmfPlan plan, List<VmfEntity> props, Dictionary<string, VmfPropPlan> byModel, VmfImportOptions o, Func<DVec3, Vector3> G)
+    static void PrepareProps(VmfPlan plan, List<VmfEntity> props, Dictionary<string, VmfPropPlan> byModel, VmfImportOptions o, Func<VmfEntity, (Vector3 Pos, double Scale)> place)
     {
         float s = o.Scale;
         double[,] A = { { 1, 0, 0 }, { 0, 0, 1 }, { 0, -1, 0 } };
@@ -1150,7 +1280,8 @@ public static class VmfImporter
         {
             var pp = byModel[e.Get("model").Replace('\\', '/')];
             if (!plan.PropMeshes.ContainsKey(pp)) continue;
-            double ms = double.TryParse(e.Get("modelscale", e.Get("uniformscale", "1")), NumberStyles.Float, CultureInfo.InvariantCulture, out double v) && v > 0 ? v : 1;
+            var (t, placeScale) = place(e);
+            double ms = (double.TryParse(e.Get("modelscale", e.Get("uniformscale", "1")), NumberStyles.Float, CultureInfo.InvariantCulture, out double v) && v > 0 ? v : 1) * placeScale;
             var M = AngleMatrix(e.Angles);
             var R = new double[3, 3];
             for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++)
@@ -1159,7 +1290,6 @@ public static class VmfImporter
                 for (int k = 0; k < 3; k++) for (int l = 0; l < 3; l++) acc += A[i, k] * M[k, l] * Ai[l, j];
                 R[i, j] = acc * ms;
             }
-            var t = G(e.Origin ?? DVec3.Zero);
             var world = new Matrix4x4((float)R[0, 0], (float)R[1, 0], (float)R[2, 0], 0, (float)R[0, 1], (float)R[1, 1], (float)R[2, 1], 0,
                                       (float)R[0, 2], (float)R[1, 2], (float)R[2, 2], 0, t.X, t.Y, t.Z, 1);
             plan.PropPlacements.Add((pp, world));
@@ -1224,16 +1354,23 @@ public static class VmfImporter
             }
         }
         plan.GeometryBytes = plan.RenderVertices * (long)vtx + plan.RenderTriangles * (long)BytesPerTriangle + plan.Chunks.Count * (long)(overhead + InstanceBytes);
+        var skyFaces = plan.Chunks.SelectMany(c => c.Faces).Where(f => f.Sky3D).ToList();
+        plan.SkyGeometryBytes = skyFaces.Sum(f => f.Surface.Positions.Count) * (long)vtx + plan.SkyTriangles * (long)BytesPerTriangle +
+                                plan.Chunks.Count(c => c.Faces.Any(f => f.Sky3D)) * (long)(overhead + InstanceBytes);
+        plan.MaxTextureSize = o.MaxTextureSize; plan.LuxelSize = o.Bake.LuxelSize; plan.SkyLuxelScale = o.SkyLuxelScale; plan.SkyCollisionStep = o.SkyCollisionStep;
+        plan.UnlimitedBounds = o.UnlimitedBounds;
         plan.TextureBytes = plan.Materials.Sum(m => DxtBytes(m.OutW, m.OutH)) + 3 * 4096;
         plan.LightmapBytes = plan.LightmapPages * DxtBytes(o.Bake.PageSize, o.Bake.PageSize);
         plan.CollisionBytes = plan.CollisionTriangles * (long)CollisionBytesPerTriangle;
+        plan.SkyCollisionBytes = plan.SkyCollisionTriangles * (long)CollisionBytesPerTriangle;
+        plan.SkyLightmapBytes = plan.Luxels > 0 ? plan.LightmapBytes * plan.SkyLuxels / plan.Luxels : 0;
         plan.PropBytes = plan.PropMeshes.Sum(kv => kv.Key.Vertices * (long)vtx + kv.Key.Triangles * (long)BytesPerTriangle + overhead) + plan.PropPlacements.Count * (long)InstanceBytes;
         plan.AddedBytes = plan.GeometryBytes + plan.TextureBytes + plan.LightmapBytes + plan.CollisionBytes + plan.PropBytes;
         plan.BudgetBytes = o.World == VmfImportOptions.ShowdownTown ? 201_141_796 : 0;
         plan.BaselineBytes = o.World == VmfImportOptions.ShowdownTown ? TownBaselineBytes : plan.BudgetBytes;
         if (plan.BudgetBytes > 0 && plan.BudgetState != "ok")
             plan.Warnings.Add($"estimated world bundle {plan.EstimatedBytes / 1048576.0:F1} MB is above the original {plan.BudgetBytes / 1048576.0:F1} MB " +
-                              "(the size known to run on a console; a 262 MB world crashed the console before): use smaller textures, bigger luxels or leave props out");
+                              "(the size known to run on a real Xbox 360; a 262 MB world crashed the console before): see the budget suggestions");
     }
 
     // ------------------------------------------------------------------ write + build
@@ -1307,6 +1444,7 @@ public static class VmfImporter
         // brush chunks: one model each, centred on its bounds, placed at the centre
         float s = o.Scale;
         Vector3 G(DVec3 p) => new Vector3((float)(p.X * s), (float)(p.Z * s), (float)(-p.Y * s)) + plan.Offset;
+        Vector3 GS(DVec3 p) => G((p - plan.SkyCamera) * plan.SkyScale);
         static Vector3 GN(DVec3 n) => Vector3.Normalize(new Vector3((float)n.X, (float)n.Z, (float)-n.Y));
         int ci = 0;
         foreach (var ch in plan.Chunks)
@@ -1323,7 +1461,7 @@ public static class VmfImporter
                 float su = MathF.Floor(uv.Min(t => t.X)), sv = MathF.Floor(uv.Min(t => t.Y));
                 for (int k = 0; k < surf.Positions.Count; k++)
                 {
-                    mesh.Positions.Add(G(surf.Positions[k]));
+                    mesh.Positions.Add(f.Sky3D ? GS(surf.Positions[k]) : G(surf.Positions[k]));
                     mesh.Normals!.Add(GN(surf.Normals[k]));
                     mesh.UVs!.Add(new Vector2(uv[k].X - su, uv[k].Y - sv));
                     if (baked) mesh.UVs2!.Add(f.Uv2 != null ? f.Uv2[k] / o.Bake.PageSize : new Vector2(0.5f));
@@ -1489,6 +1627,53 @@ public static class VmfImporter
         return sb.ToString();
     }
 
+    /// <summary>
+    /// Memory budget of the target world bundle, part by part, against the original Showdown Town bundle (the size known
+    /// to load on a real Xbox 360), with suggestions when it is over or close (CLI, plan.txt, the Studio dialog).
+    /// </summary>
+    public static List<string> Budget(VmfPlan p)
+    {
+        static string MB(long b) => $"{b / 1048576.0,6:F1} MB";
+        var l = new List<string> { "memory budget (world bundle 234cec; the original " + MB(p.BudgetBytes).Trim() + " runs on a real Xbox 360):" };
+        if (p.BudgetBytes <= 0) { l.Add("  (no budget for this world)"); return l; }
+        bool sky = p.SkyTriangles > 0;
+        l.Add($"  town without its scenery (baseline) {MB(p.BaselineBytes)}");
+        l.Add($"  render geometry                     {MB(p.GeometryBytes)}  ({p.RenderTriangles:N0} triangles{(sky ? $"; skybox terrain {MB(p.SkyGeometryBytes).Trim()}, {p.SkyTriangles:N0} triangles" : "")})");
+        l.Add($"  collision                           {MB(p.CollisionBytes)}  ({p.CollisionTriangles:N0} triangles{(sky ? $"; skybox terrain {MB(p.SkyCollisionBytes).Trim()}, {p.SkyCollisionTriangles:N0} triangles, every {p.SkyCollisionStep}. displacement row" : "")})");
+        l.Add($"  textures                            {MB(p.TextureBytes)}  ({p.Materials.Count} materials, max {p.MaxTextureSize})");
+        l.Add($"  lightmaps                           {MB(p.LightmapBytes)}  ({p.LightmapPages} page(s), {p.Luxels:N0} luxels of {p.LuxelSize:G3} units{(sky ? $"; skybox terrain {p.SkyLuxels:N0} luxels x{p.SkyLuxelScale:G3}" : "")})");
+        l.Add($"  props                               {MB(p.PropBytes)}  ({p.PropInstancesPlaced} placed{(p.PropBudgetBytes > 0 && p.PropInstancesPlaced == 0 ? $"; all {p.PropInstances} would add ~{MB(p.PropBudgetBytes).Trim()}" : "")})");
+        long over = p.EstimatedBytes - p.BudgetBytes;
+        l.Add($"  total                               {MB(p.EstimatedBytes)}  of {MB(p.BudgetBytes).Trim()}: " +
+              (over <= 0 ? $"ok ({MB(-over).Trim()} free)" : $"OVER by {MB(over).Trim()}"));
+        if (over > -p.BudgetBytes / 20)
+        {
+            // suggestions, biggest saving first
+            var sug = new List<(long Save, string Text)>
+            {
+                (p.LightmapBytes * 3 / 4, $"coarser lightmaps: luxel {p.LuxelSize:G3} -> {p.LuxelSize * 2:G3} (--luxel) saves ~{MB(p.LightmapBytes * 3 / 4).Trim()}"),
+                (p.TextureBytes * 3 / 4, $"smaller textures: max {p.MaxTextureSize} -> {p.MaxTextureSize / 2} (--tex-size) saves ~{MB(p.TextureBytes * 3 / 4).Trim()}"),
+                (p.PropBytes, $"leave props out saves ~{MB(p.PropBytes).Trim()}"),
+                (p.SkyLightmapBytes * 3 / 4, $"coarser skybox terrain lightmaps (--sky-luxel {p.SkyLuxelScale * 2:G3}) saves ~{MB(p.SkyLightmapBytes * 3 / 4).Trim()}"),
+                (p.SkyCollisionBytes * 3 / 4, $"simpler skybox terrain collision (--sky-collision-step {p.SkyCollisionStep * 2}) saves ~{MB(p.SkyCollisionBytes * 3 / 4).Trim()}"),
+                (p.SkyGeometryBytes + p.SkyCollisionBytes + p.SkyLightmapBytes, $"drop the skybox terrain (--skybox drop) saves ~{MB(p.SkyGeometryBytes + p.SkyCollisionBytes + p.SkyLightmapBytes).Trim()}"),
+            };
+            foreach (var (save, text) in sug.Where(x => x.Save > 64 * 1024).OrderByDescending(x => x.Save)) l.Add("  suggestion: " + text);
+        }
+        return l;
+    }
+
+    /// <summary>The game's world box (the Havok broadphase, built from the level collision's bounds) and what happens past it.</summary>
+    public static string WorldBox(VmfPlan p)
+    {
+        if (p.CollisionTriangles == 0) return "world box: no collision";
+        var mn = p.CollisionMin; var mx = p.CollisionMax;
+        float xz = p.UnlimitedBounds ? 2048 : 100;
+        return $"world box (game units): {mn.X - xz:F0},{mn.Y - 100:F0},{mn.Z - xz:F0} .. {mx.X + xz:F0},{mx.Y + 100:F0},{mx.Z + xz:F0} (collision bounds + {xz:F0} on X/Z, 100 on Y); " +
+               (p.UnlimitedBounds ? "leaving it does not reset the player (exe mod no-escape-reset); falling off the map's edge falls forever (pause menu to leave)"
+                                  : $"leaving it resets the player (reset plane y {mn.Y - 100:F0})");
+    }
+
     /// <summary>Human-readable summary of a plan (CLI, plan.txt and the Studio dialog).</summary>
     public static List<string> Describe(VmfPlan p)
     {
@@ -1499,7 +1684,9 @@ public static class VmfImporter
             $"collision: {p.CollisionTriangles:N0} triangles; light blockers: {p.OccluderTriangles:N0}; water: {p.WaterTriangles} triangles",
             $"bounds (game units): {p.Min.X:F1},{p.Min.Y:F1},{p.Min.Z:F1} .. {p.Max.X:F1},{p.Max.Y:F1},{p.Max.Z:F1}",
             p.ContentSource != null ? $"game content: {p.ContentSource}; {p.ContentFound} materials found, {p.ContentMissing} missing; {p.Materials.Count(m => m.Vtf != null)} textures from the game, {p.Materials.Count(m => m.Image != null)} from images, {p.Materials.Count(m => m.Vtf == null && m.Image == null)} generated" : "game content: none (generated colours / material folder)",
-            p.Skybox3D != null ? $"3D skybox: {p.Skybox3D}; {p.SkyboxBrushes} brushes and {p.SkyboxEntities} entities dropped" : "3D skybox: none",
+            p.Skybox3D == null ? "3D skybox: none" : p.SkyPorted > 0 || p.SkySkippedReplica > 0
+                ? $"3D skybox: {p.Skybox3D}; {p.SkyPorted} brushes ported ({p.SkyTriangles:N0} triangles, {p.SkyCollisionTriangles:N0} collision), {p.SkySkippedReplica} skipped as the replica under the map, {p.SkyLights.Count} skybox lights"
+                : $"3D skybox: {p.Skybox3D}; {p.SkyboxBrushes} brushes and {p.SkyboxEntities} entities dropped",
             p.SpawnSource != null ? $"spawn: {p.SpawnSource} -> game ({p.Spawn!.Value.X:F2}, {p.Spawn.Value.Y:F2}, {p.Spawn.Value.Z:F2})" : "spawn: none",
             p.LightSource ?? "light: none", p.FogSource ?? "fog: none (the world keeps its fog)",
             p.LightmapPages > 0 ? $"lightmaps: {p.Lights.Count} lights, {p.Luxels:N0} luxels on {p.LightmapPages} page(s)" : "lightmaps: off",
@@ -1507,6 +1694,8 @@ public static class VmfImporter
             $"size estimate: +{p.AddedBytes / 1048576.0:F2} MB (geometry {p.GeometryBytes / 1048576.0:F2}, textures {p.TextureBytes / 1048576.0:F2}, lightmaps {p.LightmapBytes / 1048576.0:F2}, collision {p.CollisionBytes / 1048576.0:F2}, props {p.PropBytes / 1048576.0:F2})" +
                 (p.BudgetBytes > 0 ? $" -> world bundle ~{p.EstimatedBytes / 1048576.0:F1} MB of {p.BudgetBytes / 1048576.0:F1} MB budget ({p.BudgetState})" : ""),
         };
+        l.Add(WorldBox(p));
+        l.AddRange(Budget(p));
         l.AddRange(p.Notes.Select(n => "note: " + n));
         l.AddRange(p.Warnings.Select(w => "WARNING: " + w));
         return l;
