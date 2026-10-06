@@ -31,6 +31,8 @@ public static class ModelFactory
         /// (a white texture), and specular maps to <see cref="Specular"/>.</summary>
         public string? NeutralAo, Specular;
         public float CullDistance = 1e6f;
+        /// <summary>Template vertex buffers that get no mesh shrink to one vertex (ModelImporter trimHidden).</summary>
+        public bool TrimHidden;
         public float LodScale = 1f;
         /// <summary>Always draw LOD 0 (the imported geometry goes to every LOD, and a template's lower LODs may use
         /// untextured shaders or vertex formats without UVs).</summary>
@@ -96,7 +98,7 @@ public static class ModelFactory
         {
             var meshes = o.Meshes;
             if (o.SingleMaterial != null) foreach (var m in meshes) m.Name = o.SingleMaterial;
-            var r = ModelImporter.Replace(caff, sym, meshes);
+            var r = ModelImporter.Replace(caff, sym, meshes, trimHidden: o.TrimHidden);
             notes.AddRange(r.Notes);
             notes.Add($"geometry: {r.Vertices} vertices, {r.Triangles} triangles in {r.VertexBuffers} vertex buffer(s)");
         }

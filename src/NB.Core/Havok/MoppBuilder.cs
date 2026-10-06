@@ -41,7 +41,16 @@ public static class MoppBuilder
         public byte A, B;
         public Node? Left, Right;
         public int Size;   // inline size
+        public int[] Min = new int[3], Max = new int[3];   // quantized bounds of the subtree's triangles
+        /// <summary>Rescale opcode (1..4, 0 = none) emitted before this node's split, and its three offset bytes.</summary>
+        public int Rescale; public byte R0, R1, R2;
     }
+
+    /// <summary>Emit rescale opcodes (0x01..0x04): deeper nodes compare at finer resolution. Without them every split
+    /// byte is the top 8 bits of the 24-bit coordinate, i.e. extent / 256 for the whole tree: on a 5000-unit imported
+    /// map that is 20 units, so a 1.5-unit physics box reached 2,250 triangles (touching none) in snowy_dream's corridor
+    /// and the game dropped to 15 fps there (see work/agent_src/vmf/MERGE.md).</summary>
+    public static bool UseRescale = Environment.GetEnvironmentVariable("NB_MOPP_LEGACY") != "1";   // NB_MOPP_LEGACY=1: old builder (A/B tests)
 
     public static Result Build(IReadOnlyList<Vector3> positions, IReadOnlyList<int> triangles, float radius)
     {
@@ -71,29 +80,93 @@ public static class MoppBuilder
         static byte Lo(int q) => (byte)Math.Max(0, (q >> 16) - 1);      // lower byte bound (≥ b semantics)
         static byte Hi(int q) => (byte)Math.Min(255, (q >> 16) + 1);    // upper byte bound (≤ a semantics)
 
-        // tree
+        // tree (bounds per node; split bytes and rescales are assigned afterwards, in the frame each node runs in)
         Node Make(List<int> tris)
         {
-            if (tris.Count == 1) return new Node { Tri = tris[0], Size = tris[0] <= 0xFFFF ? 3 : 4 };
-            var cmin = new Vector3(float.MaxValue); var cmax = new Vector3(float.MinValue);
-            foreach (var t in tris) { cmin = Vector3.Min(cmin, ctr[t]); cmax = Vector3.Max(cmax, ctr[t]); }
-            var d = cmax - cmin;
-            int axis = d.X >= d.Y && d.X >= d.Z ? 0 : d.Y >= d.Z ? 1 : 2;
-            tris.Sort((x, y) => Get(ctr[x], axis).CompareTo(Get(ctr[y], axis)));
-            int half = tris.Count / 2;
-            var left = tris.GetRange(0, half); var right = tris.GetRange(half, tris.Count - half);
-            var n = new Node
+            if (tris.Count == 1)
             {
-                Axis = axis,
-                A = Hi(left.Max(t => tmax[t, axis])),     // fallthrough child: coordinates ≤ a
-                B = Lo(right.Min(t => tmin[t, axis])),    // jump child: coordinates ≥ b
-                Left = Make(left), Right = Make(right),
-            };
-            n.Size = 4 + JumpSize(n.Right.Size) + n.Right.Size + n.Left.Size;
+                var leaf = new Node { Tri = tris[0], Size = tris[0] <= 0xFFFF ? 3 : 4 };
+                for (int k = 0; k < 3; k++) { leaf.Min[k] = tmin[tris[0], k]; leaf.Max[k] = tmax[tris[0], k]; }
+                return leaf;
+            }
+            int axis, half;
+            if (UseRescale && tris.Count > 2)
+            {
+                // surface-area heuristic over the centroid order of each axis (bounds of whole triangles), so big and
+                // small triangles end in different subtrees instead of a centroid median mixing them
+                axis = 0; half = tris.Count / 2; double best = double.MaxValue;
+                var order = new List<int>[3];
+                for (int ax = 0; ax < 3; ax++)
+                {
+                    int axc = ax;
+                    var o = new List<int>(tris); o.Sort((x, y) => Get(ctr[x], axc).CompareTo(Get(ctr[y], axc)));
+                    order[ax] = o;
+                    int m = o.Count; var suf = new double[m + 1];
+                    double[] lo = { double.MaxValue, double.MaxValue, double.MaxValue }, hi = { double.MinValue, double.MinValue, double.MinValue };
+                    double Area(double[] l, double[] h) { double x = h[0] - l[0], y = h[1] - l[1], z = h[2] - l[2]; return x * y + y * z + z * x; }
+                    for (int i = m - 1; i >= 1; i--)
+                    {
+                        int t = o[i]; for (int k = 0; k < 3; k++) { lo[k] = Math.Min(lo[k], tmin[t, k]); hi[k] = Math.Max(hi[k], tmax[t, k]); }
+                        suf[i] = Area(lo, hi) * (m - i);
+                    }
+                    lo = new[] { double.MaxValue, double.MaxValue, double.MaxValue }; hi = new[] { double.MinValue, double.MinValue, double.MinValue };
+                    for (int i = 1; i < m; i++)
+                    {
+                        int t = o[i - 1]; for (int k = 0; k < 3; k++) { lo[k] = Math.Min(lo[k], tmin[t, k]); hi[k] = Math.Max(hi[k], tmax[t, k]); }
+                        double c = Area(lo, hi) * i + suf[i];
+                        if (c < best) { best = c; axis = ax; half = i; }
+                    }
+                }
+                tris.Clear(); tris.AddRange(order[axis]);
+            }
+            else
+            {
+                var cmin = new Vector3(float.MaxValue); var cmax = new Vector3(float.MinValue);
+                foreach (var t in tris) { cmin = Vector3.Min(cmin, ctr[t]); cmax = Vector3.Max(cmax, ctr[t]); }
+                var d = cmax - cmin;
+                axis = d.X >= d.Y && d.X >= d.Z ? 0 : d.Y >= d.Z ? 1 : 2;
+                tris.Sort((x, y) => Get(ctr[x], axis).CompareTo(Get(ctr[y], axis)));
+                half = tris.Count / 2;
+            }
+            var left = tris.GetRange(0, half); var right = tris.GetRange(half, tris.Count - half);
+            var n = new Node { Axis = axis, Left = Make(left), Right = Make(right) };
+            for (int k = 0; k < 3; k++) { n.Min[k] = Math.Min(n.Left.Min[k], n.Right.Min[k]); n.Max[k] = Math.Max(n.Left.Max[k], n.Right.Max[k]); }
             return n;
         }
         var all = Enumerable.Range(0, nTri).ToList();
         var root = Make(all);
+        Assign(root, new long[3], 16);
+
+        // Frames: a node runs with (off, shift) - byte(q) = (q - off) >> shift, as the game's machines compute it
+        // (MoppBuilder.Query models them; rescale n: off += byte << shift, shift -= n). A node whose subtree fits 256 cells
+        // of a finer shift gets a rescale; its split bytes are then relative to the new frame.
+        void Assign(Node n, long[] off, int shift)
+        {
+            if (n.Tri >= 0) return;
+            if (UseRescale)
+                for (int r = Math.Min(4, shift); r >= 1; r--)
+                {
+                    int s2 = shift - r;
+                    var b = new long[3]; var off2 = new long[3]; bool ok = true;
+                    for (int k = 0; k < 3 && ok; k++)
+                    {
+                        b[k] = (n.Min[k] - off[k]) >> shift;
+                        if (b[k] < 0 || b[k] > 255) { ok = false; break; }
+                        off2[k] = off[k] + (b[k] << shift);
+                        ok = n.Min[k] - off2[k] >= 0 && ((n.Max[k] - off2[k]) >> s2) <= 253;
+                    }
+                    if (!ok) continue;
+                    n.Rescale = r; n.R0 = (byte)b[0]; n.R1 = (byte)b[1]; n.R2 = (byte)b[2];
+                    off = off2; shift = s2;
+                    break;
+                }
+            int ax = n.Axis;
+            long la = ((n.Left!.Max[ax] - off[ax]) >> shift) + 1, rb = ((n.Right!.Min[ax] - off[ax]) >> shift) - 1;
+            n.A = (byte)Math.Clamp(la, 0, 255);   // fallthrough child: coordinates <= a
+            n.B = (byte)Math.Clamp(rb, 0, 255);   // jump child: coordinates >= b
+            Assign(n.Left, off, shift); Assign(n.Right, off, shift);
+            n.Size = (n.Rescale > 0 ? 4 : 0) + 4 + JumpSize(n.Right.Size) + n.Right.Size + n.Left.Size;
+        }
 
         // chunks
         var chunks = new List<List<byte>?>();
@@ -105,24 +178,30 @@ public static class MoppBuilder
             chunks.Add(null); queue.Enqueue((idx, n));
             return new List<byte> { 0x0C, (byte)(idx >> 8), (byte)idx };
         }
+        List<byte> Prefix(Node n) => n.Rescale > 0 ? new List<byte> { (byte)n.Rescale, n.R0, n.R1, n.R2 } : new List<byte>();
         List<byte> Inline(Node n)
         {
             if (n.Tri >= 0) return Terminal(n.Tri);
             var r = Inline(n.Right!); var l = Inline(n.Left!);
-            var o = new List<byte>(n.Size) { (byte)(0x10 + n.Axis), n.A, n.B, 0 };
-            var j = Jump(r.Count); o[3] = (byte)j.Count;
+            var o = Prefix(n);
+            int sp = o.Count;
+            o.AddRange(new byte[] { (byte)(0x10 + n.Axis), n.A, n.B, 0 });
+            var j = Jump(r.Count); o[sp + 3] = (byte)j.Count;
             o.AddRange(j); o.AddRange(r); o.AddRange(l);
             return o;
         }
         List<byte> Emit(Node n, int budget)
         {
             if (n.Size <= budget) return Inline(n);
-            if (n.Tri >= 0 || budget < 4 + 3 + 3 + 3) return Ref(n);
-            int rem = budget - 4 - 3;
+            int pre = n.Rescale > 0 ? 4 : 0;
+            if (n.Tri >= 0 || budget < pre + 4 + 3 + 3 + 3) return Ref(n);
+            int rem = budget - pre - 4 - 3;
             var r = Emit(n.Right!, rem - 3);
             var l = Emit(n.Left!, rem - r.Count);
-            var o = new List<byte>(4 + 3 + r.Count + l.Count) { (byte)(0x10 + n.Axis), n.A, n.B, 0 };
-            var j = Jump(r.Count); o[3] = (byte)j.Count;
+            var o = Prefix(n);
+            int sp = o.Count;
+            o.AddRange(new byte[] { (byte)(0x10 + n.Axis), n.A, n.B, 0 });
+            var j = Jump(r.Count); o[sp + 3] = (byte)j.Count;
             o.AddRange(j); o.AddRange(r); o.AddRange(l);
             return o;
         }

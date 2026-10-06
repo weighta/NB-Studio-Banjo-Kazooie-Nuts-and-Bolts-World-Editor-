@@ -29,7 +29,7 @@ public static class ModelImporter
     public const int MaxChunkVertices = 60000;   // 16-bit indices allow 65,535
 
     public static Result Replace(CaffFile caff, int symbol, IReadOnlyList<ImportMesh> meshes, bool spatialTiles = false, ISet<int>? keepVbRecords = null, ISet<int>? excludeVbRecords = null,
-        bool forceByMaterial = false, bool uniformVertexColour = false)
+        bool forceByMaterial = false, bool uniformVertexColour = false, bool trimHidden = false)
     {
         var m = ModelAsset.Parse(caff, symbol);
         // spatial tiling (terrain): new geometry bounds, original culling layout (root box + centre of every draw block)
@@ -198,7 +198,10 @@ public static class ModelImporter
             {
                 int off = Append(new byte[8]);   // indices 0,0,0 (+pad)
                 foreach (var ibo in draws.Select(x => x.IbObject).Distinct()) { SetIb(ibo, off, 6); SetDrawCounts(ibo, 3); }
-                notes.Add($"vertex buffer {gi}: hidden (no mesh for it)");
+                // trimHidden: the buffer shrinks to one zero vertex (the degenerate triangle reads only vertex 0), so a
+                // clone used for one material does not carry the template's other geometry (GPU compaction drops it)
+                if (trimHidden) SetVb(proto.VbRecord, Append(new byte[Math.Max(32, proto.Stride)]), Math.Max(4, proto.Stride));
+                notes.Add($"vertex buffer {gi}: hidden (no mesh for it){(trimHidden ? ", trimmed" : "")}");
                 continue;
             }
             // one vertex buffer holding every distinct mesh of this group, each draw indexing its own slice

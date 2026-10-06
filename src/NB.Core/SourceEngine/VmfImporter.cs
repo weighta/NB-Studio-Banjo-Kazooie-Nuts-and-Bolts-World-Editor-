@@ -54,6 +54,20 @@ public sealed class VmfImportOptions
     public float SkyLuxelScale = 1f;
     /// <summary>Collision of ported skybox displacements uses every n-th grid row/column (2 = a quarter of the triangles).</summary>
     public int SkyCollisionStep = 2;
+    /// <summary>Largest distance (Source units) a displacement's collision may deviate from its drawn surface; flat parts
+    /// collide with few large triangles. Thousands of tiny collision triangles around the vehicle made the game drop to 15
+    /// fps (snowy_dream's displacement stairs, verified in Xenia: see MERGE.md).</summary>
+    public float CollisionTolerance = 2f;
+    /// <summary>Draw translucent ($translucent, decals) and alpha-tested ($alphatest) materials with the game's alpha-blend /
+    /// alpha-test materials; off: not drawn (they still collide).</summary>
+    public bool TransparentMaterials = true;
+    /// <summary>info_overlay / infodecal entities as see-through quads (needs <see cref="TransparentMaterials"/>).</summary>
+    public bool Decals = true;
+    /// <summary>Brushes smaller than this (largest extent, Source units) are drawn but do not collide.</summary>
+    public float CollisionMinSize = 8f;
+    /// <summary>Brushes up to this size (largest extent, Source units) with more than 12 triangles collide as their
+    /// bounding box; so do physics-prop brushes (func_physbox, func_breakable) of any size. Negative: no boxes at all.</summary>
+    public float CollisionBoxSize = 64f;
     /// <summary>Brushes with a tools/toolsskybox(2d) face (the sky shell around the map) keep their collision as an
     /// invisible boundary like in Source. Off (default): the whole brush is removed (no mesh, no collision, no light
     /// blocking), so you can drive out past where the sky walls were.</summary>
@@ -94,11 +108,21 @@ public sealed class VmfMaterialPlan
     public int OutW, OutH;              // size of the texture written into the game
     public int Triangles, Faces;
     public uint Colour;                 // generated colour (0xRRGGBB)
-    public string Source => Image != null ? "image " + Image : Vtf != null ? "game " + Vtf : $"generated #{Colour:X6}";
+    public MaterialKind Kind;           // how it is drawn (translucent / alpha-tested materials: Cutout or Blend)
+    public bool TwoSided;               // $nocull: both sides drawn
+    public float AlphaRef = 0.5f;       // $alphatestreference
+    public bool Modulate;               // DecalModulate (multiply) texture, converted to a darkening blend
+    /// <summary>Decal atlas: the source materials and their cells (texels; a 4-texel border around each).</summary>
+    public List<(VmfMaterialPlan Src, int X, int Y, int W, int H, float Light)>? AtlasParts;
+    public string Source => AtlasParts != null ? $"atlas of {AtlasParts.Count} decal texture(s)" : Image != null ? "image " + Image : Vtf != null ? "game " + Vtf : $"generated #{Colour:X6}";
 }
 
-/// <summary>How one material is used: drawn, colliding, light-blocking, water.</summary>
-public sealed record VmfMaterialUse(bool Draw, bool Collide, bool Water, bool Occlude, string Why);
+/// <summary>How one material is used: drawn, colliding, light-blocking, water, and how it is drawn.</summary>
+public sealed record VmfMaterialUse(bool Draw, bool Collide, bool Water, bool Occlude, string Why, MaterialKind Kind = MaterialKind.Opaque, bool TwoSided = false);
+
+/// <summary>Opaque (lightmapped strut template), Cutout (alpha test: Showdown Town's central-rock grill material, alpha
+/// from a mask texture) or Blend (alpha blend: the safe house's crack decal material, RGBA DXT3 texture).</summary>
+public enum MaterialKind { Opaque, Cutout, Blend }
 
 public sealed class VmfPropPlan
 {
@@ -115,6 +139,7 @@ public sealed class VmfFace
     public BrushSurface Surface = null!;
     public VmfMaterialPlan Material = null!;
     public Vector3 Centroid;            // game coordinates
+    public Vector3 GMin, GMax;          // game-space bounds
     public int Triangles => Surface.Triangles.Count / 3;
     // lightmap rectangle (luxels, without the 1-luxel border) and planar mapping
     public int Page = -1, X, Y, W, H;
@@ -122,6 +147,11 @@ public sealed class VmfFace
     public List<Vector2>? Uv2;          // per surface vertex, in texels of the page
     /// <summary>Ported 3D-skybox geometry: Surface is in skybox coordinates (lit in skybox space, scaled at output).</summary>
     public bool Sky3D;
+    /// <summary>Decal quads (info_overlay / infodecal): the decal's own texture, its corner coordinates in that texture
+    /// (0..1) and the brush face it lies on (its baked light darkens the decal's atlas cell).</summary>
+    public VmfMaterialPlan? DecalSrc;
+    public (double U, double V)[]? DecalUv;
+    public VmfFace? Under;
 }
 
 /// <summary>Faces of one material that become one model.</summary>
@@ -153,6 +183,8 @@ public sealed class VmfPlan
     public int SkyboxBrushes, SkyboxEntities;
     /// <summary>Sky shell brushes removed (a tools/toolsskybox face), ported skybox brushes, skybox brushes skipped as the
     /// replica under the map, and the ported terrain's render / collision triangles and luxels.</summary>
+    /// <summary>Collision detail: brushes without collision (tiny) and brushes colliding as their box.</summary>
+    public int CollisionDropped, CollisionBoxed;
     public int SkyShellBrushes, SkyPorted, SkySkippedReplica, SkyTriangles, SkyCollisionTriangles, SkyLuxels;
     public double SkyScale;
     public DVec3 SkyCamera;
@@ -230,6 +262,15 @@ public static class VmfImporter
     public const string Template = "aid_model_banjox_background_showdowntown_showdowntownreferences_mainfeatures_policestationref_supportstrut";
     const string TemplateColour = "aid_texture_banjox_shared_materials_metal_brass1_colour_0x00b19ac5";
     const string FlatNormal = "aid_texture_banjox_shared_nuttyacres_plainnormal_0x0c670e45";
+    /// <summary>Alpha-tested template: the grill of Showdown Town's central rock (draw section flags 0 = alpha test; its pixel
+    /// shader takes the alpha from the transparency texture's blue channel).</summary>
+    public const string CutoutTemplate = "aid_model_banjox_background_showdowntown_showdowntownreferences_mainfeatures_centralrock";
+    const string CutoutColour = "aid_texture_banjox_shared_nuttyacres_grill1_colour_0x088078a5";
+    const string CutoutMask = "aid_texture_banjox_shared_nuttyacres_grill1_transparency_0x02939385";
+    /// <summary>Alpha-blended template: the crack decal of the third safe house (section flags 2 = blend; colour and alpha
+    /// from one DXT3 texture; half-float positions).</summary>
+    public const string BlendTemplate = "aid_model_banjox_background_showdowntown_showdowntownreferences_specialhouses_safehouse3";
+    const string BlendColour = "aid_texture_banjox_shared_showdowntown_crack2_colourandtrans_0x086d7b15";
     const string SpawnAsset = "aid_marker_banjox_showdowntown_main";
     const int SpawnType = 4, SpawnIndex = 84;
     public const string WhiteTexture = "vmf_white", SpecTexture = "vmf_spec", BlackTexture = "vmf_black";
@@ -256,6 +297,7 @@ public static class VmfImporter
     static readonly HashSet<string> CollideOnlyClasses = new(StringComparer.OrdinalIgnoreCase) { "func_clip_vphysics", "func_vehicleclip", "func_playerclip" };
     static readonly HashSet<string> WaterClasses = new(StringComparer.OrdinalIgnoreCase) { "func_water_analog", "func_water" };
     /// <summary>Brushes that block light in vrad (world geometry); brush entities do not cast lightmap shadows.</summary>
+    static readonly HashSet<string> PropBrushClasses = new(StringComparer.OrdinalIgnoreCase) { "func_physbox", "func_physbox_multiplayer", "func_breakable", "func_breakable_surf", "func_button", "func_rot_button" };
     static readonly HashSet<string> ShadowClasses = new(StringComparer.OrdinalIgnoreCase) { "worldspawn", "func_detail" };
     public static readonly string[] PropClasses = { "prop_static", "prop_dynamic", "prop_dynamic_override", "prop_physics", "prop_physics_override", "prop_physics_multiplayer", "prop_detail", "prop_ragdoll", "prop_door_rotating" };
     static readonly string[] SpawnClasses = { "info_player_start", "info_player_teamspawn", "info_player_terrorist", "info_player_counterterrorist", "info_player_deathmatch", "info_player_combine", "info_player_rebel", "info_survivor_position", "info_player_axis", "info_player_allies" };
@@ -291,9 +333,11 @@ public static class VmfImporter
             if (vmt.IsWater) return new(false, false, true, false, "water shader");
             if (vmt.IsSky) return new(false, true, false, false, "sky shader");
             if (vmt.NoDraw) return new(false, true, false, true, "nodraw (vmt)");
-            if (vmt.Decal) return new(false, true, false, false, "decal");
-            if (vmt.Translucent || vmt.Additive) return new(false, true, false, false, vmt.Additive ? "additive" : "translucent");
-            if (vmt.AlphaTest) return new(false, true, false, false, "alpha-tested");
+            // see-through surfaces are drawn with an alpha-tested or alpha-blended game material; they collide like the
+            // brush (Source does too) but do not block light; additive ones (glows) are not drawn
+            if (vmt.Additive) return new(false, true, false, false, "additive");
+            if (vmt.AlphaTest) return new(true, true, false, false, "alpha-tested", MaterialKind.Cutout, vmt.NoCull);
+            if (vmt.Translucent || vmt.Decal) return new(true, true, false, false, vmt.Decal ? "decal" : "translucent", MaterialKind.Blend, vmt.NoCull);
             if (!vmt.Opaque) return new(false, true, false, false, vmt.Shader);
         }
         else if (m.Contains("WATER") && !m.Contains("WATERFALL") && !m.Contains("WATERTOWER") && !m.Contains("WATERTANK")) return new(false, false, true, false, "water (name)");
@@ -343,8 +387,14 @@ public static class VmfImporter
                 if (vmt != null) plan.ContentFound++; else plan.ContentMissing++;
             }
             u = MaterialUse(material, vmt);
+            if (!o.TransparentMaterials && u.Kind != MaterialKind.Opaque) u = u with { Draw = false };
             plan.MaterialUses[material] = u;
-            if (u.Draw) mats[material] = ResolveMaterial(material, o, content, vmt);
+            if (u.Draw)
+            {
+                var mp = ResolveMaterial(material, o, content, vmt);
+                mp.Kind = u.Kind; mp.TwoSided = u.TwoSided; mp.AlphaRef = vmt?.AlphaTestReference ?? 0.5f;
+                mats[material] = mp;
+            }
             return u;
         }
 
@@ -384,6 +434,30 @@ public static class VmfImporter
             // becomes a water region
             bool waterBrush = use.Value.Water || solid.Sides.Any(x => x.Disp == null && Use(x.Material).Water);
             bool shadows = ShadowClasses.Contains(solid.Owner);
+            // collision detail: tiny brushes (knobs, handles, cutlery) do not collide; small multi-sided brushes and
+            // physics-prop brushes (tables, chairs) collide as their bounding box. Dense clusters of tiny collision
+            // triangles around the vehicle dropped the game to 15 fps (snowy_dream's furnished corridor, see MERGE.md)
+            var bmin = new DVec3(double.MaxValue, double.MaxValue, double.MaxValue); var bmax = new DVec3(double.MinValue, double.MinValue, double.MinValue);
+            foreach (var q in surfaces.Where(x => !x.Displacement).SelectMany(x => x.Positions)) { bmin = Min(bmin, q); bmax = Max(bmax, q); }
+            var bext = bmax - bmin; double bsize = Math.Max(bext.X, Math.Max(bext.Y, bext.Z));
+            int btris = surfaces.Where(x => !x.Displacement).Sum(x => x.Triangles.Count / 3);
+            var colMode = surfaces.Any(x => x.Displacement) || bsize <= 0 ? 0
+                        : bsize < o.CollisionMinSize ? -1
+                        : btris > 12 && o.CollisionBoxSize >= 0 && (bsize <= o.CollisionBoxSize || PropBrushClasses.Contains(solid.Owner)) ? 1 : 0;
+            if (colMode == -1 && use.Value.Collide) plan.CollisionDropped++;
+            if (colMode == 1 && use.Value.Collide && surfaces.Any(x => Use(x.Material).Collide))
+            {
+                // the brush's box (12 triangles, facing out)
+                plan.CollisionBoxed++;
+                DVec3[] c = { new(bmin.X, bmin.Y, bmin.Z), new(bmax.X, bmin.Y, bmin.Z), new(bmax.X, bmax.Y, bmin.Z), new(bmin.X, bmax.Y, bmin.Z),
+                              new(bmin.X, bmin.Y, bmax.Z), new(bmax.X, bmin.Y, bmax.Z), new(bmax.X, bmax.Y, bmax.Z), new(bmin.X, bmax.Y, bmax.Z) };
+                int[] bt = { 0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7, 0, 1, 5, 0, 5, 4, 1, 2, 6, 1, 6, 5, 2, 3, 7, 2, 7, 6, 3, 0, 4, 3, 4, 7 };
+                int b0 = plan.CollisionPositions.Count;
+                plan.CollisionPositions.AddRange(c.Select(GX));
+                plan.CollisionTris.AddRange(bt.Select(t => b0 + t));
+                plan.CollisionTriangles += 12;
+                if (inSky) plan.SkyCollisionTriangles += 12;
+            }
             foreach (var surf in surfaces)
             {
                 var mu = Use(surf.Material);
@@ -426,10 +500,15 @@ public static class VmfImporter
                     }
                     plan.OccluderTriangles += surf.Triangles.Count / 3;
                 }
-                if (collide)
+                if (collide && colMode == 0)
                 {
                     // far skybox terrain: displacements collide with a coarser grid
-                    var (cp, ct) = inSky && surf.Displacement && o.SkyCollisionStep > 1 ? DecimateDisplacement(surf, o.SkyCollisionStep) : (surf.Positions, surf.Triangles);
+                    // displacements collide with the coarsest grid that stays within the tolerance of the real surface
+                    // (a flat displacement - e.g. snowy_dream's stair steps - becomes 2 triangles instead of 128); the
+                    // far skybox terrain keeps at least every SkyCollisionStep-th row
+                    var (cp, ct) = surf.Displacement
+                        ? AdaptiveDisplacement(surf, inSky ? Math.Max(1, o.SkyCollisionStep) : 1, inSky ? o.CollisionTolerance / Math.Max(1, skyK) * 4 : o.CollisionTolerance)
+                        : (surf.Positions, surf.Triangles);
                     int b0 = plan.CollisionPositions.Count;
                     plan.CollisionPositions.AddRange(ReferenceEquals(cp, surf.Positions) ? pos : cp.Select(GX));
                     foreach (var t in ct) plan.CollisionTris.Add(b0 + t);
@@ -442,8 +521,15 @@ public static class VmfImporter
                 var mp = mats[surf.Material];
                 mp.Faces++; mp.Triangles += surf.Triangles.Count / 3;
                 if (inSky) plan.SkyTriangles += surf.Triangles.Count / 3;
-                faces.Add(new VmfFace { Surface = surf, Material = mp, Centroid = pos.Aggregate(Vector3.Zero, (a, b) => a + b) / pos.Count, Sky3D = inSky });
+                faces.Add(new VmfFace { Surface = surf, Material = mp, Centroid = pos.Aggregate(Vector3.Zero, (a, b) => a + b) / pos.Count, Sky3D = inSky,
+                                        GMin = pos.Aggregate(Vector3.Min), GMax = pos.Aggregate(Vector3.Max) });
             }
+        }
+        if (o.TransparentMaterials && o.Decals)
+        {
+            var before = faces.Count;
+            AddDecals(map, plan, o, content, faces, mats, Use, G);
+            foreach (var f in faces.Skip(before)) foreach (var p in f.Surface.Positions.Select(G)) { mn = Vector3.Min(mn, p); mx = Vector3.Max(mx, p); }
         }
         plan.BrushEntities = map.Entities.Count(e => e.Solids.Count > 0 && ClassUse(e.ClassName) != null);
         foreach (var e in map.Entities.Where(e => e.Solids.Count == 0)) plan.PointEntities[e.ClassName] = plan.PointEntities.GetValueOrDefault(e.ClassName) + 1;
@@ -454,8 +540,11 @@ public static class VmfImporter
         progress?.Report(("chunks", 0.55));
 
         // chunks: per material, spatial halving on face centroids
+        // blended chunks stay small: the blend template stores half-float positions (precise to 1/32 unit within 128 units
+        // of the chunk centre); each see-through chunk clones a game model (~0.17 MB with its other geometry trimmed), so
+        // not smaller than needed
         foreach (var g in faces.GroupBy(f => f.Material))
-            foreach (var part in SplitFaces(g.ToList(), Math.Max(50, o.ChunkTriangles)))
+            foreach (var part in SplitFaces(g.ToList(), Math.Max(50, o.ChunkTriangles), g.Key.Kind == MaterialKind.Blend ? 240f : float.MaxValue))
                 plan.Chunks.Add(new VmfChunk { Material = g.Key, Faces = part });
 
         // lights + lightmap layout
@@ -592,6 +681,41 @@ public static class VmfImporter
 
     /// <summary>Collision of a displacement on every <paramref name="step"/>-th grid row and column (the last one always),
     /// facing the side's front.</summary>
+    /// <summary>Displacement collision on the coarsest grid step (a power of two, at least <paramref name="minStep"/>) whose
+    /// triangles stay within <paramref name="tolerance"/> of every original grid point.</summary>
+    static (List<DVec3>, List<int>) AdaptiveDisplacement(BrushSurface s, int minStep, double tolerance)
+    {
+        int n = (int)Math.Round(Math.Sqrt(s.Positions.Count));
+        if (n < 3) return (s.Positions, s.Triangles);
+        for (int step = n - 1; step >= 2; step /= 2)
+        {
+            if (step < minStep) break;
+            if (MaxError(s, n, step) <= tolerance) return DecimateDisplacement(s, step);
+        }
+        return minStep > 1 ? DecimateDisplacement(s, minStep) : (s.Positions, s.Triangles);
+    }
+
+    /// <summary>Largest distance of an original grid point from the decimated surface (cells of <paramref name="step"/>
+    /// split along the a-c diagonal, as <see cref="DecimateDisplacement"/> builds them).</summary>
+    static double MaxError(BrushSurface s, int n, int step)
+    {
+        DVec3 P(int r, int c) => s.Positions[Math.Min(r, n - 1) * n + Math.Min(c, n - 1)];
+        double worst = 0;
+        for (int r = 0; r < n; r++)
+            for (int c = 0; c < n; c++)
+            {
+                int r0 = Math.Min(r / step * step, n - 1 - step), c0 = Math.Min(c / step * step, n - 1 - step);
+                if (r0 < 0) r0 = 0; if (c0 < 0) c0 = 0;
+                int r1 = Math.Min(r0 + step, n - 1), c1 = Math.Min(c0 + step, n - 1);
+                double tr = r1 > r0 ? (double)(r - r0) / (r1 - r0) : 0, tc = c1 > c0 ? (double)(c - c0) / (c1 - c0) : 0;
+                DVec3 a = P(r0, c0), b = P(r1, c0), cc = P(r1, c1), d = P(r0, c1);
+                var q = tr >= tc ? a + (b - a) * (tr - tc) + (cc - a) * tc : a + (cc - a) * tr + (d - a) * (tc - tr);
+                worst = Math.Max(worst, (q - P(r, c)).Length);
+                if (worst > 1e9) return worst;
+            }
+        return worst;
+    }
+
     static (List<DVec3>, List<int>) DecimateDisplacement(BrushSurface s, int step)
     {
         int n = (int)Math.Round(Math.Sqrt(s.Positions.Count));
@@ -633,7 +757,164 @@ public static class VmfImporter
         return DVec3.Dot(e2, q) / det;
     }
 
-    static List<List<VmfFace>> SplitFaces(List<VmfFace> faces, int maxTris)
+    /// <summary>info_overlay (a quad from its basis and uv0..uv3, as VBSP builds it; the "sides" it is clipped to are
+    /// ignored) and infodecal (the texture at $decalscale, laid on the nearest drawn brush face within 8 units along the
+    /// face's texture axes; Source wraps decals over corners, these stay one flat quad). All decal textures go into one
+    /// atlas texture drawn with the blend material (one model clone per place instead of one per decal texture), lifted
+    /// 0.08 game units off the surface; DecalModulate (multiply) textures become a darkening blend.</summary>
+    static void AddDecals(VmfMap map, VmfPlan plan, VmfImportOptions o, SourceContent? content, List<VmfFace> faces,
+        Dictionary<string, VmfMaterialPlan> mats, Func<string, VmfMaterialUse> use, Func<DVec3, Vector3> G)
+    {
+        double lift = 0.08 / Math.Max(1e-4, o.Scale);
+        var planar = faces.Where(f => !f.Sky3D && !f.Surface.Displacement && f.Surface.Side != null && f.Material.Kind == MaterialKind.Opaque).ToList();
+        int overlays = 0, decals = 0, skipped = 0;
+        var quads = new List<(VmfMaterialPlan Src, DVec3[] C, (double U, double V)[] T, DVec3 N, VmfFace? Under)>();
+        // nearest planar face whose polygon contains the point's projection (within 8 units)
+        VmfFace? Under(DVec3 p)
+        {
+            VmfFace? best = null; double bd = 8;
+            foreach (var f in planar)
+            {
+                var n = f.Surface.Side.Normal; double d = DVec3.Dot(n, p) - f.Surface.Side.Distance;
+                if (Math.Abs(d) >= bd) continue;
+                var q = p - n * d; var P = f.Surface.Positions; var T = f.Surface.Triangles; bool inside = false;
+                for (int k = 0; k + 2 < T.Count && !inside; k += 3)
+                {
+                    DVec3 a = P[T[k]], b = P[T[k + 1]], cc = P[T[k + 2]];
+                    inside = DVec3.Dot(DVec3.Cross(b - a, q - a), n) >= -1e-6 && DVec3.Dot(DVec3.Cross(cc - b, q - b), n) >= -1e-6 && DVec3.Dot(DVec3.Cross(a - cc, q - cc), n) >= -1e-6;
+                }
+                if (inside) { best = f; bd = Math.Abs(d); }
+            }
+            return best;
+        }
+        VmfMaterialPlan? Mat(string material, out double decalScale)
+        {
+            decalScale = 0.25;
+            var u = use(material);
+            if (!u.Draw || u.Kind == MaterialKind.Opaque || !mats.TryGetValue(material, out var mp) || mp.Faces > 0) return null;
+            var vmt = content != null ? VmtInfo.Load(content, material) : null;
+            if (vmt != null && vmt.Keys.TryGetValue("$decalscale", out var ds) && double.TryParse(ds, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double d) && d > 0) decalScale = d;
+            if (vmt != null && vmt.Shader.Equals("DecalModulate", StringComparison.OrdinalIgnoreCase)) mp.Modulate = true;
+            return mp;
+        }
+        foreach (var e in map.Entities.Where(e => plan.Keep(e)))
+        {
+            bool overlay = e.ClassName.Equals("info_overlay", StringComparison.OrdinalIgnoreCase);
+            if (!overlay && !e.ClassName.Equals("infodecal", StringComparison.OrdinalIgnoreCase)) continue;
+            string material = overlay ? e.Get("material") : e.Get("texture");
+            if (material.Length == 0) continue;
+            var mp = Mat(material, out double scale);
+            if (mp == null) { skipped++; continue; }
+            if (overlay)
+            {
+                var org = VmfMap.Vec(e.Get("BasisOrigin", e.Get("origin")));
+                DVec3 bu = VmfMap.Vec(e.Get("BasisU")), bv = VmfMap.Vec(e.Get("BasisV")), bn = VmfMap.Vec(e.Get("BasisNormal")).Normalized();
+                double F(string k, double d) => double.TryParse(e.Get(k), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var x) ? x : d;
+                double su = F("StartU", 0), eu = F("EndU", 1), sv = F("StartV", 0), ev = F("EndV", 1);
+                var c = new DVec3[4];
+                for (int i = 0; i < 4; i++) { var uv = VmfMap.Vec(e.Get("uv" + i)); c[i] = org + bu * uv.X + bv * uv.Y; }
+                if (bn.Length < 0.5) { skipped++; continue; }
+                quads.Add((mp, c, new[] { (su, sv), (su, ev), (eu, ev), (eu, sv) }, bn, Under(org)));
+                overlays++;
+            }
+            else
+            {
+                if (e.Origin is not DVec3 p) continue;
+                var best = Under(p);
+                if (best == null) { skipped++; continue; }
+                var side = best.Surface.Side; var nn = side.Normal; var q0 = p - nn * (DVec3.Dot(nn, p) - side.Distance);
+                var ua = (side.UAxis - nn * DVec3.Dot(side.UAxis, nn)).Normalized();
+                var va = (side.VAxis - nn * DVec3.Dot(side.VAxis, nn) - ua * DVec3.Dot(side.VAxis, ua)).Normalized();
+                if (ua.Length < 0.5 || va.Length < 0.5) { skipped++; continue; }
+                double hw = mp.TexW * scale / 2, hh = mp.TexH * scale / 2;
+                var c = new[] { q0 - ua * hw - va * hh, q0 + ua * hw - va * hh, q0 + ua * hw + va * hh, q0 - ua * hw + va * hh };
+                quads.Add((mp, c, new[] { (0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0) }, nn, best));
+                decals++;
+            }
+        }
+        if (overlays + decals + skipped > 0)
+            plan.Notes.Add($"decals: {overlays} info_overlay and {decals} infodecal drawn as quads{(skipped > 0 ? $", {skipped} skipped (material not see-through, also on brushes, or no surface within 8 units)" : "")}");
+        if (quads.Count == 0) return;
+        var atlas = new VmfMaterialPlan { Material = "decals (atlas)", Kind = MaterialKind.Blend, Colour = 0x808080 };
+        mats["#decal-atlas"] = atlas;
+        var added = new List<VmfFace>();
+        foreach (var (src, c, t, n, under) in quads)
+        {
+            if (DVec3.Dot(DVec3.Cross(c[1] - c[0], c[2] - c[0]), n) < 0) { Array.Reverse(c); Array.Reverse(t); }
+            var surf = new BrushSurface { Material = atlas.Material };
+            for (int i = 0; i < 4; i++) { surf.Positions.Add(c[i] + n * lift); surf.Normals.Add(n); surf.Texels.Add((0, 0)); }
+            surf.Triangles.AddRange(new[] { 0, 1, 2, 0, 2, 3 });
+            var pos = surf.Positions.Select(G).ToList();
+            atlas.Faces++; atlas.Triangles += 2; plan.Faces++;
+            var f = new VmfFace { Surface = surf, Material = atlas, Centroid = pos.Aggregate(Vector3.Zero, (a, b) => a + b) / 4, GMin = pos.Aggregate(Vector3.Min), GMax = pos.Aggregate(Vector3.Max),
+                                  DecalSrc = src, DecalUv = t, Under = under };
+            faces.Add(f); added.Add(f);
+        }
+        LayoutAtlas(atlas, added, _ => 1f);
+    }
+
+    /// <summary>Packs the decal atlas: one cell per (decal texture, light level) (each at most cap x cap texels, shelf
+    /// packed into 1024 wide, a 4-texel border of repeated edge texels) and sets the decal quads' texture coordinates
+    /// (clamped to the cell: an overlay repeating its texture is stretched instead).</summary>
+    static void LayoutAtlas(VmfMaterialPlan atlas, List<VmfFace> decals, Func<VmfFace, float> light)
+    {
+        const int A = 1024, Pad = 4;
+        var keyOf = decals.ToDictionary(f => f, f => (Src: f.DecalSrc!, Light: light(f)));
+        var keys = keyOf.Values.Distinct().ToList();
+        var cells = new Dictionary<(VmfMaterialPlan, float), (int X, int Y, int W, int H)>();
+        int height = 0;
+        for (int cap = 256; cap >= 8; cap /= 2)
+        {
+            cells.Clear();
+            int x = 0, y = 0, row = 0;
+            foreach (var k in keys.OrderByDescending(k => Math.Min(cap, k.Src.OutH)).ThenBy(k => k.Src.Material).ThenBy(k => k.Light))
+            {
+                int w = Math.Min(cap, k.Src.OutW), h = Math.Min(cap, k.Src.OutH);
+                if (x + w + 2 * Pad > A) { x = 0; y += row; row = 0; }
+                cells[k] = (x + Pad, y + Pad, w, h);
+                x += w + 2 * Pad; row = Math.Max(row, h + 2 * Pad);
+            }
+            height = y + row;
+            if (height <= A) break;
+        }
+        int H = Pow2(Math.Max(16, height), A);
+        atlas.TexW = atlas.OutW = A; atlas.TexH = atlas.OutH = H;
+        atlas.AtlasParts = keys.Select(k => (k.Src, cells[k].X, cells[k].Y, cells[k].W, cells[k].H, k.Light)).ToList();
+        foreach (var f in decals)
+        {
+            var cell = cells[keyOf[f]];
+            for (int i = 0; i < 4; i++)
+            {
+                var t = f.DecalUv![i];
+                double u = Math.Clamp(t.U, 0.5 / cell.W, 1 - 0.5 / cell.W), v = Math.Clamp(t.V, 0.5 / cell.H, 1 - 0.5 / cell.H);
+                f.Surface.Texels[i] = (cell.X + u * cell.W, cell.Y + v * cell.H);
+            }
+        }
+    }
+
+    /// <summary>Baked light (lightmap value, 0..1 grey, in 1/8 steps) on the face under a decal, at the decal's centre
+    /// (3x3 luxels); 1 when the face has no lightmap.</summary>
+    static float DecalLight(VmfFace d, List<byte[]> pages, int P)
+    {
+        var u = d.Under;
+        if (u == null || u.Page < 0 || u.Page >= pages.Count || u.W <= 0 || u.H <= 0) return 1f;
+        var c = d.Surface.Positions.Aggregate(DVec3.Zero, (a, b) => a + b) / d.Surface.Positions.Count;
+        var q = new Vector3((float)c.X, (float)c.Y, (float)c.Z) - u.Origin;
+        float a11 = Vector3.Dot(u.T1, u.T1), a12 = Vector3.Dot(u.T1, u.T2), a22 = Vector3.Dot(u.T2, u.T2), b1 = Vector3.Dot(u.T1, q), b2 = Vector3.Dot(u.T2, q);
+        float det = a11 * a22 - a12 * a12;
+        if (MathF.Abs(det) < 1e-9f) return 1f;
+        int ci = (int)MathF.Round((b1 * a22 - b2 * a12) / det), cj = (int)MathF.Round((a11 * b2 - a12 * b1) / det);
+        float sum = 0; int n = 0;
+        for (int j = cj - 1; j <= cj + 1; j++)
+            for (int i = ci - 1; i <= ci + 1; i++)
+            {
+                int x = u.X + Math.Clamp(i, 0, u.W - 1), y = u.Y + Math.Clamp(j, 0, u.H - 1), o = (y * P + x) * 4;
+                sum += (0.3f * pages[u.Page][o] + 0.59f * pages[u.Page][o + 1] + 0.11f * pages[u.Page][o + 2]) / 255f; n++;
+            }
+        return Math.Clamp(MathF.Round(sum / n * 8) / 8, 0.125f, 1f);
+    }
+
+    static List<List<VmfFace>> SplitFaces(List<VmfFace> faces, int maxTris, float maxExtent = float.MaxValue)
     {
         var res = new List<List<VmfFace>>();
         var work = new Stack<List<VmfFace>>();
@@ -642,13 +923,29 @@ public static class VmfImporter
         {
             var f = work.Pop();
             int tris = f.Sum(x => x.Triangles), verts = f.Sum(x => x.Surface.Positions.Count);
-            if ((tris <= maxTris && verts <= 50000) || f.Count < 2) { res.Add(f); continue; }
+            var span = f.Select(x => x.GMax).Aggregate(Vector3.Max) - f.Select(x => x.GMin).Aggregate(Vector3.Min);
+            bool small = MathF.Max(span.X, MathF.Max(span.Y, span.Z)) <= maxExtent;
+            if ((tris <= maxTris && verts <= 50000 && small) || f.Count < 2) { res.Add(f); continue; }
             var mn = f.Select(x => x.Centroid).Aggregate(Vector3.Min); var mx = f.Select(x => x.Centroid).Aggregate(Vector3.Max);
             var e = mx - mn;
             var sorted = e.X >= e.Y && e.X >= e.Z ? f.OrderBy(x => x.Centroid.X) : e.Y >= e.Z ? f.OrderBy(x => x.Centroid.Y) : f.OrderBy(x => x.Centroid.Z);
             var l = sorted.ToList();
             int half = tris / 2, acc = 0, cut = 0;
             while (cut < l.Count - 1 && acc + l[cut].Triangles <= half) acc += l[cut++].Triangles;
+            if (tris <= maxTris && verts <= 50000)
+            {
+                // only too wide (scattered see-through faces): cut at the widest gap between neighbouring faces, so
+                // separate clusters (windows of different houses) become one chunk each instead of several per cluster
+                int ax = e.X >= e.Y && e.X >= e.Z ? 0 : e.Y >= e.Z ? 1 : 2;
+                float C(Vector3 v) => ax == 0 ? v.X : ax == 1 ? v.Y : v.Z;
+                float best = -1, reach = C(l[0].GMax);
+                for (int i = 1; i < l.Count; i++)
+                {
+                    float gap = C(l[i].GMin) - reach;
+                    if (gap > best) { best = gap; cut = i; }
+                    reach = MathF.Max(reach, C(l[i].GMax));
+                }
+            }
             cut = Math.Clamp(cut, 1, l.Count - 1);
             work.Push(l.GetRange(cut, l.Count - cut)); work.Push(l.GetRange(0, cut));
         }
@@ -663,6 +960,9 @@ public static class VmfImporter
     static void LayoutLightmaps(VmfPlan plan, LightBakeOptions b, float skyLuxelScale = 1f)
     {
         int P = b.PageSize;
+        // only opaque chunks are lightmapped (the see-through templates have no ambient-occlusion slot)
+        var unlit = plan.Chunks.Where(c => c.Material.Kind != MaterialKind.Opaque).ToList();
+        plan.Chunks = plan.Chunks.Where(c => c.Material.Kind == MaterialKind.Opaque).ToList();
         foreach (var f in plan.Chunks.SelectMany(c => c.Faces))
         {
             var s = f.Surface;
@@ -727,7 +1027,7 @@ public static class VmfImporter
                 result.Add(ch);
             }
         }
-        plan.Chunks = result;
+        plan.Chunks = result.Concat(unlit).ToList();
         plan.LightmapPages = pages.Count;
         plan.Luxels = plan.Chunks.SelectMany(c => c.Faces).Sum(f => f.W * f.H);
         plan.SkyLuxels = plan.Chunks.SelectMany(c => c.Faces).Where(f => f.Sky3D).Sum(f => f.W * f.H);
@@ -773,7 +1073,7 @@ public static class VmfImporter
         var nrm = new Vector3[plan.LightmapPages][];
         var used = new bool[plan.LightmapPages][];
         for (int i = 0; i < plan.LightmapPages; i++) { lin[i] = new Vector3[P * P]; nrm[i] = new Vector3[P * P]; used[i] = new bool[P * P]; }
-        var all = plan.Chunks.SelectMany(c => c.Faces).ToList();
+        var all = plan.Chunks.SelectMany(c => c.Faces).Where(f => f.Page >= 0).ToList();
         int done = 0;
         var sw = System.Diagnostics.Stopwatch.StartNew();
         Parallel.ForEach(all, new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount - 1) }, f =>
@@ -1118,6 +1418,38 @@ public static class VmfImporter
         }
     }
 
+    /// <summary>A material's texture at its output size (the user image, the game's VTF, or a generated one).</summary>
+    static (byte[] Px, int W, int H) Pixels(VmfMaterialPlan m, VmfPlan plan, VmfImportOptions o)
+    {
+        byte[] px; int w, h;
+        try
+        {
+            if (m.Image != null) (px, w, h) = ImageIO.Load(m.Image);
+            else if (m.Vtf != null && plan.Content?.Read(m.Vtf) is byte[] vtf) (px, w, h) = Vtf.Decode(vtf, m.VtfMip);
+            else throw new FileNotFoundException();
+            if (w != m.OutW || h != m.OutH) (px, w, h) = ImageIO.Resize(px, w, h, m.OutW, m.OutH);
+        }
+        catch (Exception)
+        {
+            w = h = m.OutW = m.OutH = Pow2(o.GeneratedTextureSize, 1024);
+            px = GenerateTexture(m.Colour, w, m.Material.Contains("MEASURE", StringComparison.OrdinalIgnoreCase) || m.Material.Contains("GRID", StringComparison.OrdinalIgnoreCase));
+        }
+        return (px, w, h);
+    }
+
+    /// <summary>DecalModulate draws dst * 2 * lerp(0.5, colour, alpha). As an alpha blend: alpha = the darkening, colour such
+    /// that a white surface gets the modulated colour (exact on white, close on mid tones; brightening is dropped).</summary>
+    static void ModulateToBlend(byte[] px)
+    {
+        for (int i = 0; i < px.Length; i += 4)
+        {
+            float a = px[i + 3] / 255f, r = 2 * (0.5f + (px[i] / 255f - 0.5f) * a), g = 2 * (0.5f + (px[i + 1] / 255f - 0.5f) * a), b = 2 * (0.5f + (px[i + 2] / 255f - 0.5f) * a);
+            float al = Math.Clamp(1 - (0.3f * r + 0.59f * g + 0.11f * b), 0, 1);
+            byte C(float x) => (byte)Math.Clamp((int)MathF.Round((al > 0.004f ? Math.Clamp((x - (1 - al)) / al, 0, 1) : 0) * 255), 0, 255);
+            px[i] = C(r); px[i + 1] = C(g); px[i + 2] = C(b); px[i + 3] = (byte)MathF.Round(al * 255);
+        }
+    }
+
     /// <summary>A plausible colour for a Source material name (dev textures, common surface words), else a stable
     /// pastel from the name's hash.</summary>
     public static uint ColourFor(string material)
@@ -1353,13 +1685,22 @@ public static class VmfImporter
                 catch (Exception) { }
             }
         }
-        plan.GeometryBytes = plan.RenderVertices * (long)vtx + plan.RenderTriangles * (long)BytesPerTriangle + plan.Chunks.Count * (long)(overhead + InstanceBytes);
+        // see-through chunks are clones of whole game models: their materials, shaders and draw tables stay (the other
+        // draws' vertex data is trimmed)
+        long Whole(string name, long dflt)
+        {
+            int ts = world?.Symbols.FindIndex(x => AssetIds.DisplayName(x) == name) + 1 ?? 0;
+            return ts > 0 ? world!.PartsOf(ts).Where(p => world.SectionOf(p).Name != ".gpu").Sum(p => (long)p.Data.Length) + 8192 : dflt;
+        }
+        long cut = Whole(CutoutTemplate, 160 * 1024), blend = Whole(BlendTemplate, 165 * 1024);
+        plan.GeometryBytes = plan.RenderVertices * (long)vtx + plan.RenderTriangles * (long)BytesPerTriangle + plan.Chunks.Count * (long)(overhead + InstanceBytes)
+            + plan.Chunks.Sum(c => c.Material.Kind switch { MaterialKind.Cutout => cut - overhead, MaterialKind.Blend => blend - overhead, _ => 0 });
         var skyFaces = plan.Chunks.SelectMany(c => c.Faces).Where(f => f.Sky3D).ToList();
         plan.SkyGeometryBytes = skyFaces.Sum(f => f.Surface.Positions.Count) * (long)vtx + plan.SkyTriangles * (long)BytesPerTriangle +
                                 plan.Chunks.Count(c => c.Faces.Any(f => f.Sky3D)) * (long)(overhead + InstanceBytes);
         plan.MaxTextureSize = o.MaxTextureSize; plan.LuxelSize = o.Bake.LuxelSize; plan.SkyLuxelScale = o.SkyLuxelScale; plan.SkyCollisionStep = o.SkyCollisionStep;
         plan.UnlimitedBounds = o.UnlimitedBounds;
-        plan.TextureBytes = plan.Materials.Sum(m => DxtBytes(m.OutW, m.OutH)) + 3 * 4096;
+        plan.TextureBytes = plan.Materials.Sum(m => DxtBytes(m.OutW, m.OutH) * (m.Kind == MaterialKind.Opaque ? 1 : 2)) + 3 * 4096;   // blended: DXT3 (twice DXT1); cut out: + mask
         plan.LightmapBytes = plan.LightmapPages * DxtBytes(o.Bake.PageSize, o.Bake.PageSize);
         plan.CollisionBytes = plan.CollisionTriangles * (long)CollisionBytesPerTriangle;
         plan.SkyCollisionBytes = plan.SkyCollisionTriangles * (long)CollisionBytesPerTriangle;
@@ -1398,6 +1739,8 @@ public static class VmfImporter
             FitCullingTree = true, CompactGpu = true,
         };
         sc.Templates["vmf"] = new SceneBuilder.TemplateDef { Model = Template, Colour = TemplateColour, Ao = WhiteTexture, Spec = SpecTexture, FlatNormal = FlatNormal };
+        sc.Templates["vmf_cutout"] = new SceneBuilder.TemplateDef { Model = CutoutTemplate, Colour = CutoutColour, Spec = SpecTexture, FlatNormal = FlatNormal, TrimHidden = true };
+        sc.Templates["vmf_blend"] = new SceneBuilder.TemplateDef { Model = BlendTemplate, Colour = BlendColour, Spec = SpecTexture, FlatNormal = FlatNormal, TrimHidden = true };
         void Solid(string name, byte v, int size = 64)
         {
             var px = new byte[size * size * 4];
@@ -1407,39 +1750,88 @@ public static class VmfImporter
         }
         Solid(WhiteTexture, 255); Solid(SpecTexture, 64); Solid(BlackTexture, 0);
         if (o.World == VmfImportOptions.ShowdownTown) sc.ReplaceTextures.Add(new SceneBuilder.TextureDef { Name = "aid_texture_banjox_grass_showdowntown_height*", Image = $"tex/{BlackTexture}.png" });
+        // the blend template stores half-float positions: a chunk reaching 256 units from its centre would lose precision
+        // (ModelImporter refuses it), so a material with such a face is cut out instead
+        foreach (var ch in plan.Chunks.Where(c => c.Material.Kind == MaterialKind.Blend))
+        {
+            var span = ch.Faces.Select(x => x.GMax).Aggregate(Vector3.Max) - ch.Faces.Select(x => x.GMin).Aggregate(Vector3.Min);
+            if (MathF.Max(span.X, MathF.Max(span.Y, span.Z)) > 480) { ch.Material.Kind = MaterialKind.Cutout; plan.Warnings.Add($"{ch.Material.Material}: face too large to blend, cut out instead"); }
+        }
         // material textures
         int ti = 0;
         foreach (var m in plan.Materials)
         {
             progress?.Report(($"texture {m.Texture}", 0.1 * ti++ / Math.Max(1, plan.Materials.Count)));
-            byte[] px; int w, h;
-            try
+            if (m.AtlasParts != null) continue;   // the decal atlas is composed after the light bake (its cells are lit)
+            var (px, w, h) = Pixels(m, plan, o);
+            if (m.Modulate) ModulateToBlend(px);
+            if (m.Kind != MaterialKind.Opaque && !m.Modulate && m.AtlasParts == null)
             {
-                if (m.Image != null) (px, w, h) = ImageIO.Load(m.Image);
-                else if (m.Vtf != null && plan.Content?.Read(m.Vtf) is byte[] vtf) (px, w, h) = Vtf.Decode(vtf, m.VtfMip);
-                else throw new FileNotFoundException();
-                if (w != m.OutW || h != m.OutH) (px, w, h) = ImageIO.Resize(px, w, h, m.OutW, m.OutH);
+                // translucent textures whose alpha is (nearly) only on/off are cut out (sharp edges, no sorting); the
+                // others are blended
+                int soft = 0; for (int i = 3; i < px.Length; i += 4) if (px[i] > 16 && px[i] < 240) soft++;
+                if (m.Kind == MaterialKind.Blend && soft < px.Length / 4 / 50) m.Kind = MaterialKind.Cutout;
             }
-            catch (Exception)
+            if (m.Kind == MaterialKind.Blend)
             {
-                w = h = m.OutW = m.OutH = Pow2(o.GeneratedTextureSize, 1024);
-                px = GenerateTexture(m.Colour, w, m.Material.Contains("MEASURE", StringComparison.OrdinalIgnoreCase) || m.Material.Contains("GRID", StringComparison.OrdinalIgnoreCase));
+                ImageIO.Save(Path.Combine(texDir, m.Texture + ".png"), px, w, h, keepAlpha: true);
+                sc.Textures.Add(new SceneBuilder.TextureDef { Name = m.Texture, Image = $"tex/{m.Texture}.png", Format = "DXT2_3" });
+                continue;
             }
             ImageIO.Save(Path.Combine(texDir, m.Texture + ".png"), px, w, h, keepAlpha: false);
             sc.Textures.Add(new SceneBuilder.TextureDef { Name = m.Texture, Image = $"tex/{m.Texture}.png" });
+            if (m.Kind == MaterialKind.Cutout)
+            {
+                // the cut-out mask: the template's transparency texture is read through its blue channel
+                var mask = new byte[px.Length];
+                // (the game's alpha test passes at 50 %: $alphatestreference is mapped onto that)
+                float r = Math.Clamp(m.AlphaRef, 0.01f, 0.99f) * 255;
+                for (int i = 0; i < px.Length; i += 4)
+                {
+                    float a = px[i + 3], v = a < r ? a * 127.5f / r : 127.5f + (a - r) * 127.5f / (255 - r);
+                    mask[i] = mask[i + 1] = mask[i + 2] = (byte)Math.Clamp((int)MathF.Round(v), 0, 255); mask[i + 3] = 255;
+                }
+                ImageIO.Save(Path.Combine(texDir, m.Texture + "_mask.png"), mask, w, h, keepAlpha: false);
+                sc.Textures.Add(new SceneBuilder.TextureDef { Name = m.Texture + "_mask", Image = $"tex/{m.Texture}_mask.png" });
+            }
         }
         // lightmaps
         string stem = Sanitize(plan.MapName, 12);
         bool baked = o.Bake.Enabled && plan.LightmapPages > 0;
+        List<byte[]>? lmPages = null;
         if (baked)
         {
-            var pages = BakeLightmaps(plan, o, Sub(progress, 0.1, 0.8));
+            var pages = lmPages = BakeLightmaps(plan, o, Sub(progress, 0.1, 0.8));
             for (int i = 0; i < pages.Count; i++)
             {
                 string name = $"vmf_lm_{stem}_{i:D2}";
                 ImageIO.Save(Path.Combine(texDir, name + ".png"), pages[i], o.Bake.PageSize, o.Bake.PageSize, keepAlpha: false);
                 sc.Textures.Add(new SceneBuilder.TextureDef { Name = name, Image = $"tex/{name}.png" });
             }
+        }
+        // decal atlas: cells per decal texture and baked light level (the blend material has no lightmap slot), each cell
+        // resized from its source texture and multiplied by its light, its border repeating the edge texels
+        if (plan.Materials.FirstOrDefault(m => m.AtlasParts != null) is { } atlas)
+        {
+            var decals = plan.Chunks.SelectMany(c => c.Faces).Where(f => f.Material == atlas && f.DecalSrc != null).ToList();
+            if (lmPages != null) LayoutAtlas(atlas, decals, f => DecalLight(f, lmPages, o.Bake.PageSize));
+            int w = atlas.OutW, h = atlas.OutH; var px = new byte[w * h * 4];
+            foreach (var (src, cx, cy, cw, ch, lt) in atlas.AtlasParts!)
+            {
+                var (spx, sw, sh) = Pixels(src, plan, o);
+                if (sw != cw || sh != ch) (spx, sw, sh) = ImageIO.Resize(spx, sw, sh, cw, ch);
+                if (src.Modulate) ModulateToBlend(spx);
+                if (lt < 1) for (int i = 0; i < spx.Length; i += 4) { spx[i] = (byte)(spx[i] * lt); spx[i + 1] = (byte)(spx[i + 1] * lt); spx[i + 2] = (byte)(spx[i + 2] * lt); }
+                for (int y = -4; y < ch + 4; y++)
+                    for (int x = -4; x < cw + 4; x++)
+                    {
+                        int sx = Math.Clamp(x, 0, cw - 1), sy = Math.Clamp(y, 0, ch - 1), dx = cx + x, dy = cy + y;
+                        if (dx < 0 || dy < 0 || dx >= w || dy >= h) continue;
+                        Buffer.BlockCopy(spx, (sy * cw + sx) * 4, px, (dy * w + dx) * 4, 4);
+                    }
+            }
+            ImageIO.Save(Path.Combine(texDir, atlas.Texture + ".png"), px, w, h, keepAlpha: true);
+            sc.Textures.Add(new SceneBuilder.TextureDef { Name = atlas.Texture, Image = $"tex/{atlas.Texture}.png", Format = "DXT2_3" });
         }
         // brush chunks: one model each, centred on its bounds, placed at the centre
         float s = o.Scale;
@@ -1451,7 +1843,8 @@ public static class VmfImporter
         {
             progress?.Report(($"model {ci}", 0.8 + 0.15 * ci / Math.Max(1, plan.Chunks.Count)));
             var mp = ch.Material;
-            var mesh = new ImportMesh { Name = mp.Texture, Normals = new(), UVs = new(), UVs2 = baked ? new() : null };
+            bool lit = baked && mp.Kind == MaterialKind.Opaque;
+            var mesh = new ImportMesh { Name = mp.Texture, Normals = new(), UVs = new(), UVs2 = lit ? new() : null };
             foreach (var f in ch.Faces)
             {
                 var surf = f.Surface;
@@ -1459,24 +1852,44 @@ public static class VmfImporter
                 // texture coordinates in repeats; shifted by whole repeats per face so the 16-bit UVs stay precise
                 var uv = surf.Texels.Select(t => new Vector2((float)(t.U / mp.TexW), (float)(t.V / mp.TexH))).ToList();
                 float su = MathF.Floor(uv.Min(t => t.X)), sv = MathF.Floor(uv.Min(t => t.Y));
+                // the see-through templates clamp their texture coordinates (no repeat): a face showing one whole image
+                // (decal-like: 0.9995 .. 1.9997) is shifted by the repeat of its centre, so it maps onto 0 .. 1
+                if (mp.Kind != MaterialKind.Opaque)
+                {
+                    su = MathF.Floor((uv.Min(t => t.X) + uv.Max(t => t.X)) / 2); sv = MathF.Floor((uv.Min(t => t.Y) + uv.Max(t => t.Y)) / 2);
+                }
                 for (int k = 0; k < surf.Positions.Count; k++)
                 {
                     mesh.Positions.Add(f.Sky3D ? GS(surf.Positions[k]) : G(surf.Positions[k]));
                     mesh.Normals!.Add(GN(surf.Normals[k]));
                     mesh.UVs!.Add(new Vector2(uv[k].X - su, uv[k].Y - sv));
-                    if (baked) mesh.UVs2!.Add(f.Uv2 != null ? f.Uv2[k] / o.Bake.PageSize : new Vector2(0.5f));
+                    if (lit) mesh.UVs2!.Add(f.Uv2 != null ? f.Uv2[k] / o.Bake.PageSize : new Vector2(0.5f));
                 }
                 foreach (var t in surf.Triangles) mesh.Triangles.Add(bv + t);
+                if (mp.TwoSided)
+                {
+                    // $nocull: the back side as its own vertices (normals reversed)
+                    int bb = mesh.Positions.Count;
+                    for (int k = 0; k < surf.Positions.Count; k++)
+                    {
+                        mesh.Positions.Add(mesh.Positions[bv + k]); mesh.Normals!.Add(-mesh.Normals[bv + k]); mesh.UVs!.Add(mesh.UVs[bv + k]);
+                        if (lit) mesh.UVs2!.Add(mesh.UVs2[bv + k]);
+                    }
+                    for (int t = 0; t + 2 < surf.Triangles.Count; t += 3) { mesh.Triangles.Add(bb + surf.Triangles[t]); mesh.Triangles.Add(bb + surf.Triangles[t + 2]); mesh.Triangles.Add(bb + surf.Triangles[t + 1]); }
+                }
             }
             var (cmn, cmx) = mesh.Bounds();
             var centre = (cmn + cmx) / 2;
             string name = $"vmf_{stem}_{ci:D4}";
             WriteObj(Path.Combine(meshDir, name + ".obj"), mesh, centre);
-            sc.Models.Add(new SceneBuilder.ModelDef
+            var md = new SceneBuilder.ModelDef
             {
-                Name = name, Template = "vmf", Obj = $"mesh/{name}.obj", Texture = mp.Texture, Collision = "none", Cull = 1e6f,
-                Ao = baked ? $"vmf_lm_{stem}_{ch.Page:D2}" : null,
-            });
+                Name = name, Template = mp.Kind switch { MaterialKind.Cutout => "vmf_cutout", MaterialKind.Blend => "vmf_blend", _ => "vmf" },
+                Obj = $"mesh/{name}.obj", Texture = mp.Texture, Collision = "none", Cull = 1e6f,
+                Ao = lit ? $"vmf_lm_{stem}_{ch.Page:D2}" : null,
+            };
+            if (mp.Kind == MaterialKind.Cutout) md.Retarget[CutoutMask] = mp.Texture + "_mask";
+            sc.Models.Add(md);
             sc.Instances.Add(new SceneBuilder.InstanceDef { Model = name, Pos = new[] { centre.X, centre.Y, centre.Z }, Collision = false });
             ci++;
         }
@@ -1639,7 +2052,7 @@ public static class VmfImporter
         bool sky = p.SkyTriangles > 0;
         l.Add($"  town without its scenery (baseline) {MB(p.BaselineBytes)}");
         l.Add($"  render geometry                     {MB(p.GeometryBytes)}  ({p.RenderTriangles:N0} triangles{(sky ? $"; skybox terrain {MB(p.SkyGeometryBytes).Trim()}, {p.SkyTriangles:N0} triangles" : "")})");
-        l.Add($"  collision                           {MB(p.CollisionBytes)}  ({p.CollisionTriangles:N0} triangles{(sky ? $"; skybox terrain {MB(p.SkyCollisionBytes).Trim()}, {p.SkyCollisionTriangles:N0} triangles, every {p.SkyCollisionStep}. displacement row" : "")})");
+        l.Add($"  collision                           {MB(p.CollisionBytes)}  ({p.CollisionTriangles:N0} triangles; {p.CollisionBoxed} small brushes as boxes, {p.CollisionDropped} tiny without collision{(sky ? $"; skybox terrain {MB(p.SkyCollisionBytes).Trim()}, {p.SkyCollisionTriangles:N0} triangles, every {p.SkyCollisionStep}. displacement row" : "")})");
         l.Add($"  textures                            {MB(p.TextureBytes)}  ({p.Materials.Count} materials, max {p.MaxTextureSize})");
         l.Add($"  lightmaps                           {MB(p.LightmapBytes)}  ({p.LightmapPages} page(s), {p.Luxels:N0} luxels of {p.LuxelSize:G3} units{(sky ? $"; skybox terrain {p.SkyLuxels:N0} luxels x{p.SkyLuxelScale:G3}" : "")})");
         l.Add($"  props                               {MB(p.PropBytes)}  ({p.PropInstancesPlaced} placed{(p.PropBudgetBytes > 0 && p.PropInstancesPlaced == 0 ? $"; all {p.PropInstances} would add ~{MB(p.PropBudgetBytes).Trim()}" : "")})");
@@ -1675,6 +2088,14 @@ public static class VmfImporter
     }
 
     /// <summary>Human-readable summary of a plan (CLI, plan.txt and the Studio dialog).</summary>
+    static string SeeThrough(VmfPlan p)
+    {
+        var t = p.Materials.Where(m => m.Kind != MaterialKind.Opaque).ToList();
+        if (t.Count == 0) return "see-through materials: none";
+        int cut = t.Count(m => m.Kind == MaterialKind.Cutout), two = t.Count(m => m.TwoSided);
+        return $"see-through materials: {t.Count} ({cut} cut out, {t.Count - cut} blended{(two > 0 ? $", {two} two-sided" : "")}) in {p.Chunks.Count(c => c.Material.Kind != MaterialKind.Opaque)} chunk(s); not lightmapped, no light blocking";
+    }
+
     public static List<string> Describe(VmfPlan p)
     {
         var l = new List<string>
@@ -1682,8 +2103,9 @@ public static class VmfImporter
             $"map {p.MapName}: {p.Brushes} brushes ({p.BrushEntities} brush entities), {p.Faces} drawn faces, {p.Displacements} displacements",
             $"render: {p.RenderTriangles:N0} triangles, {p.RenderVertices:N0} vertices, {p.Materials.Count(m => !m.Material.StartsWith("prop:"))} materials in {p.Chunks.Count} model chunk(s)",
             $"collision: {p.CollisionTriangles:N0} triangles; light blockers: {p.OccluderTriangles:N0}; water: {p.WaterTriangles} triangles",
+            SeeThrough(p),
             $"bounds (game units): {p.Min.X:F1},{p.Min.Y:F1},{p.Min.Z:F1} .. {p.Max.X:F1},{p.Max.Y:F1},{p.Max.Z:F1}",
-            p.ContentSource != null ? $"game content: {p.ContentSource}; {p.ContentFound} materials found, {p.ContentMissing} missing; {p.Materials.Count(m => m.Vtf != null)} textures from the game, {p.Materials.Count(m => m.Image != null)} from images, {p.Materials.Count(m => m.Vtf == null && m.Image == null)} generated" : "game content: none (generated colours / material folder)",
+            p.ContentSource != null ? $"game content: {p.ContentSource}; {p.ContentFound} materials found, {p.ContentMissing} missing; {p.Materials.Count(m => m.Vtf != null)} textures from the game, {p.Materials.Count(m => m.Image != null)} from images, {p.Materials.Count(m => m.Vtf == null && m.Image == null && m.AtlasParts == null)} generated" : "game content: none (generated colours / material folder)",
             p.Skybox3D == null ? "3D skybox: none" : p.SkyPorted > 0 || p.SkySkippedReplica > 0
                 ? $"3D skybox: {p.Skybox3D}; {p.SkyPorted} brushes ported ({p.SkyTriangles:N0} triangles, {p.SkyCollisionTriangles:N0} collision), {p.SkySkippedReplica} skipped as the replica under the map, {p.SkyLights.Count} skybox lights"
                 : $"3D skybox: {p.Skybox3D}; {p.SkyboxBrushes} brushes and {p.SkyboxEntities} entities dropped",

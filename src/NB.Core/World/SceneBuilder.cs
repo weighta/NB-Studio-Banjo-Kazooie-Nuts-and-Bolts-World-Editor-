@@ -94,8 +94,17 @@ public static class SceneBuilder
         public string? Ao { get; set; }
         public string? Spec { get; set; }
         public string? FlatNormal { get; set; }
+        /// <summary>Drop the template's other geometry from each clone (vertex buffers without a mesh shrink to one vertex):
+        /// for big templates used for one material.</summary>
+        public bool TrimHidden { get; set; }
     }
-    public sealed class TextureDef { public string Name { get; set; } = ""; public string Image { get; set; } = ""; public int[]? Size { get; set; } }
+    public sealed class TextureDef
+    {
+        public string Name { get; set; } = ""; public string Image { get; set; } = ""; public int[]? Size { get; set; }
+        /// <summary>Xenos format name (XenosFormat: DXT1 default, DXT2_3 keeps the image's alpha); a texture of that format
+        /// with a mip chain must exist in the bundle as the template.</summary>
+        public string? Format { get; set; }
+    }
     public sealed class ModelDef
     {
         public string Name { get; set; } = "";
@@ -108,6 +117,8 @@ public static class SceneBuilder
         /// <summary>This model's ambient-occlusion texture (e.g. a baked lightmap page; sampled with the second UV set),
         /// instead of the template's neutral AO.</summary>
         public string? Ao { get; set; }
+        /// <summary>More texture retargets of this model (template texture stem -> texture), e.g. an alpha mask.</summary>
+        public Dictionary<string, string> Retarget { get; set; } = new();
     }
     public sealed class TerrainDef
     {
@@ -185,7 +196,8 @@ public static class SceneBuilder
             {
                 var (rgba, iw, ih) = ImageIO.Load(P(t.Image));
                 int w = t.Size?[0] ?? iw, h = t.Size?[1] ?? ih;
-                TextureFactory.Create(caff, Tex(t.Name), rgba, iw, ih, w, h);
+                var fmt = t.Format != null ? Enum.Parse<XenosFormat>(t.Format, true) : XenosFormat.DXT1;
+                TextureFactory.Create(caff, Tex(t.Name), rgba, iw, ih, w, h, fmt);
                 rep.Textures++;
             }
             catch (Exception e) { rep.Errors.Add($"texture {t.Name}: {e.Message}"); }
@@ -225,9 +237,10 @@ public static class SceneBuilder
                 {
                     Template = td.Model, Name = m.Name, Meshes = ObjReader.ReadAny(P(m.Obj)), SingleMaterial = Tex(m.Texture),
                     NeutralAo = m.Ao != null ? Tex(m.Ao) : td.Ao != null ? Tex(td.Ao) : null, Specular = td.Spec != null ? Tex(td.Spec) : null, FlatNormal = td.FlatNormal,
-                    CullDistance = m.Cull,
+                    CullDistance = m.Cull, TrimHidden = td.TrimHidden,
                 };
                 o.Retarget[td.Colour] = Tex(m.Texture);
+                foreach (var (from, to) in m.Retarget) o.Retarget[from] = Tex(to);
                 if (m.Collision.StartsWith("mesh:")) { o.Collision = "mesh"; o.CollisionMeshes = ObjReader.ReadAny(P(m.Collision[5..])); }
                 else o.Collision = m.Collision;
                 var r = ModelFactory.Create(caff, o);

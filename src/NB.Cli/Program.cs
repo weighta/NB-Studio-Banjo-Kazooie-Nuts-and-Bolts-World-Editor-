@@ -917,6 +917,7 @@ static class Program
                     //          --keep-garage  --keep-town-objects  --tex-size n  --gen-size n  --chunk n  --assumed-size n
                     //          --game <Source game / Garry's Mod folder>  --skybox port|drop|inplace  --skybox-replica  --sky-luxel x
                     //          --sky-collision-step n  --sky-walls (keep sky shell brushes as invisible walls)
+                    //          --no-transparency (translucent / alpha-tested materials not drawn)
                     //          bake: --no-bake --luxel u --exposure x --gamma g --bounce b --sky-samples n --page n --game-ambient a --game-sun s
                     bool import = args[0] == "vmf-import";
                     string vmf = import ? args[2] : args[1];
@@ -955,6 +956,11 @@ static class Program
                             case "--sky-collision-step": o.SkyCollisionStep = int.Parse(args[++i]); break;
                             case "--sky-walls": o.KeepSkyBrushes = true; break;
                             case "--player-clips": o.PlayerClipCollision = true; break;
+                            case "--no-transparency": o.TransparentMaterials = false; break;   // translucent / alpha-tested materials not drawn (before round 4)
+                            case "--collision-full": o.CollisionTolerance = 0; o.CollisionMinSize = 0; o.CollisionBoxSize = -1; break;   // every brush triangle collides (A/B tests)
+                            case "--collision-tolerance": o.CollisionTolerance = Fl(args[++i]); break;
+                            case "--collision-min-size": o.CollisionMinSize = Fl(args[++i]); break;
+                            case "--collision-box-size": o.CollisionBoxSize = Fl(args[++i]); break;
                             case "--no-bake": o.Bake.Enabled = false; break;
                             case "--luxel": o.Bake.LuxelSize = Fl(args[++i]); break;
                             case "--exposure": o.Bake.Exposure = Fl(args[++i]); break;
@@ -990,7 +996,7 @@ static class Program
                         }
                         foreach (var l in NB.Core.SourceEngine.VmfImporter.Describe(plan)) Console.WriteLine(l);
                         Console.WriteLine("materials:");
-                        foreach (var m in plan.Materials) Console.WriteLine($"  {m.Material,-48} {m.Triangles,7} tris  -> {m.Texture} {m.OutW}x{m.OutH} {m.Source}");
+                        foreach (var m in plan.Materials) Console.WriteLine($"  {m.Material,-48} {m.Triangles,7} tris  -> {m.Texture} {m.OutW}x{m.OutH} {m.Source}{(m.Kind != NB.Core.SourceEngine.MaterialKind.Opaque ? $"  [{m.Kind.ToString().ToLowerInvariant()}{(m.TwoSided ? ", two-sided" : "")}]" : "")}");
                         var notDrawn = plan.MaterialUses.Where(kv => !kv.Value.Draw).ToList();
                         if (notDrawn.Count > 0) Console.WriteLine("not drawn: " + string.Join(", ", notDrawn.Select(kv => $"{kv.Key} ({kv.Value.Why}{(kv.Value.Collide ? ", collides" : "")})")));
                         if (plan.Props.Count > 0) Console.WriteLine("props:");

@@ -347,7 +347,9 @@ public sealed class VmtInfo
 {
     public string Shader = "";
     public string? BaseTexture, BaseTexture2;
-    public bool Translucent, Additive, AlphaTest, Decal, NoDraw;
+    public bool Translucent, Additive, AlphaTest, Decal, NoDraw, NoCull;
+    /// <summary>$alphatestreference (0..1, Source default 0.5).</summary>
+    public float AlphaTestReference = 0.5f;
     public string? SurfaceProp;
     public readonly Dictionary<string, string> Keys = new(StringComparer.OrdinalIgnoreCase);
 
@@ -383,6 +385,8 @@ public sealed class VmtInfo
         v.BaseTexture2 = K("$basetexture2") ?? v.BaseTexture2;
         v.Translucent = B("$translucent"); v.Additive = B("$additive"); v.AlphaTest = B("$alphatest");
         v.Decal = B("$decal"); v.NoDraw = B("%compilenodraw") || B("$no_draw"); v.SurfaceProp = K("$surfaceprop");
+        v.NoCull = B("$nocull");
+        if (K("$alphatestreference") is string atr && float.TryParse(atr, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float ar)) v.AlphaTestReference = ar;
         if (B("%compilewater") || B("%compilesky") || B("%compile2dsky")) { if (B("%compilewater")) v.Keys["$bottommaterial"] = K("$bottommaterial") ?? ""; else v.Shader = "sky"; }
         return v;
     }
