@@ -237,6 +237,16 @@ public sealed partial class SceneViewport
                 log($"script: {GrassInfo} (after {sw.ElapsedMilliseconds} ms); last frame drew {_r.GrassTilesDrawn} grass tiles");
                 return true;
             }
+            case "--collision-all":
+            {
+                // --collision-all on|off: the collision toggle next to the view-mode bar; waits for the decoding
+                ShowCollision = next() == "on";
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                while (ShowCollision && !CollisionReady && sw.ElapsedMilliseconds < 180000) { Application.DoEvents(); await Task.Delay(100); }
+                for (int i = 0; i < 400 && ShowCollision; i++) { Render(); Application.DoEvents(); }   // line batches are built a few per frame
+                var bsw = System.Diagnostics.Stopwatch.StartNew(); Render(); _gl.MakeCurrent(); OpenTK.Graphics.OpenGL4.GL.Finish();
+                log($"script: collision of all objects {(ShowCollision ? "on" : "off")}: {CollisionSummary}; last frame drew {_collObjectsDrawn} objects in {bsw.Elapsed.TotalMilliseconds:F0} ms (after {sw.ElapsedMilliseconds} ms)"); return true;
+            }
             case "--sel-collision":
             {
                 ShowSelectionCollision = next() == "on"; Render();

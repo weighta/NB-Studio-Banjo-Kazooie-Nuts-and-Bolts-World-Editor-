@@ -128,7 +128,10 @@ public sealed class UndoHistory
     public void PushTransform(SceneObject o, Matrix4x4 before, Matrix4x4 after, string? label = null)
     {
         if (before == after) return;
-        string what = label ?? (before.Translation != after.Translation && Scale(before) == Scale(after) ? "Move" : Scale(before) != Scale(after) ? "Scale" : "Rotate");
+        // scale compared with a tolerance: a rotation changes the rows' lengths in the last digits (it was named "Scale")
+        bool scaled = Vector3.Distance(Scale(before), Scale(after)) > 1e-4f * MathF.Max(1, Scale(before).Length());
+        bool turned = !scaled && !Same3x3(before, after);
+        string what = label ?? (scaled ? "Scale" : turned && before.Translation != after.Translation ? "Move and rotate" : turned ? "Rotate" : "Move");
         Push(new TransformStep { Obj = o, Key = KeyOf(o), Before = before, After = after, Label = $"{what} {o.Name}" });
     }
 
@@ -136,6 +139,12 @@ public sealed class UndoHistory
     {
         if (before == after) return;
         Push(new LinkStep { Obj = o, Key = KeyOf(o), Before = before, After = after, Label = $"Path link of {o.Name}" });
+    }
+
+    static bool Same3x3(Matrix4x4 a, Matrix4x4 b)
+    {
+        var d = new[] { a.M11 - b.M11, a.M12 - b.M12, a.M13 - b.M13, a.M21 - b.M21, a.M22 - b.M22, a.M23 - b.M23, a.M31 - b.M31, a.M32 - b.M32, a.M33 - b.M33 };
+        return d.All(x => MathF.Abs(x) < 1e-5f);
     }
 
     static Vector3 Scale(Matrix4x4 m) => new(new Vector3(m.M11, m.M12, m.M13).Length(), new Vector3(m.M21, m.M22, m.M23).Length(), new Vector3(m.M31, m.M32, m.M33).Length());

@@ -40,6 +40,9 @@ public sealed class MainForm : Form
     readonly TabControl _right = new() { Dock = DockStyle.Fill };
     readonly ContextMenuStrip _objMenu = new();
     ToolStripMenuItem? _viewCollision, _viewSelColl;
+    ToolStripButton _undoBtn = null!, _redoBtn = null!;
+    /// <summary>Where the 3D view's context menu was opened (its Paste puts the copy there).</summary>
+    Point? _menuPoint;
 
     void SetSelectionCollision(bool on)
     {
@@ -135,16 +138,23 @@ public sealed class MainForm : Form
         _view.TextureSource = n => _scene?.LoadTexture(n);
         _view.EditStarted += (o, before) => _pendingBefore = before;
         _view.ObjectEdited += o => PushUndo(o, _pendingBefore, o.Transform);
-        _view.ContextMenuRequested += (o, p) => { if (o != null) { BuildObjectMenu(o); _objMenu.Show(_view, p); } };
+        _view.ContextMenuRequested += (o, p) => { if (o != null) { _menuPoint = p; BuildObjectMenu(o); _objMenu.Show(_view, p); } };
         _transform.TransformChanged += (o, before) => { PushUndo(o, before, o.Transform); _view.Refresh3D(); UpdateTitle(); };
         _transform.LinkChanged += (o, before) => { _history.PushLink(o, before, o.Marker!.Link); _view.Refresh3D(); UpdateTitle(); Log($"{o.Name}: next path node {before} -> {o.Marker!.Link} (World > Save to write it)"); };
         _history.Limit = _settings.UndoSteps;
         _history.Log = Log;
+        _history.Changed += UpdateUndoUi;
+        _view.CollisionInfo += s => Log("Collision: " + s);
         _view.SScales = _settings.SScales;
-        FormClosed += (_, _) => _history.Detach();
+        FormClosed += (_, _) =>
+        {
+            _history.Detach();
+            // a test game still being started: give its controller back (the virtual pad would otherwise stay plugged in)
+            if (_qtBoot is { IsCompleted: false }) { _qtCts?.Cancel(); try { using var pad = new QuickTest.VirtualPad(_qtPort); pad.Unplug(); } catch (Exception) { } }
+        };
         _tree.AfterSelect += (_, e) => { if (!_syncingTree && e.Node?.Tag is SceneObject o) _view.Select(o, focus: true); };
         _tree.AfterCheck += (_, e) => { if (e.Node?.Tag is SceneObject o) { o.Visible = e.Node.Checked; _view.Refresh3D(); } else if (e.Action != TreeViewAction.Unknown && e.Node != null) foreach (TreeNode c in e.Node.Nodes) c.Checked = e.Node.Checked; };
-        _tree.NodeMouseClick += (_, e) => { if (e.Button == MouseButtons.Right && e.Node.Tag is SceneObject o) { _tree.SelectedNode = e.Node; BuildObjectMenu(o); _objMenu.Show(_tree, e.Location); } };
+        _tree.NodeMouseClick += (_, e) => { if (e.Button == MouseButtons.Right && e.Node.Tag is SceneObject o) { _menuPoint = null; _tree.SelectedNode = e.Node; BuildObjectMenu(o); _objMenu.Show(_tree, e.Location); } };
         _treeSearch.TextChanged += (_, _) => FillTree();
         _assets.AssetActivated += e => { _center.SelectedIndex = 1; _preview.Show(_ws!, e, Log); _tags.ShowAsset(_ws!, e); };
         _preview.Log = Log;
@@ -248,12 +258,12 @@ public sealed class MainForm : Form
                 () => Scr(_leftTabs), () => _leftTabs.SelectedIndex = 0));
             steps.Add(new("The 3D view",
                 "Your world, in 3D.\n• Look around: hold the right mouse button and move the mouse.\n• Fly: W A S D, Q and E for down and up, Shift to go faster. Tip: hold the right mouse button while you fly, then S always flies backwards (otherwise, with something selected, S scales it).\n" +
-                "• The buttons in the top-right corner switch the view: Wireframe, Solid, Textured, or Rendered (lit like the game).\n" +
+                "• The buttons in the top-right corner switch the view: Wireframe, Solid, Textured, or Rendered (lit like the game). Collision shows what Banjo and the vehicles bump into.\n" +
                 "• Select: left-click an object.\n• Move it: press G and move the mouse, then click to drop it. Press X, Y or Z while moving to slide along one direction only.\n" +
                 "• Scale it: press S (with X, Y or Z for one direction).\n• Made a mistake? Ctrl+Z undoes it.",
                 () => Scr(_center), () => _center.SelectedIndex = 0));
             steps.Add(new("The toolbar",
-                "Quick buttons for the tools: Select, Move, Rotate and Scale.\n\nSave World (Ctrl+S) writes your changes into the workspace. Launch in Xenia (F5) starts your modded game so you can play it.",
+                "Quick buttons for the tools: Select, Move, Rotate and Scale.\n\nUndo / Redo (Ctrl+Z / Ctrl+Y) take back any change. Save World (Ctrl+S) writes your changes into the workspace. Test in Xenia (F5) starts your modded game right in the world you have open, so you can try it at once.",
                 () => Scr(_toolbar)));
             steps.Add(new("Scene",
                 "A list of everything in the open world: buildings, trees, pickups, characters, AI paths and more. Click a name to jump to it in 3D. Untick a box to hide that object while you work. The search box finds things by name.",
@@ -345,17 +355,29 @@ public sealed class MainForm : Form
         file.DropDownItems.Add("E&xit", null, (_, _) => Close());
 
         var edit = new ToolStripMenuItem("&Edit");
-        var undoItem = new ToolStripMenuItem("&Undo", null, async (_, _) => await Undo(), Keys.Control | Keys.Z);
-        var redoItem = new ToolStripMenuItem("&Redo", null, async (_, _) => await Redo(), Keys.Control | Keys.Y);
-        edit.DropDownItems.Add(undoItem);
-        edit.DropDownItems.Add(redoItem);
+        // the keys (Ctrl+Z, Ctrl+Y, Ctrl+C, Ctrl+X, Ctrl+V, Del) are handled in ProcessCmdKey, so that text boxes keep theirs
+        var undoItem = new ToolStripMenuItem("&Undo", null, async (_, _) => await Undo()) { ShortcutKeyDisplayString = "Ctrl+Z" };
+        var redoItem = new ToolStripMenuItem("&Redo", null, async (_, _) => await Redo()) { ShortcutKeyDisplayString = "Ctrl+Y" };
+        var histItem = new ToolStripMenuItem("(no changes yet)") { Enabled = false };
+        var cutItem = new ToolStripMenuItem("Cu&t Object", null, async (_, _) => await CutSelection()) { ShortcutKeyDisplayString = "Ctrl+X" };
+        var copyItem = new ToolStripMenuItem("&Copy Object", null, (_, _) => CopySelection()) { ShortcutKeyDisplayString = "Ctrl+C" };
+        var pasteItem = new ToolStripMenuItem("&Paste Object", null, async (_, _) => await PasteClipboard()) { ShortcutKeyDisplayString = "Ctrl+V",
+            ToolTipText = "Pastes a copy where the mouse points in the 3D view (on the ground or an object), keeping its rotation and size. From this menu: at the centre of the view." };
+        var delItem = new ToolStripMenuItem("&Delete Object", null, async (_, _) => await DeleteSelection()) { ShortcutKeyDisplayString = "Del" };
+        edit.DropDownItems.AddRange(new ToolStripItem[] { undoItem, redoItem, histItem, new ToolStripSeparator(), cutItem, copyItem, pasteItem, delItem, new ToolStripSeparator() });
         edit.DropDownOpening += (_, _) =>
         {
             undoItem.Text = _history.UndoLabel is { } u ? "&Undo " + MenuText(u) : "&Undo";
             redoItem.Text = _history.RedoLabel is { } r ? "&Redo " + MenuText(r) : "&Redo";
             undoItem.Enabled = _history.CanUndo; redoItem.Enabled = _history.CanRedo;
+            histItem.Text = _history.Count == 0 ? "(no changes to undo yet)" : $"{_history.Count} step(s) can be undone (File > Settings: up to {_history.Limit})";
+            var sel = _view.Selected;
+            bool can = sel?.Kind == SceneObjectKind.Scenery && sel.Instance != null;
+            cutItem.Enabled = copyItem.Enabled = delItem.Enabled = can;
+            pasteItem.Enabled = _clip.Count > 0 && _scene != null;
+            pasteItem.Text = _clip.Count > 0 ? "&Paste " + MenuText(_clip[0].Name) : "&Paste Object";
         };
-        edit.DropDownClosed += (_, _) => { undoItem.Enabled = redoItem.Enabled = true; };   // the shortcuts stay live
+        edit.DropDownClosed += (_, _) => { foreach (ToolStripItem i in edit.DropDownItems) if (i != histItem) i.Enabled = true; };
         edit.DropDownItems.Add(new ToolStripMenuItem("Undo Last &Bundle Save (import / duplicate / delete)", null, async (_, _) => await UndoLastBundleSave()));
         edit.DropDownItems.Add(new ToolStripSeparator());
         edit.DropDownItems.Add(new ToolStripMenuItem("Reset Selected Transform", null, (_, _) => { if (_view.Selected is { } o) ResetTransform(o); }));
@@ -382,8 +404,10 @@ public sealed class MainForm : Form
         }
         _view.ViewModeChanged += m => { foreach (ToolStripMenuItem mi in vMode.DropDownItems) mi.Checked = (ViewMode)mi.Tag! == m; };
         var vM = new ToolStripMenuItem("Markers (actors, pickups, paths)") { Checked = true, CheckOnClick = true }; vM.CheckedChanged += (_, _) => { _view.ShowMarkers = vM.Checked; _view.Refresh3D(); };
-        var vC = new ToolStripMenuItem("Collision (Havok)") { CheckOnClick = true, ToolTipText = "Wireframe of the Havok collision: terrain cyan, scenery yellow" };
-        vC.CheckedChanged += (_, _) => { _ = ToggleCollision(vC.Checked); };
+        var vC = new ToolStripMenuItem("Collision of All Objects (Havok)") { CheckOnClick = true,
+            ToolTipText = "Wireframe of the Havok collision of everything in the world: terrain cyan, scenery yellow, objects placed by markers green (also the Collision button next to the view-mode bar)." };
+        vC.CheckedChanged += (_, _) => { if (_view.ShowCollision != vC.Checked) _view.ShowCollision = vC.Checked; };
+        _view.ShowCollisionChanged += on => { if (vC.Checked != on) vC.Checked = on; };
         _viewCollision = vC;
         var vP = new ToolStripMenuItem("Paths (path-node links)") { Checked = true, CheckOnClick = true };
         vP.CheckedChanged += (_, _) => { _view.ShowPaths = vP.Checked; _view.Refresh3D(); };
@@ -413,7 +437,11 @@ public sealed class MainForm : Form
         build.DropDownItems.Add("Roll Back Patches in a Game Directory…", null, (_, _) => RollbackPatch());
         build.DropDownItems.Add("Show Patch History of a Game Directory…", null, (_, _) => ShowPatchHistory());
         build.DropDownItems.Add(new ToolStripSeparator());
-        build.DropDownItems.Add(new ToolStripMenuItem("&Launch Workspace in Xenia", null, (_, _) => LaunchXenia(), Keys.F5));
+        build.DropDownItems.Add(new ToolStripMenuItem("&Test in Xenia: Play the Open World", null, async (_, _) => await QuickTestXenia(false), Keys.F5)
+            { ToolTipText = "Starts the world (or Act) open in the 3D view in Xenia, skipping the title screen, the menus and the intro. Your workspace and your saves are not changed (a linked test copy and its own save are used)." });
+        build.DropDownItems.Add(new ToolStripMenuItem("Test in Xenia from the 3D-View &Camera", null, async (_, _) => await QuickTestXenia(true), Keys.Shift | Keys.F5)
+            { ToolTipText = "Like F5, then moves Banjo (or his vehicle) to the ground below the 3D view's camera." });
+        build.DropDownItems.Add(new ToolStripMenuItem("&Launch Workspace in Xenia (title screen)", null, (_, _) => LaunchXenia(), Keys.Control | Keys.F5));
         build.DropDownItems.Add("Set Xenia Executable…", null, (_, _) => PickXenia());
 
         var tools = new ToolStripMenuItem("&Tools");
@@ -487,7 +515,7 @@ public sealed class MainForm : Form
         };
         var help = new ToolStripMenuItem("&Help");
         help.DropDownItems.Add("Controls", null, (_, _) => MessageBox.Show(this,
-            "3D view:\n  Right-drag: look    WASD / Q E or the arrow keys: fly (Shift = fast; with a selection S scales it, except while you fly: right button held or W A D Q E just used; File > Settings)\n  Wheel: dolly    Middle-drag: pan    Left-click: select    F: focus selection    Esc: deselect\n  View modes: the bar in the top-right corner (Wire, Solid, Texture, Render) or Shift+Z. Render uses the level's light setup (click the light line to switch).\n\nTransforms (Blender style), with an object selected:\n  G move on the camera plane, R rotate, S scale; then X / Y / Z constrain to that world axis (drawn as a line in the axis colour;\n  press again for the object's own axis, again for free). Type a value (e.g. G Z 5 Enter); Ctrl snaps.\n  Left click / Enter confirms (one undo step), right click / Esc cancels.\n  1 / 2 / 3: move / rotate / scale gizmo; drag the selection with the left button (ground plane), or drag an axis handle\n  (or hold X, Y or Z) to constrain to that axis.\n  Right-click an object for its context menu.\n\nEdits are held in memory until World > Save (Ctrl+S) writes the bundle into the workspace.\nCtrl+Z / Ctrl+Y undo and redo any change, including imports, duplicates, deletes and saved tag or atmosphere edits (File > Settings: number of steps).", "Controls"));
+            "3D view:\n  Right-drag: look    WASD / Q E or the arrow keys: fly (Shift = fast; with a selection S scales it, except while you fly: right button held or W A D Q E just used; File > Settings)\n  Wheel: dolly    Middle-drag: pan    Left-click: select    F: focus selection    Esc: deselect\n  View modes: the bar in the top-right corner (Wire, Solid, Texture, Render) or Shift+Z. Render uses the level's light setup (click the light line to switch).\n\nTransforms (Blender style), with an object selected:\n  G move on the camera plane, R rotate, S scale; then X / Y / Z constrain to that world axis (drawn as a line in the axis colour;\n  press again for the object's own axis, again for free). Type a value (e.g. G Z 5 Enter); Ctrl snaps.\n  Left click / Enter confirms (one undo step), right click / Esc cancels.\n  1 / 2 / 3: move / rotate / scale gizmo; drag the selection with the left button (ground plane), or drag an axis handle\n  (or hold X, Y or Z) to constrain to that axis.\n  Right-click an object for its context menu.\n\nEdits are held in memory until World > Save (Ctrl+S) writes the bundle into the workspace.\nCtrl+Z / Ctrl+Y undo and redo any change, including imports, duplicates, deletes and saved tag or atmosphere edits (File > Settings: number of steps).\nCtrl+C / Ctrl+X copy / cut the selected object, Ctrl+V pastes a copy where the mouse points, Del deletes it (all undoable).\nF5 plays the open world in Xenia (no title screen or menus), Shift+F5 starts at the 3D view's camera, Ctrl+F5 starts at the title screen.", "Controls"));
         help.DropDownItems.Add("Take the Tour (for beginners)", null, (_, _) => StartTour());
         help.DropDownItems.Add("File Format Notes (docs)", null, (_, _) => OpenDocs());
         ms.Items.AddRange(new ToolStripItem[] { file, edit, world, view, build, tools, mods, help });
@@ -497,6 +525,9 @@ public sealed class MainForm : Form
     ToolStrip BuildToolbar()
     {
         var ts = new ToolStrip { GripStyle = ToolStripGripStyle.Hidden };
+        _undoBtn = new ToolStripButton("Undo", null, async (_, _) => await Undo()) { Enabled = false, ToolTipText = "Undo (Ctrl+Z)" };
+        _redoBtn = new ToolStripButton("Redo", null, async (_, _) => await Redo()) { Enabled = false, ToolTipText = "Redo (Ctrl+Y)" };
+        ts.Items.Add(_undoBtn); ts.Items.Add(_redoBtn); ts.Items.Add(new ToolStripSeparator());
         ToolStripButton Mode(string t, GizmoMode m) { var b = new ToolStripButton(t) { CheckOnClick = true, Checked = m == _view.Mode }; b.Click += (_, _) => { _view.Mode = m; foreach (var i in ts.Items.OfType<ToolStripButton>().Where(x => x.Tag as string == "mode")) i.Checked = i == b; }; b.Tag = "mode"; return b; }
         ts.Items.Add(Mode("Select", GizmoMode.Select));
         ts.Items.Add(Mode("Move (1)", GizmoMode.Move));
@@ -504,7 +535,7 @@ public sealed class MainForm : Form
         ts.Items.Add(Mode("Scale (3)", GizmoMode.Scale));
         ts.Items.Add(new ToolStripSeparator());
         ts.Items.Add(new ToolStripButton("Save World (Ctrl+S)", null, (_, _) => SaveWorld()));
-        ts.Items.Add(new ToolStripButton("Launch in Xenia (F5)", null, (_, _) => LaunchXenia()));
+        ts.Items.Add(new ToolStripButton("Test in Xenia (F5)", null, async (_, _) => await QuickTestXenia(false)) { ToolTipText = "Play the open world in Xenia: no title screen, menus or intro (Shift+F5: start at the 3D view's camera; Ctrl+F5: title screen)" });
         return ts;
     }
 
@@ -542,9 +573,14 @@ public sealed class MainForm : Form
         var dup = _objMenu.Items.Add("Duplicate", null, async (_, _) => await DuplicateObject(o, new Vector3(2, 0, 0)));
         dup.Enabled = o.Kind == SceneObjectKind.Scenery;
         dup.ToolTipText = "Adds a new scenery instance (copy of this one, 2 units along X). Verified in Xenia.";
-        var del = _objMenu.Items.Add("Delete", null, async (_, _) => await DeleteObject(o));
+        var cp = new ToolStripMenuItem("Copy", null, (_, _) => { _view.Select(o); CopySelection(); }) { ShortcutKeyDisplayString = "Ctrl+C", Enabled = o.Kind == SceneObjectKind.Scenery };
+        var cu = new ToolStripMenuItem("Cut", null, async (_, _) => { _view.Select(o); await CutSelection(); }) { ShortcutKeyDisplayString = "Ctrl+X", Enabled = o.Kind == SceneObjectKind.Scenery };
+        var pa = new ToolStripMenuItem(_clip.Count > 0 ? "Paste " + MenuText(_clip[0].Name) + " Here" : "Paste", null, async (_, _) => await PasteClipboard(_menuPoint)) { ShortcutKeyDisplayString = "Ctrl+V", Enabled = _clip.Count > 0 };
+        _objMenu.Items.Add(cp); _objMenu.Items.Add(cu); _objMenu.Items.Add(pa);
+        var del = new ToolStripMenuItem("Delete", null, async (_, _) => await DeleteObject(o, confirm: false)) { ShortcutKeyDisplayString = "Del" };
+        _objMenu.Items.Add(del);
         del.Enabled = o.Kind == SceneObjectKind.Scenery;
-        del.ToolTipText = "Removes the instance from the playable world (zero scale, moved far below the level). Instance indices are kept because the game refers to them.";
+        del.ToolTipText = "Removes the instance from the playable world (zero scale, moved far below the level). Instance indices are kept because the game refers to them. Ctrl+Z brings it back.";
     }
 
     // ------------------------------------------------------------------ workspace
@@ -927,60 +963,194 @@ public sealed class MainForm : Form
         catch (Exception e) { Error("Rollback failed", e); }
     }
 
-    async Task ToggleCollision(bool on)
+    /// <summary>The collision of all objects (View menu, the Collision button of the 3D view): decoded in the background
+    /// by the view.</summary>
+    Task ToggleCollision(bool on)
     {
         _view.ShowCollision = on;
-        if (on && _scene != null && _scene.CollisionByModel == null)
-        {
-            var scene = _scene;
-            _busy = true; SetProgress("Decoding Havok collision…", 0.3);
-            try
-            {
-                var (models, tris, notes) = await Task.Run(() => scene.LoadCollision());
-                Log($"Collision: {tris:N0} triangles for {models} model(s) (terrain + scenery).");
-                foreach (var n in notes.Distinct().Take(10)) Log("  " + n);
-            }
-            catch (Exception e) { Error("Collision decoding failed", e); }
-            finally { _busy = false; SetProgress(null, 0); }
-        }
         _view.Refresh3D();
+        return Task.CompletedTask;
     }
 
-    bool CanEditInstances()
+    /// <summary>Duplicate / paste / delete write the world bundle and reload the world (one undo step each). Unsaved
+    /// transform edits of other objects are kept: the reload carries them over, like an undo does.</summary>
+    bool CanAddOrRemove(SceneObject? o, string what)
     {
         if (_ws == null || _scene == null || _sceneEntry == null) return false;
-        if (_scene.Objects.Any(x => x.Dirty)) { MessageBox.Show(this, "Save or undo the transform edits in this world first (File > Save World).", Text); return false; }
+        if (_busy || _undoing) { Log($"{what}: NB Studio is busy (loading or saving), try again in a moment."); return false; }
+        if (o != null && (o.Kind != SceneObjectKind.Scenery || o.Instance == null))
+        {
+            Log($"{what}: {o.Name} is {(o.Kind == SceneObjectKind.Terrain ? "the terrain" : "a marker (actor, pickup, path node…)")}; only scenery objects can be {(what == "Delete" ? "deleted" : "copied")} so far.");
+            return false;
+        }
         return true;
     }
 
     async Task DuplicateObject(SceneObject o, Vector3 offset, bool confirm = true)
     {
-        if (!CanEditInstances() || o.Instance == null) return;
-        try
-        {
-            var world = o.Transform; world.Translation += offset;
-            int ni = NB.Core.World.InstanceEditor.Duplicate(_scene!.Caff, _scene.Background.View.Symbol, o.Instance.Index, world);
-            _ws!.SaveResident(_scene.Bundle, _scene.Caff, $"duplicated {o.Name} as instance {ni} at {world.Translation}");
-            Log($"Duplicated {o.Name} → instance {ni} at {world.Translation}. Reloading world…");
-            await OpenWorld(_sceneEntry!, _sceneAct);
-            var copy = _scene!.Objects.FirstOrDefault(x => x.Instance?.Index == ni);
-            if (copy != null) { _view.Select(copy); _view.Focus(copy); }
-        }
-        catch (Exception e) { Error("Duplicate failed", e); }
+        var world = o.Transform; world.Translation += offset;
+        await AddCopy(o.Instance?.Index ?? -1, o, world, "duplicated");
     }
 
-    async Task DeleteObject(SceneObject o, bool confirm = true)
+    /// <summary>Adds a copy of scenery instance <paramref name="src"/> with the world matrix <paramref name="world"/>, saves
+    /// the world bundle (an undo step) and reloads the world; the copy is selected. Returns it.</summary>
+    async Task<SceneObject?> AddCopy(int src, SceneObject? srcObj, Matrix4x4 world, string verb, string? name = null)
     {
-        if (!CanEditInstances() || o.Instance == null) return;
-        if (confirm && MessageBox.Show(this, $"Delete {o.Name} from the world?\n\nIt is hidden (zero scale, moved far below the level) rather than removed from the tables, because the game refers to scenery by index. Edit > Undo Last Bundle Save restores it.", Text, MessageBoxButtons.OKCancel) != DialogResult.OK) return;
+        name ??= srcObj?.Name ?? "instance " + src;
+        if (!CanAddOrRemove(srcObj, "Paste") || src < 0) return null;
         try
         {
-            NB.Core.World.InstanceEditor.Hide(_scene!.Caff, _scene.Background.View.Symbol, o.Instance.Index);
-            _ws!.SaveResident(_scene.Bundle, _scene.Caff, $"deleted {o.Name} (hidden)");
-            Log($"Deleted {o.Name} (instance {o.Instance.Index} hidden). Reloading world…");
+            int ni = NB.Core.World.InstanceEditor.Duplicate(_scene!.Caff, _scene.Background.View.Symbol, src, world);
+            _ws!.SaveResident(_scene.Bundle, _scene.Caff, $"{verb} {name} as instance {ni} at {Fmt(world.Translation)}");
+            Log($"{Cap(verb)} {name} → instance {ni} at {Fmt(world.Translation)} (Ctrl+Z removes it). Reloading world…");
+            await OpenWorld(_sceneEntry!, _sceneAct);
+            var copy = _scene!.Objects.FirstOrDefault(x => x.Instance?.Index == ni);
+            if (copy != null) _view.Select(copy);
+            return copy;
+        }
+        catch (Exception e) { Error(Cap(verb) + " failed", e); return null; }
+    }
+
+    static string Cap(string s) => s.Length == 0 ? s : char.ToUpperInvariant(s[0]) + s[1..];
+    static string Fmt(Vector3 v) => string.Create(System.Globalization.CultureInfo.InvariantCulture, $"({v.X:0.##}, {v.Y:0.##}, {v.Z:0.##})");
+
+    async Task DeleteObject(SceneObject o, bool confirm = true, string verb = "Deleted")
+    {
+        if (!CanAddOrRemove(o, "Delete")) return;
+        if (confirm && MessageBox.Show(this, $"Delete {o.Name} from the world?\n\nIt is hidden (zero scale, moved far below the level) rather than removed from the tables, because the game refers to scenery by index. Ctrl+Z brings it back.", Text, MessageBoxButtons.OKCancel) != DialogResult.OK) return;
+        try
+        {
+            NB.Core.World.InstanceEditor.Hide(_scene!.Caff, _scene.Background.View.Symbol, o.Instance!.Index);
+            o.Transform = o.OriginalTransform;   // an unsaved move of the deleted object is not carried over the reload
+            _ws!.SaveResident(_scene.Bundle, _scene.Caff, $"{verb.ToLowerInvariant()} {o.Name} (hidden)");
+            _view.Select(null);
+            Log($"{verb} {o.Name} (instance {o.Instance.Index} hidden; Ctrl+Z brings it back). Reloading world…");
             await OpenWorld(_sceneEntry!, _sceneAct);
         }
         catch (Exception e) { Error("Delete failed", e); }
+    }
+
+    // ------------------------------------------------------------------ copy / cut / paste
+
+    /// <summary>A copied object: the scenery instance it was copied from (in its world bundle), its transform and box then.</summary>
+    sealed record ClipItem(uint Bundle, int Instance, string Name, string ModelName, Matrix4x4 Transform, Vector3 BoundsMin, Vector3 BoundsMax);
+    readonly List<ClipItem> _clip = new();
+
+    bool CopySelection()
+    {
+        var o = _view.Selected;
+        if (o == null || _scene == null) { Log("Copy: select an object first (click it in the 3D view)."); return false; }
+        if (!CanAddOrRemove(o, "Copy")) return false;
+        _clip.Clear();
+        _clip.Add(new ClipItem(_scene.Bundle, o.Instance!.Index, o.Name, o.ModelName, o.Transform, o.BoundsMin, o.BoundsMax));
+        Log($"Copied {o.Name}. Ctrl+V pastes a copy where the mouse points in the 3D view (again for more copies).");
+        return true;
+    }
+
+    async Task CutSelection()
+    {
+        var o = _view.Selected;
+        if (o == null) { Log("Cut: select an object first."); return; }
+        if (CopySelection()) await DeleteObject(o, confirm: false, verb: "Cut");
+    }
+
+    async Task DeleteSelection()
+    {
+        var o = _view.Selected;
+        if (o == null) { Log("Delete: select an object first."); return; }
+        await DeleteObject(o, confirm: false);
+    }
+
+    /// <summary>Ctrl+V: a copy of the copied object on the surface under the mouse (or <paramref name="at"/>, a 3D-view
+    /// pixel; with the mouse outside the view: under the view's centre), rotation and scale kept; in front of the camera
+    /// when the ray hits nothing.</summary>
+    async Task<SceneObject?> PasteClipboard(Point? at = null)
+    {
+        if (_clip.Count == 0) { Log("Paste: nothing copied yet (select an object and press Ctrl+C)."); return null; }
+        if (_scene == null || _sceneEntry == null) return null;
+        var c = _clip[0];
+        if (c.Bundle != _scene.Bundle) { Log($"Paste: {c.Name} was copied in another world ({c.Bundle:x6}); it can only be pasted into that world."); return null; }
+        if (!CanAddOrRemove(null, "Paste")) return null;
+        float size = (c.BoundsMax - c.BoundsMin).Length();
+        var (p, hit, mouse) = _view.SurfaceAt(at, Math.Clamp(size * 2, 10, 200));
+        var world = SceneViewport.PlaceOn(c.Transform, c.BoundsMin, c.BoundsMax, p);
+        Log($"Paste {c.Name} " + (hit != null ? $"on {hit.Name}{(mouse || at != null ? " under the mouse" : " at the centre of the view")}" : "in front of the camera (nothing under the mouse)"));
+        return await AddCopy(c.Instance, null, world, "pasted", c.Name);
+    }
+
+    // ------------------------------------------------------------------ edit keys
+
+    [System.Runtime.InteropServices.DllImport("user32")] static extern IntPtr GetFocus();
+
+    /// <summary>The control with the keyboard focus (also the edit box inside a NumericUpDown, a property grid or a
+    /// data grid cell), or null.</summary>
+    static Control? FocusedControl() { var h = GetFocus(); return h == IntPtr.Zero ? null : Control.FromHandle(h) ?? Control.FromChildHandle(h); }
+
+    /// <summary>Text is being edited there: an editable text box, or the text part of an editable combo box.</summary>
+    static bool IsTextEntry(Control? c) => c is TextBoxBase { ReadOnly: false, Enabled: true } || c is ComboBox { DropDownStyle: not ComboBoxStyle.DropDownList };
+
+    /// <summary>Copy / cut / paste / Del act on 3D objects only while the 3D view is shown and the focus is in the view,
+    /// the Scene or Worlds list, the Properties panel or the toolbar (not in the Text, Audio, Tag Editor … pages).</summary>
+    bool SceneKeysActive(Control? f)
+    {
+        if (_scene == null || _start.Visible || _center.SelectedIndex != 0) return false;
+        if (f == null || f == this) return true;
+        for (var c = f; c != null; c = c.Parent)
+            if (c == _view || c == _tree || c == _worlds || c == _transform || c == _toolbar || c == _menu) return true;
+        return false;
+    }
+
+    protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+    {
+        if ((msg.Msg == 0x100 || msg.Msg == 0x104) && HandleEditKey(keyData)) return true;
+        return base.ProcessCmdKey(ref msg, keyData);
+    }
+
+    /// <summary>
+    /// Ctrl+Z / Ctrl+Y (also Ctrl+Shift+Z) undo and redo the editor's history wherever the focus is, except while text is
+    /// being typed in a box (then the box undoes its own typing). Ctrl+C / Ctrl+X / Ctrl+V / Del copy, cut, paste and delete
+    /// the selected object; in a text box they keep their normal meaning.
+    /// </summary>
+    bool HandleEditKey(Keys k)
+    {
+        var f = FocusedControl();
+        bool typing = IsTextEntry(f);
+        var tb = f as TextBoxBase;
+        switch (k)
+        {
+            case Keys.Control | Keys.Z:
+                // the box's own undo only for typing not yet committed (a box that was just clicked, or whose value was
+                // applied, gives Ctrl+Z to the scene: that was the "undo does nothing" after typing a position in 1.6–1.7)
+                if (typing && tb != null && tb.Modified && tb.CanUndo) return false;
+                _ = Undo(); return true;
+            case Keys.Control | Keys.Y:
+            case Keys.Control | Keys.Shift | Keys.Z:
+                if (typing && tb != null && tb.Modified) return false;
+                _ = Redo(); return true;
+            case Keys.Control | Keys.C:
+                if (typing || (tb != null && tb.SelectionLength > 0) || !SceneKeysActive(f)) return false;   // e.g. copying log text
+                CopySelection(); return true;
+            case Keys.Control | Keys.X:
+                if (typing || !SceneKeysActive(f)) return false;
+                _ = CutSelection(); return true;
+            case Keys.Control | Keys.V:
+                if (typing || !SceneKeysActive(f)) return false;
+                _ = PasteClipboard(); return true;
+            case Keys.Delete:
+                if (typing || !SceneKeysActive(f)) return false;
+                if (_view.Transforming) return false;
+                _ = DeleteSelection(); return true;
+        }
+        return false;
+    }
+
+    void UpdateUndoUi()
+    {
+        if (InvokeRequired) { BeginInvoke(UpdateUndoUi); return; }
+        if (_undoBtn == null) return;
+        _undoBtn.Enabled = _history.CanUndo; _redoBtn.Enabled = _history.CanRedo;
+        _undoBtn.ToolTipText = _history.UndoLabel is { } u ? $"Undo {u} (Ctrl+Z)" : "Nothing to undo (Ctrl+Z)";
+        _redoBtn.ToolTipText = _history.RedoLabel is { } r ? $"Redo {r} (Ctrl+Y)" : "Nothing to redo (Ctrl+Y)";
     }
 
     async Task UndoLastBundleSave()
@@ -1412,14 +1582,6 @@ public sealed class MainForm : Form
         RefreshNode(o);
     }
 
-    /// <summary>A text box with the keyboard focus gets Ctrl+Z / Ctrl+Y for its own text.</summary>
-    TextBoxBase? FocusedTextBox()
-    {
-        Control? c = ActiveControl;
-        while (c is ContainerControl cc && cc.ActiveControl != null) c = cc.ActiveControl;
-        return c as TextBoxBase;
-    }
-
     bool _undoing;
 
     async Task Undo() => await UndoRedo(undo: true);
@@ -1427,9 +1589,8 @@ public sealed class MainForm : Form
 
     async Task UndoRedo(bool undo)
     {
-        if (FocusedTextBox() is { } tb) { if (undo) tb.Undo(); return; }
-        _view.CancelTransform();   // a G / R / S transform in progress is cancelled, not undone
-        if (_busy || _undoing) return;
+        if (_view.Transforming) { _view.CancelTransform(); Log("Transform cancelled."); return; }   // a G / R / S in progress is cancelled, not undone
+        if (_busy || _undoing) { Log((undo ? "Undo" : "Redo") + ": NB Studio is busy (loading or saving), try again in a moment."); return; }
         _undoing = true;
         try
         {
@@ -1686,6 +1847,152 @@ public sealed class MainForm : Form
         Log($"Launched {Path.GetFileName(exe)} with {_ws.Game.Xex}");
     }
 
+    // ------------------------------------------------------------------ F5: test the open world in Xenia
+
+    Process? _qtProcess;
+    CancellationTokenSource? _qtCts;
+    Task<string>? _qtBoot;
+    int _qtPort;
+    byte[]? _qtProbe; string? _qtProbeXex;
+
+    /// <summary>The script the test game starts in: the open Act, Showdown Town, or the first Act that loads the open world.</summary>
+    QuickTest.Target QuickTarget()
+    {
+        var w = _sceneEntry; var act = _sceneAct;
+        if (w == null) return new(QuickTest.TownScript, "Showdown Town", false, "no world is open: starting in Showdown Town");
+        if (act != null) return new(act.Script, act.Display, true);
+        if (w.World == "showdowntown") return new(QuickTest.TownScript, "Showdown Town", false);
+        var a = _acts.Where(x => x.WorldBundle == w.Bundle).OrderBy(x => x.Act, StringComparer.Ordinal).FirstOrDefault();
+        if (a != null) return new(a.Script, a.Display, true, $"the game enters {w.Display} through its Acts: starting {a.Display}");
+        var b = _acts.Where(x => x.World == w.World).OrderBy(x => x.Act, StringComparer.Ordinal).FirstOrDefault();
+        if (b != null) return new(b.Script, b.Display, true, $"NOTE: this copy of {w.Display} [{w.Bundle:x6}] is not loaded by any Act; {b.Display} loads [{b.WorldBundle:x6}], so changes made in this copy will not show");
+        return new(QuickTest.TownScript, "Showdown Town", false, $"{w.Display} can't be started on its own: starting in Showdown Town");
+    }
+
+    /// <summary>
+    /// F5 / Shift+F5: plays the open world in Xenia without the title screen, the menus and the intro (see
+    /// <see cref="QuickTest"/>); the workspace and the user's saves are not changed. Shift+F5 then moves Banjo to the
+    /// ground under the 3D view's camera.
+    /// </summary>
+    async Task QuickTestXenia(bool fromCamera)
+    {
+        if (_ws == null) { Log("Test in Xenia: open a workspace first."); return; }
+        if (_busy) { Log("Test in Xenia: NB Studio is busy, try again in a moment."); return; }
+        var t = QuickTarget();
+        if (_scene != null && _scene.Objects.Any(o => o.Dirty))
+        {
+            var ans = _scripted ? DialogResult.Yes : MessageBox.Show(this, "The open world has unsaved changes. Save them first, so the test shows them?\n\nYes: save and test   No: test the last saved state", "Test in Xenia", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+            if (ans == DialogResult.Cancel) return;
+            if (ans == DialogResult.Yes) SaveWorld();
+        }
+        if (_atmos.HasUnsaved) Log("Note: unsaved Atmosphere changes are not in the test (Atmosphere > Save to Workspace first).");
+        if (_qtProcess is { HasExited: false } old)
+        {
+            if (!_scripted && MessageBox.Show(this, "The test game NB Studio started is still running. Close it and start the new test?", "Test in Xenia", MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK) return;
+            _qtCts?.Cancel();
+            try { old.Kill(); old.WaitForExit(8000); } catch (Exception) { }
+        }
+        _qtBoot = null;
+        var fork = QuickTest.FindForkXenia(_settings.XeniaPath);
+        var exe = fork ?? _settings.XeniaPath;
+        if (exe == null || !File.Exists(exe)) { PickXenia(); exe = _settings.XeniaPath; }
+        if (exe == null || !File.Exists(exe)) return;
+        bool isFork = QuickTest.IsFork(exe);
+        Vector3? spawn = null;
+        if (fromCamera)
+        {
+            if (!isFork) Log("Test from camera needs NB's Xenia (NB Multiplayer's xenia_canary_netplay.exe); starting at the world's spawn.");
+            else if (_scene == null) Log("Test from camera: open a world first.");
+            else spawn = _view.GroundBelow(_view.CameraPosition) ?? _view.CameraPosition;
+        }
+        var ws = _ws;
+        Log($"Test in Xenia: {t.Display}{(t.Note.Length > 0 ? " (" + t.Note + ")" : "")}{(spawn is { } sp ? $", Banjo at the 3D view's camera spot {Fmt(sp)}" : "")}…");
+        string xex;
+        _busy = true; SetProgress("Preparing the test copy…", 0.05);
+        var sw = Stopwatch.StartNew();
+        try { xex = await Task.Run(() => QuickTest.Prepare(ws, t, s => Log(s), (s, p) => SetProgress(s, p))); }
+        catch (Exception e) { Error("Preparing the test failed", e); return; }
+        finally { _busy = false; SetProgress(null, 0); }
+        Log($"  test copy ready in {sw.Elapsed.TotalSeconds:F1} s: {Path.GetDirectoryName(xex)}");
+        string dir = QuickTest.Folder(ws);
+        var psi = new ProcessStartInfo(exe) { WorkingDirectory = Path.GetDirectoryName(exe)!, UseShellExecute = false };
+        int port = 0;
+        try
+        {
+            if (isFork)
+            {
+                // own storage (config, profile, an empty save: SINGLE PLAYER starts a new game; NB Multiplayer's and the user's saves are not touched)
+                string storage = Path.Combine(dir, "xenia");
+                Directory.CreateDirectory(storage);
+                // the player's own Xenia settings (controls, keyboard, graphics) from NB Multiplayer, if it is installed there
+                if (QuickTest.UserConfig(exe) is { } cfg)
+                {
+                    File.Copy(cfg, Path.Combine(storage, Path.GetFileName(cfg)), true);
+                    Log($"  Xenia settings (controls, graphics) from {cfg}");
+                }
+                QuickTest.ClearSaves(Path.Combine(storage, "content"));
+                WriteExeModsFor(storage);
+                port = _qtPort = QuickTest.FreeUdpPort();
+                foreach (var a in new[] { $"--storage_root={storage}", $"--content_root={Path.Combine(storage, "content")}", $"--log_file={Path.Combine(storage, "xenia.log")}", "--network_mode=0",
+                                          $"--nb_remote_input_port={port}", "--nb_create_profile=NBStudio", "--readback_resolve=fast" }) psi.ArgumentList.Add(a);
+            }
+            else
+            {
+                // any other Xenia: its own settings, but a separate content folder (an empty save, the user's saves untouched)
+                string content = Path.Combine(dir, "content");
+                Directory.CreateDirectory(content);
+                QuickTest.ClearSaves(content);
+                ApplyExeMods(askForXenia: true);
+                psi.ArgumentList.Add($"--content_root={content}");
+            }
+            foreach (var a in (Environment.GetEnvironmentVariable("NB_STUDIO_XENIA_EXTRA") ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries)) psi.ArgumentList.Add(a);
+            psi.ArgumentList.Add(xex);
+            _qtProcess = Process.Start(psi);
+        }
+        catch (Exception e) { Error("Could not start Xenia", e); return; }
+        if (_qtProcess == null) return;
+        Log($"  started {Path.GetFileName(exe)} (pid {_qtProcess.Id}).");
+        if (!isFork)
+        {
+            Log("  This Xenia has no virtual gamepad: press A on the title screen and on SINGLE PLAYER; the new game starts right in " + t.Display + ". " +
+                "The test uses its own save folder (" + Path.Combine(dir, "content") + "), so the first time Xenia asks you to create a profile there. " +
+                "NB Multiplayer's Xenia (installed with NB Multiplayer) does all of this by itself.");
+            return;
+        }
+        Log("  NB Studio presses through the title screen and menus for you (virtual gamepad); hands off the controller for a few seconds.");
+        try
+        {
+            if (_qtProbeXex != ws.Game.Xex || _qtProbe == null)
+            {
+                var img = XexFile.Read(File.ReadAllBytes(ws.Game.Xex)).GetImage();
+                _qtProbe = img.AsSpan((int)(NB.Core.Live.XeniaLive.TextStart - 0x82000000), 64).ToArray(); _qtProbeXex = ws.Game.Xex;
+            }
+        }
+        catch (Exception e) { Log("  could not read default.xex for the automatic start: " + e.Message); return; }
+        _qtCts = new CancellationTokenSource();
+        var proc = _qtProcess; var probe = _qtProbe; var ct = _qtCts.Token;
+        _qtBoot = Task.Run(() => QuickTest.AutoBoot(proc, port, probe, t, spawn, s => Log("  " + s), ct));
+        var res = await _qtBoot;
+        Log($"Test in Xenia: {t.Display}: {res}");
+    }
+
+    /// <summary>The workspace's executable mods as a Xenia patch file in <paramref name="storage"/>\patches (NB's Xenia reads
+    /// patches from its storage folder).</summary>
+    void WriteExeModsFor(string storage)
+    {
+        if (_ws == null) return;
+        try
+        {
+            var xb = File.ReadAllBytes(_ws.Game.Xex); var xex = XexFile.Read(xb); var img = xex.GetImage();
+            var enabled = NB.Core.Mods.ExePatches.ResolveAll(_ws.Manifest.ExeMods).Where(m => NB.Core.Mods.ExePatches.Check(img, xex.ImageBase, m).Count == 0).ToList();
+            var hash = NB.Core.Mods.ExePatches.ResolveXeniaHash(NB.Core.Mods.ExePatches.XeniaModuleHash(xb, img), storage);
+            if (hash == null) { if (enabled.Count > 0) Log("  executable mods: unknown default.xex (no module hash yet); they apply from the second test on."); return; }
+            NB.Core.Mods.ExePatches.WriteXeniaPatchFile(storage, hash.Value, enabled);
+            if (enabled.Count > 0) Log($"  executable mods in the test: {string.Join(", ", enabled.Select(m => m.Name))}");
+        }
+        catch (Exception e) { Log("  executable mods not applied: " + e.Message); }
+    }
+
     void PickXenia()
     {
         using var d = new OpenFileDialog { Filter = "Xenia|xenia*.exe|Executables|*.exe", Title = "Select xenia_canary.exe or xenia.exe" };
@@ -1780,7 +2087,8 @@ public sealed class MainForm : Form
                     case "--select":
                     {
                         var q = Next();
-                        var o = _scene!.Objects.First(x => x.Name.Contains(q, StringComparison.OrdinalIgnoreCase));
+                        var o = _scene!.Objects.FirstOrDefault(x => x.Name.Contains(q, StringComparison.OrdinalIgnoreCase))
+                             ?? _scene.Objects.First(x => x.ModelName.Contains(q, StringComparison.OrdinalIgnoreCase));   // or by model name
                         _view.Select(o); L($"script: selected {o.Name} at {o.Transform.Translation}"); break;
                     }
                     case "--move":
@@ -1979,11 +2287,33 @@ public sealed class MainForm : Form
                         L($"script: texture {item.Stem} replaced with {file}{(mo ? " (model only)" : "")}; model now uses {now}"); break;
                     }
                     case "--texlib-close": _texLib?.Close(); break;
+                    case "--copy": L($"script: copy {(CopySelection() ? "ok: " + _clip[0].Name : "refused")}"); break;
+                    case "--cut": { var n = _view.Selected?.Name; await CutSelection(); L($"script: cut {n}; selected {_view.Selected?.Name ?? "-"}; clipboard {(_clip.Count > 0 ? _clip[0].Name : "-")}"); break; }
+                    case "--del": { var n = _view.Selected?.Name; await DeleteSelection(); L($"script: delete {n}; selected {_view.Selected?.Name ?? "-"}"); break; }
+                    case "--paste":
+                    {
+                        // --paste X,Y (3D-view pixel) or --paste - (mouse / view centre)
+                        var v = Next(); Point? at = v == "-" ? null : new Point(int.Parse(v.Split(',')[0]), int.Parse(v.Split(',')[1]));
+                        var o = await PasteClipboard(at);
+                        L($"script: paste -> {(o == null ? "nothing" : $"{o.Name} (instance {o.Instance?.Index}) at {Fmt(o.Transform.Translation)}")}; history {_history.Count}: {_history.UndoLabel}"); break;
+                    }
+                    case "--quicktest": { bool cam = i + 1 < a.Count && a[i + 1] == "camera"; if (cam) i++; await QuickTestXenia(cam); L($"script: quick test finished: pid {_qtProcess?.Id}"); break; }
+                    case "--quicktest-launch":
+                    {
+                        // starts the test and returns at once (the automatic start runs on; --quicktest-wait waits for it)
+                        bool cam = i + 1 < a.Count && a[i + 1] == "camera"; if (cam) i++;
+                        _ = QuickTestXenia(cam);
+                        for (int k = 0; k < 600 && _qtBoot == null; k++) await Task.Delay(100);
+                        L($"script: quick test started: pid {_qtProcess?.Id}"); break;
+                    }
+                    case "--quicktest-wait": { if (_qtBoot != null) L("script: quick test: " + await _qtBoot); break; }
+                    case "--quicktest-pid": { var f = Next(); File.WriteAllText(f, _qtProcess?.Id.ToString() ?? ""); L($"script: quick test pid {_qtProcess?.Id} -> {f}"); break; }
                     case "--import-collision":
                     case "--import-collision-box":
                     {
                         bool bx = a[i] == "--import-collision-box"; var obj = Next();
                         await ImportCollision(_view.Selected!, obj, confirm: false, box: bx);
+                        _scene?.LoadCollision();
                         var sel = _view.Selected;
                         var cm = sel != null && _scene?.CollisionByModel != null && _scene.CollisionByModel.TryGetValue(sel.ModelName, out var ml) ? ml : null;
                         L($"script: imported collision {obj}{(bx ? " (box)" : "")}; overlay for {sel?.ModelName}: " +

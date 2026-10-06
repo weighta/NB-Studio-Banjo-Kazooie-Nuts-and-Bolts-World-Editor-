@@ -61,8 +61,128 @@ public sealed partial class SceneViewport : UserControl
         SceneObjectKind.Scenery => ShowScenery && ((keepSelected && o == Selected) || !IsHidden(o)),
         _ => _showObjects,
     };
-    /// <summary>Draw Havok collision wireframes (terrain: cyan, scenery: yellow). The scene's collision must be loaded.</summary>
-    public bool ShowCollision;
+    /// <summary>
+    /// Collision of every object (the toggle next to the view-mode bar, View > Collision): the Havok collision of the terrain,
+    /// of every scenery object with its nested models and of the objects placed by markers (props, buildings such as
+    /// L.O.G.'s palace), as wireframes: terrain cyan, scenery yellow, marker objects green. It is decoded in the background
+    /// the first time (<see cref="Scene"/>'s CollisionOf, cached per model); line batches are built a few per frame and
+    /// only objects inside the view (and within their game draw distance) are drawn, at most <see cref="CollisionBudget"/>
+    /// objects per frame, nearest first.
+    /// </summary>
+    public bool ShowCollision
+    {
+        get => _showColl;
+        set
+        {
+            if (_showColl == value) return;
+            _showColl = value;
+            if (value) StartCollisionDecode();
+            ShowCollisionChanged?.Invoke(value);
+            _gl.Invalidate();
+        }
+    }
+    bool _showColl;
+    public event Action<bool>? ShowCollisionChanged;
+    /// <summary>Progress / result of decoding the scene's collision (for the log).</summary>
+    public event Action<string>? CollisionInfo;
+    /// <summary>Most objects whose collision is drawn in one frame.</summary>
+    public int CollisionBudget = 2500;
+    /// <summary>Per object: its collision shapes (Havok asset, meshes in model space, placement in the object). Null while decoding.</summary>
+    Dictionary<SceneObject, List<(string Asset, List<NB.Core.Havok.CollisionMesh> Meshes, Matrix4x4 Local)>>? _allColl;
+    Task? _collTask; WorldScene? _collFor;
+    public bool CollisionReady => _allColl != null;
+    public string CollisionSummary { get; private set; } = "";
+    int _collObjectsDrawn;
+
+    void StartCollisionDecode()
+    {
+        var scene = Scene;
+        if (scene == null || _collFor == scene) return;
+        _collFor = scene; _allColl = null;
+        _collTask = Task.Run(() =>
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var res = new Dictionary<SceneObject, List<(string, List<NB.Core.Havok.CollisionMesh>, Matrix4x4)>>();
+            long tris = 0; int shapes = 0;
+            foreach (var o in scene.Objects)
+            {
+                if (o.Model == null) continue;
+                List<(string Asset, List<NB.Core.Havok.CollisionMesh> Meshes, Matrix4x4 Local)> parts;
+                lock (scene) parts = scene.CollisionOf(o);   // the selection overlay decodes on the UI thread too
+                parts.RemoveAll(p => p.Meshes.Count == 0);
+                if (parts.Count == 0) continue;
+                res[o] = parts;
+                shapes += parts.Count; tris += parts.Sum(p => p.Meshes.Sum(m => m.Triangles.Count / 3L));
+            }
+            return (res, $"collision of {res.Count:N0} objects ({shapes:N0} shapes, {tris:N0} triangles) decoded in {sw.Elapsed.TotalSeconds:F1} s");
+        }).ContinueWith(t =>
+        {
+            if (t.IsFaulted) { BeginInvoke(() => CollisionInfo?.Invoke("collision decoding failed: " + t.Exception?.GetBaseException().Message)); return; }
+            BeginInvoke(() =>
+            {
+                if (Scene != scene) return;
+                _allColl = t.Result.res;
+                CollisionSummary = t.Result.Item2;
+                CollisionInfo?.Invoke(CollisionSummary);
+                _barOv.Key = ""; _gl.Invalidate();
+            });
+        });
+    }
+
+    static Vector3 CollisionColour(SceneObjectKind k) => k switch
+    {
+        SceneObjectKind.Terrain => new(0.1f, 0.95f, 1f),
+        SceneObjectKind.Scenery => new(1f, 0.9f, 0.15f),
+        _ => new(0.35f, 1f, 0.45f),
+    };
+
+    void DrawAllCollision(Matrix4x4 vp, Renderer.Frustum fr)
+    {
+        if (_allColl == null) { if (_collFor != Scene) StartCollisionDecode(); return; }
+        var fwd = Forward();
+        var list = new List<(SceneObject O, float D)>();
+        foreach (var (o, _) in _allColl)
+        {
+            if (!o.Visible || (o.Kind == SceneObjectKind.Scenery && IsHidden(o) && o != Selected)) continue;
+            if (o.Kind != SceneObjectKind.Terrain && !NoCull)
+            {
+                var (wc, wr) = WorldBounds(o);
+                if (!fr.Visible(wc, wr) || BeyondCullDistance(o, wc)) continue;
+                list.Add((o, Vector3.Dot(wc - _camPos, fwd)));
+            }
+            else list.Add((o, -1));
+        }
+        list.Sort((a, b) => a.D.CompareTo(b.D));
+        int built = 0, drawn = 0;
+        foreach (var (o, _) in list)
+        {
+            if (drawn >= CollisionBudget) break;
+            foreach (var (asset, meshes, local) in _allColl[o])
+            {
+                string key = (int)o.Kind + "|" + asset;
+                if (!_collision.TryGetValue(key, out var batch))
+                {
+                    if (built >= 24) { _gl.Invalidate(); continue; }   // a few new batches per frame: no stall when switching on
+                    var segs = new List<(Vector3, Vector3)>(); var seen = new HashSet<(int, int, int)>();
+                    for (int mi = 0; mi < meshes.Count; mi++)
+                    {
+                        var m = meshes[mi];
+                        for (int t = 0; t + 2 < m.Triangles.Count; t += 3)
+                            for (int e = 0; e < 3; e++)
+                            {
+                                int a = m.Triangles[t + e], b = m.Triangles[t + (e + 1) % 3];
+                                if (a < m.Positions.Count && b < m.Positions.Count && seen.Add((mi, Math.Min(a, b), Math.Max(a, b)))) segs.Add((m.Positions[a], m.Positions[b]));
+                            }
+                    }
+                    batch = _r.CreateLineBatch(segs, CollisionColour(o.Kind));
+                    _collision[key] = batch; built++;
+                }
+                _r.DrawLineBatch(batch, local * o.Transform * vp);
+            }
+            drawn++;
+        }
+        _collObjectsDrawn = drawn;
+    }
     /// <summary>Draw path-node links (marker type 22: record +8 = next node index).</summary>
     public bool ShowPaths = true;
     /// <summary>Debug: draw everything (no frustum / size culling), to compare against the culled frame.</summary>
@@ -83,7 +203,8 @@ public sealed partial class SceneViewport : UserControl
         {
             if (_selCollBatch != null) _r.DeleteLineBatch(_selCollBatch);
             _selCollBatch = null; _selCollFor = Selected;
-            var parts = Scene.CollisionOf(Selected);
+            List<(string Asset, List<NB.Core.Havok.CollisionMesh> Meshes, Matrix4x4 Local)> parts;
+            lock (Scene) parts = Scene.CollisionOf(Selected);   // the all-objects overlay decodes in the background
             var segs = new List<(Vector3, Vector3)>();
             int tris = 0;
             foreach (var (_, meshes, local) in parts)
@@ -141,7 +262,10 @@ public sealed partial class SceneViewport : UserControl
         _gl.MouseLeave += (_, _) => { if (_hoverBar != -1 || _hoverHandle != -1) { _hoverBar = -1; _hoverHandle = -1; _gl.Invalidate(); } };
         _gl.KeyDown += (_, e) => { bool fresh = _keys.Add(e.KeyCode); OnKey(e, fresh); };
         _gl.KeyUp += (_, e) => { _keys.Remove(e.KeyCode); if (e.KeyCode == Keys.S) _sFlies = false; if (_xf != XfKind.None && _xfDrag) UpdateTransform(); };
-        _gl.PreviewKeyDown += (_, e) => e.IsInputKey = true;
+        // the view takes plain keys (arrows, Esc, Enter, letters, digits) itself. Keys with Ctrl / Alt, the F keys and Del are
+        // NOT input keys: an input key skips the form's ProcessCmdKey, so with the 3D view focused Ctrl+Z / Ctrl+Y / Ctrl+S /
+        // F5 / Del (the menu and edit shortcuts) did nothing (NB Studio 1.6–1.7: "undo doesn't work" after clicking the view)
+        _gl.PreviewKeyDown += (_, e) => e.IsInputKey = !e.Control && !e.Alt && e.KeyCode is not (>= Keys.F1 and <= Keys.F24) and not Keys.Delete and not Keys.Apps;
         _gl.LostFocus += (_, _) => _keys.Clear();
         _timer.Tick += (_, _) => Tick();
         _timer.Start();
@@ -340,6 +464,8 @@ public sealed partial class SceneViewport : UserControl
         if (_ready && _staticLines != null) _r.DeleteLineBatch(_staticLines);
         _staticLines = null; _linesVersion++;
         Scene = scene; Selected = null;
+        _allColl = null; _collFor = null; CollisionSummary = "";
+        if (_showColl && scene != null) StartCollisionDecode();
         _lights = null; _skies.Clear(); _sky = null; _r.Lighting = new SceneLighting();
         _water = null; _r.MaterialOverrides.Clear();
         ResetGrass();
@@ -501,30 +627,7 @@ public sealed partial class SceneViewport : UserControl
             DrawGrassLayers(NoCull ? null : fr);
             _r.FlushTransparent();
             GL.PolygonMode(MaterialFace.FrontAndBack, PolygonMode.Fill);
-            if (ShowCollision && Scene.CollisionByModel != null)
-            {
-                foreach (var o in Scene.Objects)
-                {
-                    if (!o.Visible || o.Model == null || !Scene.CollisionByModel.TryGetValue(o.ModelName, out var meshes)) continue;
-                    if (!_collision.TryGetValue(o.ModelName, out var batch))
-                    {
-                        var segs = new List<(Vector3, Vector3)>(); var seen = new HashSet<(int, int, int)>();
-                        for (int mi = 0; mi < meshes.Count; mi++)
-                        {
-                            var m = meshes[mi];
-                            for (int t = 0; t + 2 < m.Triangles.Count; t += 3)
-                                for (int e = 0; e < 3; e++)
-                                {
-                                    int a = m.Triangles[t + e], b = m.Triangles[t + (e + 1) % 3];
-                                    if (seen.Add((mi, Math.Min(a, b), Math.Max(a, b)))) segs.Add((m.Positions[a], m.Positions[b]));
-                                }
-                        }
-                        batch = _r.CreateLineBatch(segs, o.Kind == SceneObjectKind.Terrain ? new Vector3(0.1f, 0.95f, 1f) : new Vector3(1f, 0.9f, 0.15f));
-                        _collision[o.ModelName] = batch;
-                    }
-                    _r.DrawLineBatch(batch, o.Transform * vp);
-                }
-            }
+            if (ShowCollision) DrawAllCollision(vp, fr);
             var key = (_linesVersion, ShowMarkers, ShowPaths);
             if (_staticLines == null || _staticKey != key)
             {
@@ -732,19 +835,30 @@ public sealed partial class SceneViewport : UserControl
 
     readonly Renderer.Overlay _barOv = new(), _hudOv = new();
     static readonly string[] ModeLabels = { "Wire", "Solid", "Texture", "Render" };
+    /// <summary>Hovered element of the bar: 0..3 view modes, 4 the collision toggle, -1 none.</summary>
     int _hoverBar = -1;
-    const int BarSeg = 74, BarH = 26, BarMargin = 10, LightH = 22;
+    const int BarSeg = 74, BarH = 26, BarMargin = 10, LightH = 22, CollW = 92, CollGap = 6;
     Rectangle BarRect => new(_gl.Width - BarMargin - BarSeg * 4, BarMargin, BarSeg * 4, BarH);
     Rectangle LightRect => new(_gl.Width - BarMargin - BarSeg * 4, BarMargin + BarH + 4, BarSeg * 4, LightH);
+    /// <summary>The collision toggle, left of the view-mode bar.</summary>
+    Rectangle CollRect => new(_gl.Width - BarMargin - BarSeg * 4 - CollGap - CollW, BarMargin, CollW, BarH);
+
+    /// <summary>Bar element under a view pixel (see <see cref="_hoverBar"/>).</summary>
+    int BarHit(Point p)
+    {
+        var br = BarRect;
+        if (br.Contains(p)) return Math.Clamp((p.X - br.X) / BarSeg, 0, 3);
+        return CollRect.Contains(p) ? 4 : -1;
+    }
 
     void DrawOverlays(int W, int H)
     {
-        var br = BarRect;
+        var cr = CollRect;
         bool showLight = _viewMode == ViewMode.Rendered;
-        string barKey = $"{_viewMode}|{_hoverBar}|{(showLight ? LightingName : "")}";
+        string barKey = $"{_viewMode}|{_hoverBar}|{(showLight ? LightingName : "")}|{_showColl}|{_showColl && _allColl == null}";
         if (_barOv.Key != barKey)
             using (var bmp = DrawBar(showLight)) _r.UpdateOverlay(_barOv, bmp, barKey);
-        _r.DrawOverlay(_barOv, br.X, br.Y, W, H);
+        _r.DrawOverlay(_barOv, cr.X, cr.Y, W, H);
         var hud = HudText();
         if (hud != null)
         {
@@ -754,30 +868,44 @@ public sealed partial class SceneViewport : UserControl
         }
     }
 
-    // NB Studio's own look (the start page and tour): charcoal panels, orange accent, nut-and-bolt shapes
-    static readonly Color BarBg = Color.FromArgb(232, 28, 30, 38), BarEdge = Color.FromArgb(255, 74, 78, 92),
-        BarHover = Color.FromArgb(255, 50, 53, 66), Accent = Color.FromArgb(255, 242, 140, 40), AccentHi = Color.FromArgb(255, 255, 186, 102),
-        BarText = Color.FromArgb(255, 222, 224, 232), AccentText = Color.FromArgb(255, 28, 20, 12);
+    // NB Studio's own look: the light panels of the menu bar, toolbar and tabs (SystemColors.Control 240,240,240 with a
+    // grey edge) and the orange accent of the start page for the active mode. (Studio 1.6–1.7 drew a charcoal bar.)
+    static readonly Color BarBg = Color.FromArgb(238, 246, 247, 249), BarEdge = Color.FromArgb(255, 160, 166, 178),
+        BarHover = Color.FromArgb(255, 226, 230, 238), Accent = Color.FromArgb(255, 242, 140, 40), AccentHi = Color.FromArgb(255, 255, 186, 102),
+        BarText = Color.FromArgb(255, 32, 35, 42), AccentText = Color.FromArgb(255, 28, 20, 12), BarSep = Color.FromArgb(255, 204, 208, 216),
+        IconFg = Color.FromArgb(255, 62, 66, 78);
 
     Bitmap DrawBar(bool showLight)
     {
-        int h = showLight ? BarH + 4 + LightH : BarH;
-        var bmp = new Bitmap(BarSeg * 4, h, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+        int h = showLight ? BarH + 4 + LightH : BarH, x0 = CollW + CollGap;
+        var bmp = new Bitmap(x0 + BarSeg * 4, h, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
         using var g = Graphics.FromImage(bmp);
         g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
         g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
         g.Clear(Color.Transparent);
         using var bg = new SolidBrush(BarBg);
         using var edge = new Pen(BarEdge, 1f);
-        using var path = Rounded(new Rectangle(0, 0, BarSeg * 4 - 1, BarH - 1), 4);
-        g.FillPath(bg, path); g.DrawPath(edge, path);
         using var font = new Font("Segoe UI Semibold", 8.5f);
-        using var sep = new Pen(Color.FromArgb(255, 56, 59, 72), 1f);
+        // the collision toggle
+        {
+            using var cp = Rounded(new Rectangle(0, 0, CollW - 1, BarH - 1), 4);
+            g.FillPath(bg, cp); g.DrawPath(edge, cp);
+            var r = new Rectangle(3, 3, CollW - 6, BarH - 7);
+            bool on = _showColl, hover = _hoverBar == 4;
+            if (on) { using var p2 = Rounded(r, 3); using var b2 = new System.Drawing.Drawing2D.LinearGradientBrush(r, AccentHi, Accent, 90f); g.FillPath(b2, p2); }
+            else if (hover) { using var p2 = Rounded(r, 3); using var b2 = new SolidBrush(BarHover); g.FillPath(b2, p2); }
+            DrawCollisionIcon(g, new RectangleF(r.X + 5, r.Y + 2.5f, 15, 15), on);
+            using var tb = new SolidBrush(on ? AccentText : BarText);
+            g.DrawString(on && _allColl == null ? "Collision…" : "Collision", font, tb, r.X + 23, r.Y + 2);
+        }
+        using var path = Rounded(new Rectangle(x0, 0, BarSeg * 4 - 1, BarH - 1), 4);
+        g.FillPath(bg, path); g.DrawPath(edge, path);
+        using var sep = new Pen(BarSep, 1f);
         for (int i = 0; i < 4; i++)
         {
-            var r = new Rectangle(i * BarSeg + 3, 3, BarSeg - 6, BarH - 7);
+            var r = new Rectangle(x0 + i * BarSeg + 3, 3, BarSeg - 6, BarH - 7);
             bool on = (int)_viewMode == i, hover = _hoverBar == i;
-            if (i > 0 && !on && (int)_viewMode != i - 1) g.DrawLine(sep, i * BarSeg, 6, i * BarSeg, BarH - 7);
+            if (i > 0 && !on && (int)_viewMode != i - 1) g.DrawLine(sep, x0 + i * BarSeg, 6, x0 + i * BarSeg, BarH - 7);
             if (on)
             {
                 using var p2 = Rounded(r, 3);
@@ -791,22 +919,34 @@ public sealed partial class SceneViewport : UserControl
         }
         if (showLight)
         {
-            var lr = new Rectangle(0, BarH + 4, BarSeg * 4 - 1, LightH - 1);
+            var lr = new Rectangle(x0, BarH + 4, BarSeg * 4 - 1, LightH - 1);
             using var lp = Rounded(lr, 4); g.FillPath(bg, lp); g.DrawPath(edge, lp);
             using var f2 = new Font("Segoe UI", 8f);
-            using var ab = new SolidBrush(Accent);
+            using var ab = new SolidBrush(Color.FromArgb(255, 214, 112, 16));
             using var tb = new SolidBrush(BarText);
-            g.DrawString("☀", f2, ab, 7, BarH + 7);
+            g.DrawString("☀", f2, ab, x0 + 7, BarH + 7);
             string text = $"Light: {LightingName}" + (_lights is { Count: > 1 } ? "   ›  click for next" : "");
-            g.DrawString(text, f2, tb, 22, BarH + 7);
+            g.DrawString(text, f2, tb, x0 + 22, BarH + 7);
         }
         return bmp;
+    }
+
+    /// <summary>The collision toggle's icon: a wireframe triangle mesh.</summary>
+    static void DrawCollisionIcon(Graphics g, RectangleF r, bool on)
+    {
+        var fg = on ? AccentText : IconFg;
+        using var pen = new Pen(fg, 1.2f) { LineJoin = System.Drawing.Drawing2D.LineJoin.Round };
+        float x = r.X, y = r.Y + 1, w = r.Width, h = r.Height - 2;
+        PointF P(float u, float v) => new(x + u * w, y + v * h);
+        var a = P(0, 1); var b = P(0.5f, 1); var c = P(1, 1); var d = P(0.25f, 0.45f); var e = P(0.75f, 0.45f); var f = P(0.5f, 0);
+        g.DrawPolygon(pen, new[] { a, c, f });
+        g.DrawLine(pen, d, e); g.DrawLine(pen, d, b); g.DrawLine(pen, e, b);
     }
 
     /// <summary>The view-mode icons: a wire cube, a shaded cube, a picture, and a sun.</summary>
     static void DrawModeIcon(Graphics g, int mode, RectangleF r, bool on)
     {
-        var fg = on ? AccentText : Color.FromArgb(255, 214, 217, 226);
+        var fg = on ? AccentText : IconFg;
         float cx = r.X + r.Width / 2, cy = r.Y + r.Height / 2, s = r.Width / 2;
         // an isometric cube: top, left and right faces around the centre corner
         PointF P(float x, float y) => new(cx + x * s, cy + y * s);
@@ -824,9 +964,9 @@ public sealed partial class SceneViewport : UserControl
             }
             case 1:
             {
-                using var t = new SolidBrush(on ? Color.FromArgb(255, 250, 238, 222) : Color.FromArgb(255, 226, 228, 234));
-                using var lft = new SolidBrush(on ? Color.FromArgb(255, 150, 96, 48) : Color.FromArgb(255, 150, 154, 166));
-                using var rgt = new SolidBrush(on ? Color.FromArgb(255, 96, 58, 26) : Color.FromArgb(255, 100, 104, 118));
+                using var t = new SolidBrush(on ? Color.FromArgb(255, 250, 238, 222) : Color.FromArgb(255, 206, 210, 220));
+                using var lft = new SolidBrush(on ? Color.FromArgb(255, 150, 96, 48) : Color.FromArgb(255, 132, 138, 152));
+                using var rgt = new SolidBrush(on ? Color.FromArgb(255, 96, 58, 26) : Color.FromArgb(255, 86, 92, 106));
                 g.FillPolygon(t, new[] { top, tr, mid, tl });
                 g.FillPolygon(lft, new[] { tl, mid, bot, bl });
                 g.FillPolygon(rgt, new[] { mid, tr, br, bot });
@@ -850,13 +990,13 @@ public sealed partial class SceneViewport : UserControl
             default:
             {
                 // a sun: disc and rays
-                using var pen = new Pen(on ? AccentText : Color.FromArgb(255, 255, 196, 92), 1.4f) { StartCap = System.Drawing.Drawing2D.LineCap.Round, EndCap = System.Drawing.Drawing2D.LineCap.Round };
+                using var pen = new Pen(on ? AccentText : Color.FromArgb(255, 226, 150, 30), 1.4f) { StartCap = System.Drawing.Drawing2D.LineCap.Round, EndCap = System.Drawing.Drawing2D.LineCap.Round };
                 for (int k = 0; k < 8; k++)
                 {
                     double a = k * Math.PI / 4;
                     g.DrawLine(pen, cx + (float)Math.Cos(a) * s * 0.62f, cy + (float)Math.Sin(a) * s * 0.62f, cx + (float)Math.Cos(a) * s * 0.98f, cy + (float)Math.Sin(a) * s * 0.98f);
                 }
-                using var disc = new SolidBrush(on ? AccentText : Color.FromArgb(255, 255, 176, 64));
+                using var disc = new SolidBrush(on ? AccentText : Color.FromArgb(255, 236, 140, 24));
                 g.FillEllipse(disc, cx - s * 0.42f, cy - s * 0.42f, s * 0.84f, s * 0.84f);
                 break;
             }
@@ -1180,8 +1320,9 @@ public sealed partial class SceneViewport : UserControl
         }
         if (e.Button == MouseButtons.Left)
         {
-            var br = BarRect;
-            if (br.Contains(e.Location)) { ViewMode = (ViewMode)Math.Clamp((e.X - br.X) / BarSeg, 0, 3); return; }
+            int bh = BarHit(e.Location);
+            if (bh is >= 0 and <= 3) { ViewMode = (ViewMode)bh; return; }
+            if (bh == 4) { ShowCollision = !ShowCollision; return; }
             if (_viewMode == ViewMode.Rendered && LightRect.Contains(e.Location)) { NextLight(); return; }
         }
         if (e.Button == MouseButtons.Right) { _looking = true; _dragMoved = false; }
@@ -1242,8 +1383,7 @@ public sealed partial class SceneViewport : UserControl
         }
         else
         {
-            var br = BarRect;
-            int hb = br.Contains(e.Location) ? Math.Clamp((e.X - br.X) / BarSeg, 0, 3) : -1;
+            int hb = BarHit(e.Location);
             int hh = hb < 0 ? HandleAt(e.Location) : -1;
             if (hb != _hoverBar || hh != _hoverHandle) { _hoverBar = hb; _hoverHandle = hh; _gl.Invalidate(); }
         }
@@ -1293,6 +1433,59 @@ public sealed partial class SceneViewport : UserControl
             if (t < bestT) { bestT = t; best = o; }
         }
         return (best, bestT);
+    }
+
+    /// <summary>
+    /// The first drawn surface along a view pixel's ray (Ctrl+V pastes there): the mesh of the terrain, a scenery object or
+    /// an object placed by a marker, as drawn now (marker boxes, hidden scenery and switched-off kinds are ignored).
+    /// <paramref name="pixel"/> null: the mouse position, or the view's centre when the mouse is not over the view.
+    /// Returns the point (or, when nothing is hit, the point <paramref name="fallback"/> units along the ray).
+    /// </summary>
+    public (Vector3 Point, SceneObject? Hit, bool UnderMouse) SurfaceAt(Point? pixel, float fallback)
+    {
+        var mp = _gl.PointToClient(Control.MousePosition);
+        bool mouse = pixel == null && _gl.ClientRectangle.Contains(mp) && BarHit(mp) < 0;
+        var pt = pixel ?? (mouse ? mp : new Point(_gl.Width / 2, _gl.Height / 2));
+        var (ro, rd) = Ray(pt);
+        var (o, t) = MeshHit(ro, rd);
+        return o != null ? (ro + rd * t, o, mouse) : (ro + rd * fallback, null, mouse);
+    }
+
+    /// <summary>The surface straight below a point (or null), e.g. the ground under the 3D view's camera.</summary>
+    public Vector3? GroundBelow(Vector3 p)
+    {
+        var (o, t) = MeshHit(p, -Vector3.UnitY);
+        return o != null ? p - Vector3.UnitY * t : null;
+    }
+
+    (SceneObject? Obj, float T) MeshHit(Vector3 ro, Vector3 rd)
+    {
+        SceneObject? best = null; float bestT = float.MaxValue;
+        if (Scene == null) return (null, 0);
+        foreach (var o in Scene.Objects)
+        {
+            if (!DrawsModel(o, keepSelected: false) || !Matrix4x4.Invert(o.Transform, out var inv)) continue;
+            var lo = Vector3.Transform(ro, inv); var ld = Vector3.TransformNormal(rd, inv);
+            if (o.Kind != SceneObjectKind.Terrain && (!RayBox(lo, ld, o.BoundsMin, o.BoundsMax, out float tb) || tb > bestT)) continue;
+            float t = RayMesh(lo, ld, o.Model!, bestT);
+            foreach (var (cm, cl) in o.Children)
+                if (Matrix4x4.Invert(cl, out var ci)) t = MathF.Min(t, RayMesh(Vector3.Transform(lo, ci), Vector3.TransformNormal(ld, ci), cm, bestT));
+            if (t < bestT) { bestT = t; best = o; }
+        }
+        return (best, bestT);
+    }
+
+    /// <summary>A transform for a copy placed on a surface point: the rotation and scale of <paramref name="m"/>, its origin
+    /// above the point and the bottom of its box (<paramref name="bmin"/>..<paramref name="bmax"/>, model space) on it.</summary>
+    public static Matrix4x4 PlaceOn(Matrix4x4 m, Vector3 bmin, Vector3 bmax, Vector3 point)
+    {
+        var rs = m; rs.Translation = Vector3.Zero;
+        float minY = float.MaxValue;
+        for (int i = 0; i < 8; i++)
+            minY = MathF.Min(minY, Vector3.Transform(new Vector3((i & 1) != 0 ? bmax.X : bmin.X, (i & 2) != 0 ? bmax.Y : bmin.Y, (i & 4) != 0 ? bmax.Z : bmin.Z), rs).Y);
+        if (!float.IsFinite(minY)) minY = 0;
+        var r = m; r.Translation = point - new Vector3(0, minY, 0);
+        return r;
     }
 
     static bool RayBox(Vector3 o, Vector3 d, Vector3 mn, Vector3 mx, out float t)
