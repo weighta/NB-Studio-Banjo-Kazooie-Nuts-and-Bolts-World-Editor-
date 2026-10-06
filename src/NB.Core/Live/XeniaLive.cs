@@ -31,11 +31,28 @@ public sealed class XeniaLive : IDisposable
 
     XeniaLive(IntPtr h, long b, int pid) { _h = h; Base = b; Pid = pid; }
 
-    /// <summary>Attaches to the running xenia_canary; <paramref name="xexImage"/> = start of the decrypted .text (for locating the guest base).</summary>
-    public static XeniaLive Attach(byte[] textProbe)
+    /// <summary>Process names of the emulators/ports that run the game: NB's Xenia build (NB Studio's F5 test and NB
+    /// Multiplayer), plain Xenia Canary, Xenia, and reNut.</summary>
+    public static readonly string[] GameProcessNames = { "xenia_canary_netplay", "xenia_canary", "xenia", "renut" };
+
+    /// <summary>
+    /// Attaches to a running game: <paramref name="preferPid"/> first (e.g. the Xenia NB Studio started), then the newest
+    /// process of <see cref="GameProcessNames"/> whose guest memory holds the game. <paramref name="textProbe"/> = start
+    /// of the decrypted .text (for locating the guest base).
+    /// </summary>
+    public static XeniaLive Attach(byte[] textProbe, int? preferPid = null)
     {
-        var p = Process.GetProcessesByName("xenia_canary").FirstOrDefault() ?? throw new InvalidOperationException("Xenia Canary is not running");
-        return AttachPid(p.Id, textProbe);
+        var procs = GameProcessNames.SelectMany(n => Process.GetProcessesByName(n))
+            .OrderByDescending(p => p.Id == preferPid).ThenByDescending(p => { try { return p.StartTime; } catch (Exception) { return DateTime.MinValue; } }).ToList();
+        if (procs.Count == 0) throw new InvalidOperationException("The game is not running: start it with Test in Xenia (F5) or Build > Launch Workspace in Xenia.");
+        Exception? last = null;
+        foreach (var p in procs)
+        {
+            try { return AttachPid(p.Id, textProbe); }
+            catch (Exception e) when (e is InvalidOperationException or ArgumentException) { last = e; }
+        }
+        throw new InvalidOperationException($"Xenia is running ({string.Join(", ", procs.Select(p => p.ProcessName + ".exe").Distinct())}) but the game isn't loaded in it yet" +
+            (last != null ? $" ({last.Message})" : "") + ".");
     }
 
     /// <summary>Attaches to one Xenia process (any build, e.g. the NB netplay build that NB Multiplayer starts).</summary>

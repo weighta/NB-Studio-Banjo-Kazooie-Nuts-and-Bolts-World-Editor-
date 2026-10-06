@@ -93,6 +93,8 @@ public sealed class LivePanel : UserControl
         };
         Controls.AddRange(new Control[] { help, camRow, gRow, nudgeRow, bmRow, tpRow, _pos, top });
         _attach.Click += (_, _) => Attach();
+        // opening the tab attaches by itself when a game is running (F5 starts NB's Xenia build, not xenia_canary.exe)
+        VisibleChanged += (_, _) => { if (Visible && _x == null && System.Linq.Enumerable.Any(XeniaLive.GameProcessNames, n => System.Diagnostics.Process.GetProcessesByName(n).Length > 0)) Attach(); };
         _timer.Tick += (_, _) => Poll();
         SetEnabled(false);
     }
@@ -102,13 +104,16 @@ public sealed class LivePanel : UserControl
 
     void SetEnabled(bool on) { foreach (Control c in Controls) if (c != _pos && c is not Label && c.Controls.Count > 0 && !c.Controls.Contains(_attach)) c.Enabled = on; }
 
+    /// <summary>The game NB Studio started last (Test in Xenia): attached first when several Xenia windows run.</summary>
+    public int? PreferPid { get; set; }
+
     void Attach()
     {
         try
         {
             _x?.Dispose(); _x = null;
             var probe = _probe() ?? throw new InvalidOperationException("open a workspace first");
-            _x = XeniaLive.Attach(probe);
+            _x = XeniaLive.Attach(probe, PreferPid is int pp && !System.Diagnostics.Process.GetProcesses().All(q => q.Id != pp) ? pp : null);
             _world = _x.FindHavokWorld();
             if (_world != 0) { int g = (int)MathF.Round(-_x.GetGravity(_world)); _grav.Value = Math.Clamp(g, 0, 100); }
             _state.Text = $"attached (pid {_x.Pid}){(_world == 0 ? "; no level loaded yet" : "")}";

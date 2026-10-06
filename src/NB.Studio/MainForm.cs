@@ -2004,7 +2004,7 @@ public sealed class MainForm : Form
             }
             foreach (var a in (Environment.GetEnvironmentVariable("NB_STUDIO_XENIA_EXTRA") ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries)) psi.ArgumentList.Add(a);
             psi.ArgumentList.Add(xex);
-            _qtProcess = Process.Start(psi);
+            _qtProcess = Process.Start(psi); _live.PreferPid = _qtProcess?.Id;
         }
         catch (Exception e) { Error("Could not start Xenia", e); return; }
         if (_qtProcess == null) return;
