@@ -960,6 +960,7 @@ public sealed class MainForm : Form
         using var d = new FolderBrowserDialog { Description = "Patched game directory to restore" };
         if (d.ShowDialog(this) != DialogResult.OK) return;
         try { Log($"Restored {NB.Core.Project.PatchPackage.Rollback(d.SelectedPath, s => Log(s))} file(s)."); }
+        catch (InvalidOperationException e) when (e.Message.StartsWith("Nothing to roll back")) { MessageBox.Show(this, e.Message, "Roll Back Patches", MessageBoxButtons.OK, MessageBoxIcon.Information); }
         catch (Exception e) { Error("Rollback failed", e); }
     }
 

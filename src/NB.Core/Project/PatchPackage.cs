@@ -636,8 +636,9 @@ public static class PatchPackage
         var backup = System.IO.Path.Combine(gameDir, BackupDirName);
         if (!Directory.Exists(backup))
         {
-            AppendLog(gameDir, "ROLLBACK", null, null, "FAILED", "no patch backup in this folder");
-            throw new InvalidOperationException("no patch backup in " + gameDir);
+            AppendLog(gameDir, "ROLLBACK", null, null, "FAILED", "nothing to roll back (no mod applied)");
+            throw new InvalidOperationException("Nothing to roll back: no mod is applied to " + gameDir +
+                " (it has no .nbpatch-backup folder), so its game files are the originals. To put a mod on it, use Build > Apply Patch to a Game Directory.");
         }
         var state = LoadState(backup);
         var names = string.Join(", ", state.Files.Select(f => f.Patch).Where(x => x.Length > 0).Distinct());
