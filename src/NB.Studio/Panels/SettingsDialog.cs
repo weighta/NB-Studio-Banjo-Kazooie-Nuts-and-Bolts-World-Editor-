@@ -15,13 +15,31 @@ public sealed class SettingsDialog : Form
     readonly CheckBox _autoOpen = Check("Open the last workspace when NB Studio starts");
     readonly TextBox _xenia = new() { BackColor = Color.FromArgb(46, 49, 60), ForeColor = Text1, BorderStyle = BorderStyle.FixedSingle, Font = new Font("Segoe UI", 9.5f) };
 
-    public SettingsDialog(Settings s, int undoInHistory)
+    readonly CheckedListBox _mods = new() { CheckOnClick = true, BorderStyle = BorderStyle.FixedSingle, BackColor = Color.FromArgb(46, 49, 60), ForeColor = Color.FromArgb(236, 236, 242), Font = new Font("Segoe UI", 9f), IntegralHeight = false };
+
+    /// <summary>The mod ids listed in <see cref="_mods"/> (same order).</summary>
+    readonly List<string> _modIds = new();
+
+    void FillMods(IEnumerable<string> ticked)
+    {
+        var on = new HashSet<string>(ticked);
+        _mods.Items.Clear(); _modIds.Clear();
+        // every executable mod of the Mods menu, plus custom values (e.g. part limit 600) that are in the list
+        var ids = NB.Core.Mods.ExePatches.All.Select(m => m.Id).Concat(on.Where(i => NB.Core.Mods.ExePatches.All.All(m => m.Id != i))).ToList();
+        foreach (var id in ids)
+        {
+            var name = NB.Core.Mods.ExePatches.Resolve(id)?.Name ?? id;
+            _modIds.Add(id); _mods.Items.Add(name, on.Contains(id));
+        }
+    }
+
+    public SettingsDialog(Settings s, int undoInHistory, IReadOnlyList<string>? workspaceMods = null)
     {
         _s = s;
         Text = "Settings";
         FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = false; MinimizeBox = false; ShowInTaskbar = false;
         StartPosition = FormStartPosition.CenterParent; BackColor = Bg; ForeColor = Text1; Font = new Font("Segoe UI", 10f);
-        ClientSize = new Size(600, 590);
+        ClientSize = new Size(600, 832);
         AutoScaleMode = AutoScaleMode.Dpi;
 
         var title = new Label { UseMnemonic = false, Text = "Settings", Font = new Font("Segoe UI Semibold", 16f), ForeColor = Accent, AutoSize = true, Location = new Point(22, 16) };
@@ -65,6 +83,19 @@ public sealed class SettingsDialog : Form
         };
         xCard.Controls.Add(_xenia); xCard.Controls.Add(browse);
 
+        // ---- mods ticked in every new workspace
+        var modCard = Section("Mods for new workspaces", ref y, 230);
+        modCard.Controls.Add(Note("Ticked in every workspace you create (File > New Workspace); workspaces you already have are not changed. " +
+            "Change a workspace's own mods on the Mods menu.", 16, 32, 530, 34));
+        _mods.Location = new Point(16, 68); _mods.Size = new Size(528, 118);
+        FillMods(s.NewWorkspaceModsOrDefault);
+        modCard.Controls.Add(_mods);
+        var useWs = Btn("Use this workspace's mods"); useWs.Location = new Point(16, 192); useWs.Enabled = workspaceMods != null;
+        useWs.Click += (_, _) => { if (workspaceMods != null) FillMods(workspaceMods); };
+        var reset = Btn("Reset to recommended"); reset.Location = new Point(230, 192);
+        reset.Click += (_, _) => FillMods(NB.Core.Mods.ExePatches.RecommendedForNewWorkspaces);
+        modCard.Controls.Add(useWs); modCard.Controls.Add(reset);
+
         // ---- buttons
         var ok = Btn("Save", true); var cancel = Btn("Cancel");
         ok.DialogResult = DialogResult.OK; cancel.DialogResult = DialogResult.Cancel;
@@ -77,6 +108,10 @@ public sealed class SettingsDialog : Form
             _s.UndoSteps = (int)_undo.Value;
             _s.SScales = _sScales.Checked;
             _s.AutoOpenLast = _autoOpen.Checked;
+            var list = _modIds.Where((_, i) => _mods.GetItemChecked(i)).ToList();
+            // the recommended set is stored as "not customised", so later NB Studio versions can extend it
+            bool same = list.Count == NB.Core.Mods.ExePatches.RecommendedForNewWorkspaces.Count && !list.Except(NB.Core.Mods.ExePatches.RecommendedForNewWorkspaces).Any();
+            _s.NewWorkspaceMods = same ? null : list;
             var x = _xenia.Text.Trim().Trim('"');
             _s.XeniaPath = x.Length == 0 ? null : x;
         };

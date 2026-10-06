@@ -10,7 +10,7 @@ public sealed class TransformPanel : UserControl
     readonly Label _title = new() { Dock = DockStyle.Top, Height = 44, AutoEllipsis = true, Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold) };
     readonly NumericUpDown[] _pos = new NumericUpDown[3], _rot = new NumericUpDown[3], _scl = new NumericUpDown[3];
     readonly Button _apply = new() { Text = "Apply", Width = 90 }, _reset = new() { Text = "Revert fields", Width = 90 };
-    readonly Label _info = new() { Dock = DockStyle.Bottom, Height = 120, ForeColor = SystemColors.GrayText };
+    readonly Label _info = new() { Dock = DockStyle.Bottom, Height = 175, ForeColor = SystemColors.GrayText };
     readonly NumericUpDown _link = new() { Minimum = 0, Maximum = 65535, Width = 90 };
     readonly FlowLayoutPanel _linkRow = new() { Dock = DockStyle.Top, Height = 32, Visible = false };
     SceneObject? _obj;
@@ -67,7 +67,8 @@ public sealed class TransformPanel : UserControl
         foreach (var n in _scl) n.Enabled = editable && !Viewport.SceneViewport.ScaleLocked(o);
         _apply.Enabled = _reset.Enabled = editable;
         _linkRow.Visible = o?.Marker is { Type: 22 };
-        _title.Text = o == null ? "No selection" : $"{o.Name}\n{AssetIds.DisplayName(o.ModelName)}";
+        _title.Text = o == null ? "No selection" : $"{(SpawnPoints.Label(o) is { } sl ? sl + " — " : "")}{o.Name}\n{AssetIds.DisplayName(o.ModelName)}";
+        _title.ForeColor = SpawnPoints.Is(o) ? Color.FromArgb(20, 130, 50) : SystemColors.ControlText;
         Fill();
     }
 
@@ -84,7 +85,8 @@ public sealed class TransformPanel : UserControl
             _info.Text = _obj.Kind == SceneObjectKind.Terrain
                 ? "Terrain is the background model's own geometry; it is not movable here. Use the Tag Editor for its data."
                 : _obj.Kind == SceneObjectKind.Marker
-                ? $"Marker type {_obj.Marker!.Type} ({NB.Core.World.MarkerRecord.TypeName(_obj.Marker.Type)}) #{_obj.Marker.Index} in {_obj.ModelName} at 0x{_obj.Marker.Offset:X}\n" +
+                ? (SpawnPoints.Label(_obj) is { } spl ? $"{spl.ToUpperInvariant()}: {SpawnPoints.Detail(_obj)}\n" : "") +
+                  $"Marker type {_obj.Marker!.Type} ({NB.Core.World.MarkerRecord.TypeName(_obj.Marker.Type)}) #{_obj.Marker.Index} in {_obj.ModelName} at 0x{_obj.Marker.Offset:X}\n" +
                   $"References: {string.Join(", ", _obj.Marker.AssetIds.Zip(_obj.Marker.AssetNames).Take(6).Select(p => p.Second == "?" ? p.First.ToString("X8") : p.Second))}\n" +
                   $"Strings: {string.Join(", ", _obj.Marker.Strings.Take(4))}\n" +
                   (_obj.ModelSource != "" ? $"Drawn with: {(_obj.Model?.View != null ? AssetIds.DisplayName(_obj.Model.View.Name) + " from " : "")}{_obj.ModelSource}\n" : "") +

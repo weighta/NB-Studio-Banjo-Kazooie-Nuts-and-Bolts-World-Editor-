@@ -128,6 +128,7 @@ public static class PatchPackage
                     if (m == null) continue;
                     man.ExeMods.Add(new PatchExeMod { Id = m.Id, Name = m.Name, Words = m.Words.Select(w => new[] { w.Address, w.Original, w.Patched }).ToList() });
                 }
+                AddBuiltInExeMods(man, ws, name);
                 AddExecutable(man, ws.Original.Xex, ws.Original.Root);
             }
             configure?.Invoke(man);
@@ -173,6 +174,30 @@ public static class PatchPackage
             man.Files.Add(pf);
             k++;
         }
+    }
+
+    /// <summary>
+    /// Executable mods already built into the workspace's own default.xex (a map mod applied to the workspace bakes its
+    /// mods, e.g. world-bounds-2048 and no-escape-reset): they become executable mods of the patch too, so they are neither
+    /// lost when the ticked mods replace the executable's difference nor written twice. Words that are not a known mod join
+    /// as one mod of this patch (only when the patch has executable mods; otherwise the executable stays a plain delta).
+    /// </summary>
+    static void AddBuiltInExeMods(PatchManifest man, Workspace ws, string name)
+    {
+        try
+        {
+            if (!File.Exists(ws.Game.Xex) || !File.Exists(ws.Original.Xex)) return;
+            if (File.ReadAllBytes(ws.Game.Xex).AsSpan().SequenceEqual(File.ReadAllBytes(ws.Original.Xex))) return;
+            var ch = GameDiff.ExeDiff(ws.Original.Xex, ws.Game.Xex);
+            if (ch.Problem != null) return;
+            foreach (var k in ch.Known.Where(k => !man.ExeMods.Any(e => e.Id == k.Id)))
+                man.ExeMods.Add(new PatchExeMod { Id = k.Id, Name = k.Name, Words = k.Words.Select(w => new[] { w.Address, w.Original, w.Patched }).ToList() });
+            var taken = man.ExeMods.SelectMany(e => e.Words.Select(w => w[0])).ToHashSet();
+            var other = ch.Other.Where(w => !taken.Contains(w.Address)).ToList();
+            if (other.Count > 0 && man.ExeMods.Count > 0)
+                man.ExeMods.Add(new PatchExeMod { Id = "custom-" + man.Id, Name = $"{name}: executable changes", Words = other.Select(w => new[] { w.Address, w.Original, w.Patched }).ToList() });
+        }
+        catch (Exception e) when (e is IOException or InvalidDataException) { }
     }
 
     /// <summary>Checks the manifest's executable mods against the original default.xex and adds its "xexmods" entry.</summary>
@@ -286,9 +311,10 @@ public static class PatchPackage
         foreach (var m in man.ExeMods)
         {
             var probs = Mods.ExePatches.Check(img, xex.ImageBase, ToMod(m));
-            if (probs.Count > 0) throw new InvalidDataException($"mod {m.Id} does not fit this default.xex: {string.Join("; ", probs)}");
+            // a mod whose words this default.xex already holds is built in already: not an error, nothing to change
+            if (probs.Count > 0 && !Mods.ExePatches.IsApplied(img, xex.ImageBase, ToMod(m))) throw new InvalidDataException($"mod {m.Id} does not fit this default.xex: {string.Join("; ", probs)}");
         }
-        var baked = xex.WritePatched(man.ExeMods.SelectMany(m => m.Words).Select(w => (w[0], w[2])));
+        var baked = xex.WritePatched(man.ExeMods.Where(m => !Mods.ExePatches.IsApplied(img, xex.ImageBase, ToMod(m))).SelectMany(m => m.Words).Select(w => (w[0], w[2])));
         // the console loader checks the page-hash chain and header digest: never hand out a file that fails them (B23)
         if (!XexFile.VerifyHashes(baked, out var why)) throw new InvalidDataException("baked default.xex failed its hash check: " + why);
         return baked;

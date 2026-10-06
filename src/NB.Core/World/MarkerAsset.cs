@@ -27,11 +27,13 @@ public sealed class MarkerRecord
     public List<string> AssetNames = new();
     public List<string> Strings = new();
 
-    /// <summary>Tentative names from the strings and asset ids found in each record type (not confirmed from code).</summary>
+    /// <summary>Tentative names from the strings and asset ids found in each record type (not confirmed from code). Type 4
+    /// (formerly "drone action") is the player start, verified in Xenia: Showdown Town's #84 is where a new game puts
+    /// Banjo, each Act's #1 where the Act starts him (the record's yaw = his facing).</summary>
     public static string TypeName(int t) => t switch
     {
         1 => "point", 6 => "actor spawn", 7 => "volume / height", 14 => "indicator / pickup", 18 => "node", 22 => "path node",
-        13 => "object", 8 => "actor (alt)", 36 => "gated collectable", 28 => "script trigger", 4 => "drone action",
+        13 => "object", 8 => "actor (alt)", 36 => "gated collectable", 28 => "script trigger", 4 => "player start",
         _ => "type " + t,
     };
 

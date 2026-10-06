@@ -247,6 +247,13 @@ public sealed partial class SceneViewport
                 var bsw = System.Diagnostics.Stopwatch.StartNew(); Render(); _gl.MakeCurrent(); OpenTK.Graphics.OpenGL4.GL.Finish();
                 log($"script: collision of all objects {(ShowCollision ? "on" : "off")}: {CollisionSummary}; last frame drew {_collObjectsDrawn} objects in {bsw.Elapsed.TotalMilliseconds:F0} ms (after {sw.ElapsedMilliseconds} ms)"); return true;
             }
+            case "--hover":
+            {
+                // --hover X,Y: mouse rests over a view pixel (the start-point tooltip)
+                var v = next().Split(',').Select(int.Parse).ToArray();
+                OnMouseMove(null, new MouseEventArgs(MouseButtons.None, 0, v[0], v[1], 0)); HoverTick();
+                log($"script: hover {v[0]},{v[1]}: {(_tipFor != null ? "tooltip for " + _tipFor.Name : "no tooltip")} (picked {Pick(new Point(v[0], v[1])).Obj?.Name ?? "-"})"); return true;
+            }
             case "--sel-collision":
             {
                 ShowSelectionCollision = next() == "on"; Render();

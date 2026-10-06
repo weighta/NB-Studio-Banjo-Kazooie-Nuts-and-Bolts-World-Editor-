@@ -157,8 +157,10 @@ static class Program
                 }
                 case "ws-create":
                 {
-                    // ws-create <original game dir> <workspace root>
+                    // ws-create <original game dir> <workspace root> [--recommended-mods]: a clean workspace; the flag ticks NB Studio's
+                    // recommended mods for new workspaces (ExePatches.RecommendedForNewWorkspaces), as File > New Workspace does
                     var ws = NB.Core.Project.Workspace.Create(args[1], args[2], new Progress<(string F, double P)>(p => { }));
+                    if (args.Contains("--recommended-mods")) { ws.Manifest.ExeMods.AddRange(NB.Core.Mods.ExePatches.RecommendedForNewWorkspaces); ws.SaveManifest(); Console.WriteLine("mods: " + string.Join(", ", ws.Manifest.ExeMods)); }
                     Console.WriteLine($"workspace ready: {ws.Root}");
                     return 0;
                 }

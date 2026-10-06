@@ -239,6 +239,9 @@ public sealed class Workspace
         foreach (var f in Directory.GetFiles(Game.Root, "*", SearchOption.AllDirectories))
         {
             var rel = Path.GetRelativePath(Game.Root, f);
+            // a patch applied to the workspace's game folder leaves its rollback copies and log there: not game files
+            // (they made Create Patch carry ~200 MB of backups after a map mod was applied to a workspace)
+            if (rel.StartsWith(PatchPackage.BackupDirName, StringComparison.OrdinalIgnoreCase) || rel.Equals(PatchPackage.LogFileName, StringComparison.OrdinalIgnoreCase)) continue;
             var o = Path.Combine(Original.Root, rel);
             if (!File.Exists(o)) { list.Add(rel); continue; }
             var fi = new FileInfo(f); var oi = new FileInfo(o);
@@ -337,11 +340,13 @@ public sealed class Workspace
             foreach (var m in mods)
             {
                 var probs = Mods.ExePatches.Check(img, xex.ImageBase, m);
-                if (probs.Count > 0) throw new InvalidDataException($"mod {m.Id} cannot be applied: {string.Join("; ", probs)}");
+                // already built into this default.xex (e.g. by an applied map mod): nothing to write
+                if (probs.Count > 0 && !Mods.ExePatches.IsApplied(img, xex.ImageBase, m)) throw new InvalidDataException($"mod {m.Id} cannot be applied: {string.Join("; ", probs)}");
             }
+            var todo = mods.Where(m => !Mods.ExePatches.IsApplied(img, xex.ImageBase, m)).ToList();
             var dstXex = Path.Combine(target, Path.GetRelativePath(Game.Root, Game.Xex));
             Directory.CreateDirectory(Path.GetDirectoryName(dstXex)!);
-            File.WriteAllBytes(dstXex, xex.WritePatched(mods.SelectMany(m => m.Words).Select(w => (w.Address, w.Patched))));
+            File.WriteAllBytes(dstXex, xex.WritePatched(todo.SelectMany(m => m.Words).Select(w => (w.Address, w.Patched))));
             baked = string.Join(", ", mods.Select(m => m.Id));
             if (!files.Contains(Path.GetRelativePath(Game.Root, Game.Xex))) n++;
         }

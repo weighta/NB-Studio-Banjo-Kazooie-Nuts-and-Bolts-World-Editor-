@@ -153,6 +153,7 @@ public sealed class MainForm : Form
             if (_qtBoot is { IsCompleted: false }) { _qtCts?.Cancel(); try { using var pad = new QuickTest.VirtualPad(_qtPort); pad.Unplug(); } catch (Exception) { } }
         };
         _tree.AfterSelect += (_, e) => { if (!_syncingTree && e.Node?.Tag is SceneObject o) _view.Select(o, focus: true); };
+        _tree.ShowNodeToolTips = true;
         _tree.AfterCheck += (_, e) => { if (e.Node?.Tag is SceneObject o) { o.Visible = e.Node.Checked; _view.Refresh3D(); } else if (e.Action != TreeViewAction.Unknown && e.Node != null) foreach (TreeNode c in e.Node.Nodes) c.Checked = e.Node.Checked; };
         _tree.NodeMouseClick += (_, e) => { if (e.Button == MouseButtons.Right && e.Node.Tag is SceneObject o) { _menuPoint = null; _tree.SelectedNode = e.Node; BuildObjectMenu(o); _objMenu.Show(_tree, e.Location); } };
         _treeSearch.TextChanged += (_, _) => FillTree();
@@ -479,10 +480,14 @@ public sealed class MainForm : Form
         {
             mods.DropDownItems.Clear();
             mods.DropDownItems.Add(new ToolStripLabel("After-Party mods (executable patches, saved in the workspace and baked into default.xex by Create Patch)") { Font = new Font(Font, FontStyle.Italic) });
+            var builtIn = BuiltInExeMods();
             foreach (var m in NB.Core.Mods.ExePatches.All)
             {
                 if (NB.Core.Mods.ExePatches.FamilyOf(m.Id).Length > 0) continue;   // part limit / build area: set by value below
-                var item = new ToolStripMenuItem(m.Name.Replace("&", "&&")) { CheckOnClick = true, Checked = _ws?.Manifest.ExeMods.Contains(m.Id) == true, Enabled = _ws != null, ToolTipText = m.Description + "\n\n" + m.Verified };
+                // a mod already built into this workspace's default.xex (e.g. by an applied map mod): shown ticked, nothing to switch
+                bool inGame = builtIn.Contains(m.Id);
+                var item = new ToolStripMenuItem(m.Name.Replace("&", "&&") + (inGame ? "   (already in this game)" : "")) { CheckOnClick = !inGame, Checked = inGame || _ws?.Manifest.ExeMods.Contains(m.Id) == true, Enabled = _ws != null && !inGame,
+                    ToolTipText = (inGame ? "This workspace's default.xex already has this mod built in (from a mod applied to the game files); it is always on.\n\n" : "") + m.Description + "\n\n" + m.Verified };
                 item.Click += (_, _) =>
                 {
                     if (_ws == null) return;
@@ -636,7 +641,7 @@ public sealed class MainForm : Form
     /// <summary>File > Settings.</summary>
     void ShowSettings()
     {
-        using var d = new Panels.SettingsDialog(_settings, _history.Count);
+        using var d = new Panels.SettingsDialog(_settings, _history.Count, _ws?.Manifest.ExeMods);
         if (d.ShowDialog(this) != DialogResult.OK) return;
         _settings.Save();
         _history.Limit = _settings.UndoSteps; _history.ApplyLimit();
@@ -658,11 +663,34 @@ public sealed class MainForm : Form
         _busy = true; SetProgress("Copying game files…", 0);
         try
         {
-            await Task.Run(() => Workspace.Create(src.SelectedPath, dst.SelectedPath, new Progress<(string F, double P)>(p => BeginInvoke(() => SetProgress("Copying " + p.F, p.P)))));
+            var created = await Task.Run(() => Workspace.Create(src.SelectedPath, dst.SelectedPath, new Progress<(string F, double P)>(p => BeginInvoke(() => SetProgress("Copying " + p.F, p.P)))));
+            ApplyNewWorkspaceMods(created);
             await OpenWorkspace(dst.SelectedPath);
         }
         catch (Exception e) { Error("Creating workspace failed", e); }
         finally { _busy = false; SetProgress(null, 0); }
+    }
+
+    /// <summary>A new workspace gets the mods of File > Settings > Mods for new workspaces (only those that fit its
+    /// default.xex). Existing workspaces are never changed.</summary>
+    void ApplyNewWorkspaceMods(Workspace ws)
+    {
+        try
+        {
+            var xex = XexFile.Read(File.ReadAllBytes(ws.Game.Xex)); var img = xex.GetImage();
+            var ok = new List<string>(); var skipped = new List<string>();
+            foreach (var id in _settings.NewWorkspaceModsOrDefault.Distinct())
+            {
+                var m = NB.Core.Mods.ExePatches.Resolve(id);
+                if (m == null) { skipped.Add(id); continue; }
+                if (NB.Core.Mods.ExePatches.Check(img, xex.ImageBase, m).Count > 0 && !NB.Core.Mods.ExePatches.IsApplied(img, xex.ImageBase, m)) { skipped.Add(m.Name); continue; }
+                ok.Add(id);
+            }
+            ws.Manifest.ExeMods.Clear(); ws.Manifest.ExeMods.AddRange(ok);
+            ws.SaveManifest();
+            Log($"New workspace: {ok.Count} mod(s) ticked from File > Settings > Mods for new workspaces" + (skipped.Count > 0 ? $" (left out, they don't fit this default.xex: {string.Join(", ", skipped)})" : "") + ".");
+        }
+        catch (Exception e) { Log("New workspace: default mods not set: " + e.Message); }
     }
 
     async Task OpenWorkspace(string root)
@@ -1514,6 +1542,15 @@ public sealed class MainForm : Form
         if (_scene != null)
         {
             string q = _treeSearch.Text.Trim().ToLowerInvariant();
+            // player start points first (Banjo's start in Showdown Town, the Act start), so they are easy to find
+            var starts = _scene.Objects.Where(o => SpawnPoints.Is(o) && (q == "" || NodeText(o).ToLowerInvariant().Contains(q))).ToList();
+            if (starts.Count > 0)
+            {
+                var sn = _tree.Nodes.Add($"Player start points ({starts.Count})"); sn.Checked = true;
+                sn.ToolTipText = "Marker type 4: where the game puts Banjo (new game in Showdown Town, the start of an Act). Green flag and arrow in the 3D view.";
+                foreach (var o in starts) sn.Nodes.Add(new TreeNode(NodeText(o)) { Tag = o, Checked = o.Visible, ToolTipText = SpawnPoints.Detail(o), ForeColor = Color.FromArgb(20, 130, 50) });
+                sn.Expand();
+            }
             var terrain = _tree.Nodes.Add("Terrain");
             var scenery = _tree.Nodes.Add("Scenery (by model)");
             terrain.Checked = scenery.Checked = true;
@@ -1532,7 +1569,7 @@ public sealed class MainForm : Form
                 foreach (var tg in ma.GroupBy(o => o.Marker!.Type).OrderBy(g => g.Key))
                 {
                     var tn = an.Nodes.Add($"{NB.Core.World.MarkerRecord.TypeName(tg.Key)} ({tg.Count()})"); tn.Checked = true;
-                    foreach (var o in tg) tn.Nodes.Add(new TreeNode(o.Name + (o.Dirty ? " *" : "")) { Tag = o, Checked = o.Visible });
+                    foreach (var o in tg) tn.Nodes.Add(new TreeNode(NodeText(o)) { Tag = o, Checked = o.Visible, ToolTipText = SpawnPoints.Detail(o) ?? "" });
                 }
             }
             terrain.Expand(); scenery.Expand();
@@ -1554,7 +1591,7 @@ public sealed class MainForm : Form
             if (_dialogue.AutoShow && _dialogue.LineCount > 0 && _right.SelectedIndex == 0) _right.SelectedTab = _dialogueTab;   // from Properties only (not Tag Editor / Live)
         }
         _tags.ShowObject(_scene, o);
-        _status.Text = o == null ? "" : $"{o.Name} — {AssetIds.DisplayName(o.ModelName)}{(o.ModelSource == "" || o.Model == null ? "" : o.Model.View == null ? $" ({o.ModelSource})" : $" (model {AssetIds.DisplayName(o.Model.View.Name).Replace("aid_model_banjox_", "")} from {o.ModelSource})")}  pos ({o.Transform.M41:F2}, {o.Transform.M42:F2}, {o.Transform.M43:F2})";
+        _status.Text = o == null ? "" : $"{(SpawnPoints.Label(o) is { } sl ? sl + ": " : "")}{o.Name} — {AssetIds.DisplayName(o.ModelName)}{(o.ModelSource == "" || o.Model == null ? "" : o.Model.View == null ? $" ({o.ModelSource})" : $" (model {AssetIds.DisplayName(o.Model.View.Name).Replace("aid_model_banjox_", "")} from {o.ModelSource})")}  pos ({o.Transform.M41:F2}, {o.Transform.M42:F2}, {o.Transform.M43:F2})";
         if (o != null)
         {
             _syncingTree = true;
@@ -1619,7 +1656,15 @@ public sealed class MainForm : Form
     /// <summary>A label for a menu item: "&" shown as itself, long names shortened.</summary>
     static string MenuText(string s) => (s.Length > 60 ? s[..57] + "..." : s).Replace("&", "&&");
 
-    void RefreshNode(SceneObject o) { var node = FindNode(_tree.Nodes, o); if (node != null) node.Text = o.Name + (o.Dirty ? " *" : ""); }
+    void RefreshNode(SceneObject o)
+    {
+        // an object can be listed twice (a start point is also under its marker asset)
+        void Walk(TreeNodeCollection ns) { foreach (TreeNode n in ns) { if (n.Tag == o) n.Text = NodeText(o); Walk(n.Nodes); } }
+        Walk(_tree.Nodes);
+    }
+
+    /// <summary>The tree's text for an object: player start points carry their label ("Player start (Banjo) — …").</summary>
+    static string NodeText(SceneObject o) => (SpawnPoints.Label(o) is { } l ? l + " — " : "") + o.Name + (o.Dirty ? " *" : "");
 
     void ResetTransform(SceneObject o)
     {
@@ -1812,11 +1857,17 @@ public sealed class MainForm : Form
             var xex = XexFile.Read(xexBytes);
             image = xex.GetImage();
             enabled = NB.Core.Mods.ExePatches.ResolveAll(_ws.Manifest.ExeMods);
+            var inGame = new List<string>();
             foreach (var m in enabled.ToList())
             {
                 var problems = NB.Core.Mods.ExePatches.Check(image, xex.ImageBase, m);
-                if (problems.Count > 0) { Log($"Mod '{m.Name}' does not match this default.xex: {string.Join("; ", problems)}"); enabled.Remove(m); }
+                if (problems.Count == 0) continue;
+                enabled.Remove(m);
+                // the words already hold this mod's values: it is built into this default.xex (a map mod applied to the workspace)
+                if (NB.Core.Mods.ExePatches.IsApplied(image, xex.ImageBase, m)) inGame.Add(m.Name);
+                else Log($"Mod '{m.Name}' does not match this default.xex: {string.Join("; ", problems)}");
             }
+            if (inGame.Count > 0) Log($"Already in this game's default.xex (built in by an applied mod, nothing to add): {string.Join(", ", inGame)}.");
         }
         catch (Exception e) { Error("Checking the executable mods failed", e); return false; }
         Log(enabled.Count == 0 ? "After-Party mods: none enabled in this workspace."
@@ -1992,6 +2043,27 @@ public sealed class MainForm : Form
             if (enabled.Count > 0) Log($"  executable mods in the test: {string.Join(", ", enabled.Select(m => m.Name))}");
         }
         catch (Exception e) { Log("  executable mods not applied: " + e.Message); }
+    }
+
+    (string Key, HashSet<string> Ids)? _builtIn;
+
+    /// <summary>Ids of the executable mods already built into the workspace's default.xex (all their words hold the
+    /// patched values), cached per file size and time.</summary>
+    HashSet<string> BuiltInExeMods()
+    {
+        if (_ws == null || !File.Exists(_ws.Game.Xex)) return new();
+        var fi = new FileInfo(_ws.Game.Xex);
+        string key = $"{fi.FullName}|{fi.Length}|{fi.LastWriteTimeUtc.Ticks}";
+        if (_builtIn is { } b && b.Key == key) return b.Ids;
+        var ids = new HashSet<string>();
+        try
+        {
+            var xex = XexFile.Read(File.ReadAllBytes(_ws.Game.Xex)); var img = xex.GetImage();
+            foreach (var m in NB.Core.Mods.ExePatches.All) if (NB.Core.Mods.ExePatches.IsApplied(img, xex.ImageBase, m)) ids.Add(m.Id);
+        }
+        catch (Exception) { }
+        _builtIn = (key, ids);
+        return ids;
     }
 
     void PickXenia()
@@ -2206,7 +2278,7 @@ public sealed class MainForm : Form
                     case "--menu-close": foreach (ToolStripMenuItem mi in MainMenuStrip!.Items) mi.HideDropDown(); break;
                     case "--settings-shot":
                     {
-                        using var d = new Panels.SettingsDialog(_settings, _history.Count);
+                        using var d = new Panels.SettingsDialog(_settings, _history.Count, _ws?.Manifest.ExeMods);
                         d.StartPosition = FormStartPosition.Manual; d.Location = new Point(Left + 100, Top + 100);
                         d.Show(this); Application.DoEvents(); await Task.Delay(500); Application.DoEvents();
                         using var bmp = new Bitmap(d.Width, d.Height); d.DrawToBitmap(bmp, new Rectangle(0, 0, d.Width, d.Height));
@@ -2220,6 +2292,29 @@ public sealed class MainForm : Form
                         else if (kv[0] == "SScales") { _settings.SScales = bool.Parse(kv[1]); _view.SScales = _settings.SScales; }
                         L($"script: setting {kv[0]} = {kv[1]}; undo history {_history.Count} step(s)"); break;
                     }
+                    case "--new-workspace":
+                    {
+                        // --new-workspace <original game dir> <new folder>: File > New Workspace without the folder dialogs
+                        var src = Next(); var dst = Next();
+                        var created = await Task.Run(() => Workspace.Create(src, dst));
+                        ApplyNewWorkspaceMods(created);
+                        await OpenWorkspace(dst);
+                        L($"script: new workspace {dst}: mods {string.Join(", ", _ws!.Manifest.ExeMods)}"); break;
+                    }
+                    case "--mods-menu":
+                    {
+                        // the Mods menu as the user sees it (checked / disabled / text)
+                        var mi = MainMenuStrip!.Items.OfType<ToolStripMenuItem>().First(x => x.Text.Replace("&", "") == "Mods");
+                        mi.ShowDropDown(); Application.DoEvents(); await Task.Delay(300); Application.DoEvents();
+                        foreach (ToolStripItem it in mi.DropDownItems) L($"menu Mods: {(it is ToolStripMenuItem t && t.Checked ? "[x]" : "[ ]")} {it.Text}{(it.Enabled ? "" : " (disabled)")}");
+                        if (i + 1 < a.Count && !a[i + 1].StartsWith("--"))
+                        {
+                            var dd = mi.DropDown; using var bmp = new Bitmap(dd.Width, dd.Height); dd.DrawToBitmap(bmp, new Rectangle(0, 0, dd.Width, dd.Height)); bmp.Save(Next());
+                        }
+                        mi.HideDropDown(); break;
+                    }
+                    case "--exe-mods-check": ApplyExeMods(); L("script: executable mods checked (see the log above)"); break;
+                    case "--export-console": { var dir = Next(); int n = await Task.Run(() => _ws!.Export(dir, true, null, bakeExeMods: true)); L($"script: console export {n} file(s) -> {dir}"); break; }
                     case "--history": L($"script: history {_history.Count} step(s); undo: {_history.UndoLabel ?? "-"}; redo: {_history.RedoLabel ?? "-"}"); break;
                     case "--menu-shot":
                     {
@@ -2371,7 +2466,7 @@ public sealed class MainForm : Form
                     case "--tab":
                     {
                         var q = Next();
-                        foreach (var tc in new[] { _center, _right })
+                        foreach (var tc in new[] { _center, _right, _leftTabs })
                             foreach (TabPage tp in tc.TabPages)
                                 if (tp.Text.Equals(q, StringComparison.OrdinalIgnoreCase)) tc.SelectedTab = tp;
                         L($"script: tab {q}"); break;

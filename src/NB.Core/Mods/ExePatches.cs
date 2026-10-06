@@ -1562,6 +1562,32 @@ public static class ExePatches
 
     public static readonly IReadOnlyList<ExeMod> All = new[] { ChangeVehicleInTown, TownVehiclesNormalRules, AiSpringTimer, TownAiRestartOnChangeVehicle, DeveloperMainMenu, DeveloperAllParts, WorldBounds2048, NoEscapeReset, TownNpcPathGuard, CoopRemoteDamage, CoopSharedTime, CoopWorldRuns, CoopRemoteVehicle, CoopProjectiles, CoopOnFoot, TownGarageReturnVehicle, UnknownPartsSafe, SmallRoomMatchmaking, CharacterSelect, SnowFollowsCamera, DrawDistanceX4, PhotoCameraUnlimited, PauseOpensPhotos, GarageBuildArea31, VehiclePartLimit400, TownFlightThrust, UnlimitedPartQuantity, LogsChoiceUnlock, VehicleSpinLimit, TownNoCeiling };
 
+    /// <summary>
+    /// The mods NB Studio ticks in every NEW workspace (File > Settings can change the list; existing workspaces and
+    /// <c>NB.Cli ws-create</c> without <c>--recommended-mods</c> are not affected): the ones that make Showdown Town
+    /// comfortable to play and test — Change / Build Vehicle in town, destructible town vehicles, every part, the larger
+    /// and unlimited world, the town crash / garage / unknown-part fixes, photo range, planes in town, 9999 parts, part
+    /// limit 400 and build area 31.
+    /// </summary>
+    public static readonly IReadOnlyList<string> RecommendedForNewWorkspaces = new[]
+    {
+        ChangeVehicleInTown.Id, TownVehiclesNormalRules.Id, DeveloperAllParts.Id, WorldBounds2048.Id, NoEscapeReset.Id,
+        TownNpcPathGuard.Id, TownGarageReturnVehicle.Id, UnknownPartsSafe.Id, PhotoCameraUnlimited.Id, TownFlightThrust.Id,
+        UnlimitedPartQuantity.Id, VehiclePartLimit400.Id, GarageBuildArea31.Id,
+    };
+
+    /// <summary>
+    /// True when every word of the mod already holds its PATCHED value: the executable has this mod built in (e.g. a map
+    /// mod whose default.xex was baked with it). <see cref="Check"/> reports such a mod as "does not match"; callers treat
+    /// it as applied (nothing to write, no warning).
+    /// </summary>
+    public static bool IsApplied(byte[] image, uint imageBase, ExeMod mod) =>
+        mod.Words.Count > 0 && mod.Words.All(w =>
+        {
+            long o = w.Address - (long)imageBase;
+            return o >= 0 && o + 4 <= image.Length && BE.U32(image, (int)o) == w.Patched;
+        });
+
     /// <summary>Checks that every patched word currently holds its original value in the decrypted image.</summary>
     public static List<string> Check(byte[] image, uint imageBase, ExeMod mod)
     {

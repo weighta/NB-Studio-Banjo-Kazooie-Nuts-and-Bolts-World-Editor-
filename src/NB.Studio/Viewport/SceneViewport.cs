@@ -268,6 +268,8 @@ public sealed partial class SceneViewport : UserControl
         _gl.PreviewKeyDown += (_, e) => e.IsInputKey = !e.Control && !e.Alt && e.KeyCode is not (>= Keys.F1 and <= Keys.F24) and not Keys.Delete and not Keys.Apps;
         _gl.LostFocus += (_, _) => _keys.Clear();
         _timer.Tick += (_, _) => Tick();
+        _hoverTimer.Tick += (_, _) => HoverTick();
+        _gl.MouseLeave += (_, _) => { _hoverTimer.Stop(); if (_tipFor != null) { _tipFor = null; _gl.Invalidate(); } };
         _timer.Start();
         _viewMode = LoadViewMode();
         _r.Mode = _viewMode;
@@ -464,6 +466,10 @@ public sealed partial class SceneViewport : UserControl
         if (_ready && _staticLines != null) _r.DeleteLineBatch(_staticLines);
         _staticLines = null; _linesVersion++;
         Scene = scene; Selected = null;
+        if (scene != null)
+            foreach (var o in scene.Objects)
+                if (SpawnPoints.Is(o) && o.Model == null) { o.BoundsMin = SpawnBounds.Min; o.BoundsMax = SpawnBounds.Max; }
+
         _allColl = null; _collFor = null; CollisionSummary = "";
         if (_showColl && scene != null) StartCollisionDecode();
         _lights = null; _skies.Clear(); _sky = null; _r.Lighting = new SceneLighting();
@@ -636,6 +642,7 @@ public sealed partial class SceneViewport : UserControl
                 _staticKey = key;
             }
             _r.DrawLineBatch(_staticLines, vp, onTop: true);
+            DrawSpawnFigures(vp);
             DrawSelectionCollision(vp);
             if (Selected != null) DrawGizmo(vp);
         }
@@ -691,6 +698,7 @@ public sealed partial class SceneViewport : UserControl
         {
             foreach (var o in Scene.Objects.Where(o => o.Visible && (o.Model == null || (o.Kind == SceneObjectKind.Marker && !_showObjects)) && (o.Kind != SceneObjectKind.Marker || ShowMarkers)))
             {
+                if (SpawnPoints.Is(o)) continue;   // drawn every frame, thicker: DrawSpawnFigures
                 if (o.Kind == SceneObjectKind.Marker) AddBox(lines, o, MarkerColor(o.Marker!.Type));
                 else AddCross(lines, o.Transform.Translation, 2, new Vector3(1, 0, 1));
             }
@@ -725,6 +733,49 @@ public sealed partial class SceneViewport : UserControl
         uint h = (uint)t * 2654435761u;
         return new Vector3(0.35f + (h & 0xFF) / 400f, 0.35f + ((h >> 8) & 0xFF) / 400f, 0.35f + ((h >> 16) & 0xFF) / 400f);
     }
+
+    /// <summary>Colour of player start points (markers of type 4): bright green, unlike any other marker.</summary>
+    public static readonly Vector3 SpawnColour = new(0.15f, 1f, 0.35f);
+
+    /// <summary>The facing direction of a marker on the ground: its local +Z turned by its yaw (verified against the game
+    /// camera behind the player at three starts, see <see cref="SpawnPoints"/>).</summary>
+    static Vector3 Facing(SceneObject o)
+    {
+        var f = new Vector3(o.Transform.M31, 0, o.Transform.M33);
+        return f.LengthSquared() > 1e-8f ? Vector3.Normalize(f) : Vector3.UnitZ;
+    }
+
+    /// <summary>A player start: a ring on the ground, an arrow the way Banjo faces, and a flag pole (see SpawnBounds).</summary>
+    static void AddSpawnFigure(List<(Vector3, Vector3, Vector3)> l, SceneObject o)
+    {
+        var c = SpawnColour; var p = o.Transform.Translation; var f = Facing(o); var s = Vector3.Cross(Vector3.UnitY, f);
+        const int N = 24; const float R = 1.6f;
+        for (int i = 0; i < N; i++)
+        {
+            float a0 = i * MathF.Tau / N, a1 = (i + 1) * MathF.Tau / N;
+            l.Add((p + (f * MathF.Cos(a0) + s * MathF.Sin(a0)) * R, p + (f * MathF.Cos(a1) + s * MathF.Sin(a1)) * R, c));
+        }
+        var tip = p + f * 5f + Vector3.UnitY * 0.05f; var b0 = p + Vector3.UnitY * 0.05f;
+        l.Add((b0, tip, c)); l.Add((tip, tip - f * 1.4f + s * 0.9f, c)); l.Add((tip, tip - f * 1.4f - s * 0.9f, c));
+        l.Add((tip - f * 1.4f + s * 0.9f, tip - f * 1.4f - s * 0.9f, c));
+        var top = p + Vector3.UnitY * 3.4f;
+        l.Add((p, top, c));
+        var flag = top - Vector3.UnitY * 0.9f;
+        l.Add((top, top - Vector3.UnitY * 0.45f + f * 1.4f, c)); l.Add((top - Vector3.UnitY * 0.45f + f * 1.4f, flag, c));
+        l.Add((top - Vector3.UnitY * 0.2f, top - Vector3.UnitY * 0.45f + f * 1.1f, c)); l.Add((top - Vector3.UnitY * 0.7f, top - Vector3.UnitY * 0.45f + f * 1.1f, c));
+    }
+
+    /// <summary>Player start figures (a few dozen segments), 3 pixels wide on top of everything.</summary>
+    void DrawSpawnFigures(Matrix4x4 vp)
+    {
+        if (!ShowMarkers || Scene == null) return;
+        var l = new List<(Vector3, Vector3, Vector3)>();
+        foreach (var o in Scene.Objects) if (o.Visible && SpawnPoints.Is(o) && Vector3.Distance(o.Transform.Translation, _camPos) < 3000) AddSpawnFigure(l, o);
+        if (l.Count > 0) _r.Lines(l, vp, true, 3f);
+    }
+
+    /// <summary>Picking / selection box of a start figure (model space of the marker).</summary>
+    static readonly (Vector3 Min, Vector3 Max) SpawnBounds = (new(-1.7f, -0.1f, -1.7f), new(1.7f, 3.5f, 5.1f));
 
     static void AddCross(List<(Vector3, Vector3, Vector3)> l, Vector3 p, float s, Vector3 c)
     {
@@ -859,6 +910,8 @@ public sealed partial class SceneViewport : UserControl
         if (_barOv.Key != barKey)
             using (var bmp = DrawBar(showLight)) _r.UpdateOverlay(_barOv, bmp, barKey);
         _r.DrawOverlay(_barOv, cr.X, cr.Y, W, H);
+        DrawSpawnLabels(W, H);
+        DrawTip(W, H);
         var hud = HudText();
         if (hud != null)
         {
@@ -866,6 +919,102 @@ public sealed partial class SceneViewport : UserControl
             if (_hudOv.Key != k) using (var bmp = DrawHud(hud.Value.Main, hud.Value.Hint, hud.Value.Colour)) _r.UpdateOverlay(_hudOv, bmp, k);
             _r.DrawOverlay(_hudOv, 12, H - _hudOv.H - 12, W, H);
         }
+    }
+
+    readonly Dictionary<string, Renderer.Overlay> _spawnLabels = new();
+
+    /// <summary>"Player start (Banjo)" (etc.) above every visible start point within 2000 units, drawn on top.</summary>
+    void DrawSpawnLabels(int W, int H)
+    {
+        if (Scene == null || !ShowMarkers) return;
+        foreach (var o in Scene.Objects)
+        {
+            if (!o.Visible || !SpawnPoints.Is(o) || SpawnPoints.Label(o) is not { } text) continue;
+            var top = o.Transform.Translation + Vector3.UnitY * 3.7f;
+            if (Vector3.Dot(top - _camPos, Forward()) < 0.5f || Vector3.Distance(top, _camPos) > 2000) continue;
+            if (ToScreen(top) is not { } sp) continue;
+            if (!_spawnLabels.TryGetValue(text, out var ov))
+            {
+                _spawnLabels[text] = ov = new Renderer.Overlay();
+                using var bmp = DrawLabel(text, o == Selected);
+                _r.UpdateOverlay(ov, bmp, text);
+            }
+            int x = (int)sp.X - ov.W / 2, y = (int)sp.Y - ov.H - 2;
+            if (x > W || y > H || x + ov.W < 0 || y + ov.H < 0) continue;
+            _r.DrawOverlay(ov, x, y, W, H);
+        }
+    }
+
+    static Bitmap DrawLabel(string text, bool selected)
+    {
+        using var font = new Font("Segoe UI Semibold", 9f);
+        using var probe = new Bitmap(1, 1); using var pg = Graphics.FromImage(probe);
+        var sz = pg.MeasureString(text, font);
+        int w = (int)Math.Ceiling(sz.Width) + 26, h = (int)Math.Ceiling(sz.Height) + 6;
+        var bmp = new Bitmap(w, h, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+        using var g = Graphics.FromImage(bmp);
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias; g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+        g.Clear(Color.Transparent);
+        using (var p = Rounded(new Rectangle(0, 0, w - 1, h - 1), 5)) using (var b = new SolidBrush(Color.FromArgb(235, 246, 247, 249))) using (var e = new Pen(Color.FromArgb(255, 30, 160, 70), 1.5f)) { g.FillPath(b, p); g.DrawPath(e, p); }
+        // a little flag in the start points' green
+        using (var fb = new SolidBrush(Color.FromArgb(255, 30, 190, 80))) g.FillPolygon(fb, new[] { new PointF(8, 4), new PointF(18, 8), new PointF(8, 12) });
+        using (var pen = new Pen(Color.FromArgb(255, 32, 35, 42), 1.4f)) g.DrawLine(pen, 8, 4, 8, h - 4);
+        using (var tb = new SolidBrush(Color.FromArgb(255, 32, 35, 42))) g.DrawString(text, font, tb, 20, 2);
+        return bmp;
+    }
+
+    // ---- hover tooltip (start points)
+    // drawn in the view like the HUD: a WinForms ToolTip is not shown over the GL window (its native child takes the
+    // activation, so ToolTip.Show's "form is active" test fails)
+    readonly Renderer.Overlay _tipOv = new();
+    Point _tipAt;
+    readonly System.Windows.Forms.Timer _hoverTimer = new() { Interval = 450 };
+    SceneObject? _tipFor;
+
+    void HoverMoved()
+    {
+        _hoverTimer.Stop();
+        if (_tipFor != null) { _tipFor = null; _gl.Invalidate(); }
+        _hoverTimer.Start();
+    }
+
+    void HoverTick()
+    {
+        _hoverTimer.Stop();
+        if (Scene == null || _looking || _panning || _xf != XfKind.None || !_gl.ClientRectangle.Contains(_mouse)) return;
+        var o = Pick(_mouse).Obj;
+        if (!SpawnPoints.Is(o)) return;
+        _tipFor = o;
+        _tipAt = new Point(_mouse.X + 14, _mouse.Y + 18);
+        _gl.Invalidate();
+    }
+
+    void DrawTip(int W, int H)
+    {
+        if (_tipFor == null) return;
+        string key = $"tip|{_tipFor.Id}|{_tipFor.Name}|{_tipFor.ModelName}";
+        if (_tipOv.Key != key)
+            using (var bmp = DrawHud(SpawnPoints.Label(_tipFor) ?? _tipFor.Name, Wrap($"{SpawnPoints.Detail(_tipFor)}\n{_tipFor.Name} in {_tipFor.ModelName}", 70), Color.FromArgb(255, 30, 190, 80)))
+                _r.UpdateOverlay(_tipOv, bmp, key);
+        int x = Math.Min(_tipAt.X, Math.Max(0, W - _tipOv.W - 4)), y = Math.Min(_tipAt.Y, Math.Max(0, H - _tipOv.H - 4));
+        _r.DrawOverlay(_tipOv, x, y, W, H);
+    }
+
+    static string Wrap(string s, int width)
+    {
+        var sb = new System.Text.StringBuilder();
+        foreach (var para in s.Split('\n'))
+        {
+            int col = 0;
+            foreach (var w in para.Split(' '))
+            {
+                if (col > 0 && col + w.Length + 1 > width) { sb.Append('\n'); col = 0; }
+                else if (col > 0) { sb.Append(' '); col++; }
+                sb.Append(w); col += w.Length;
+            }
+            sb.Append('\n');
+        }
+        return sb.ToString().TrimEnd('\n');
     }
 
     // NB Studio's own look: the light panels of the menu bar, toolbar and tabs (SystemColors.Control 240,240,240 with a
@@ -1385,6 +1534,7 @@ public sealed partial class SceneViewport : UserControl
         {
             int hb = BarHit(e.Location);
             int hh = hb < 0 ? HandleAt(e.Location) : -1;
+            HoverMoved();
             if (hb != _hoverBar || hh != _hoverHandle) { _hoverBar = hb; _hoverHandle = hh; _gl.Invalidate(); }
         }
     }

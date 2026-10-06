@@ -16,6 +16,11 @@ public sealed class Settings
     /// when the workspace opens.</summary>
     public Dictionary<string, string> LastWorlds { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>Executable (After-Party) mods ticked in every NEW workspace (File > Settings > Mods for new workspaces);
+    /// null = the recommended set <see cref="NB.Core.Mods.ExePatches.RecommendedForNewWorkspaces"/>.</summary>
+    public List<string>? NewWorkspaceMods { get; set; }
+    public IReadOnlyList<string> NewWorkspaceModsOrDefault => NewWorkspaceMods ?? NB.Core.Mods.ExePatches.RecommendedForNewWorkspaces;
+
     /// <summary>How many steps Ctrl+Z can go back.</summary>
     public int UndoSteps { get; set; } = 100;
     /// <summary>3D view: S scales the selection (Blender style). Off: S always flies backwards.</summary>
