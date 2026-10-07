@@ -104,13 +104,15 @@ public static class HkCollisionImport
     }
 
     /// <summary>Replaces the collision mesh of asset <paramref name="symbol"/> in <paramref name="caff"/>.</summary>
-    public static Result Replace(CaffFile caff, int symbol, IReadOnlyList<Vector3> positions, IReadOnlyList<int> triangles, byte[]? material = null, bool allowBreakable = false)
+    /// <param name="triangleMaterials">Optional material index per triangle (into the asset's material table); null: the
+    /// old mesh's most common index for every triangle.</param>
+    public static Result Replace(CaffFile caff, int symbol, IReadOnlyList<Vector3> positions, IReadOnlyList<int> triangles, byte[]? material = null, bool allowBreakable = false, byte[]? triangleMaterials = null)
     {
         var view = new AssetView(caff, symbol);
         if (!view.Has(".data")) throw new InvalidDataException("asset has no .data part");
         int pid = view.PartId(".data");
         var part = view.Part(pid);
-        var (data, res) = ReplaceData(part.Data, positions, triangles, material, allowBreakable);
+        var (data, res) = ReplaceData(part.Data, positions, triangles, material, allowBreakable, triangleMaterials);
         // pointer fields that were null before (assets whose mesh had only shape subparts) need relocations
         var reloc = caff.Relocs.FirstOrDefault(x => x.FromPart == pid && x.ToPart == pid);
         var missing = res.SelfPointers.Where(o => !caff.Relocs.Any(x => x.FromPart == pid && x.Offsets.Contains(o))).ToList();
@@ -128,7 +130,7 @@ public static class HkCollisionImport
     public static readonly byte[] DefaultMaterial = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4 };
 
     /// <param name="material">12-byte material record for assets without a material table (default <see cref="DefaultMaterial"/>).</param>
-    public static (byte[] Data, Result Result) ReplaceData(byte[] asset, IReadOnlyList<Vector3> positions, IReadOnlyList<int> triangles, byte[]? material = null, bool allowBreakable = false)
+    public static (byte[] Data, Result Result) ReplaceData(byte[] asset, IReadOnlyList<Vector3> positions, IReadOnlyList<int> triangles, byte[]? material = null, bool allowBreakable = false, byte[]? triangleMaterials = null)
     {
         if (IsBreakable(asset) && !allowBreakable)
             throw new InvalidDataException("breakable scenery (the asset carries physics pieces, wrapper entry type 6): replacing its collision froze the game; not supported");
@@ -306,8 +308,17 @@ public static class HkCollisionImport
         if (matIdxOff > 0 && matBase > 0 && r.OldTriangles > 0 && matIdxOff + r.OldTriangles <= asset.Length)
             mat = asset.AsSpan(matIdxOff, r.OldTriangles).ToArray().GroupBy(x => x).OrderByDescending(g => g.Count()).First().Key;
         if (mat >= numMat) mat = 0;
-        var mb = Enumerable.Repeat(mat, nTri).ToArray();
-        r.Notes.Add($"material index {mat} for every triangle ({numMat} material(s))");
+        byte[] mb;
+        if (triangleMaterials != null && triangleMaterials.Length == nTri)
+        {
+            mb = triangleMaterials.Select(x => x < numMat ? x : mat).ToArray();
+            r.Notes.Add($"material index per triangle kept ({numMat} material(s))");
+        }
+        else
+        {
+            mb = Enumerable.Repeat(mat, nTri).ToArray();
+            r.Notes.Add($"material index {mat} for every triangle ({numMat} material(s))");
+        }
 
         // drop a tail appended by a previous import (nothing else points into it), then append
         int keep = asset.Length;

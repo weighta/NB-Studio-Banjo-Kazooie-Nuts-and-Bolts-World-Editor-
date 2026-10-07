@@ -16,6 +16,8 @@ public sealed class TransformPanel : UserControl
     SceneObject? _obj;
     bool _filling;
     public event Action<SceneObject, Matrix4x4>? TransformChanged;
+    /// <summary>Info text for special selections (the collision selection's stand-in); null: the usual text.</summary>
+    public Func<SceneObject, string?>? InfoFor;
     /// <summary>A path node's next-node index was edited (object, previous index).</summary>
     public event Action<SceneObject, int>? LinkChanged;
 
@@ -81,6 +83,7 @@ public sealed class TransformPanel : UserControl
             Matrix4x4.Decompose(_obj.Transform, out var s, out var q, out var t);
             var e = ToEuler(q);
             Set(_pos, t); Set(_rot, e); Set(_scl, s);
+            if (InfoFor?.Invoke(_obj) is string special) { _info.Text = special; return; }
             if (_obj.Marker is { Type: 22 } pm) _link.Value = Math.Clamp(pm.Link, 0, 65535);
             _info.Text = _obj.Kind == SceneObjectKind.Terrain
                 ? "Terrain is the background model's own geometry; it is not movable here. Use the Tag Editor for its data."
@@ -96,7 +99,8 @@ public sealed class TransformPanel : UserControl
                 : $"Instance #{_obj.Instance?.Index}, reference model #{_obj.Instance?.RefModel}\n" +
                   $"Record 0x{_obj.Instance?.RecordOffset:X}, matrix 0x{_obj.Instance?.MatrixOffset:X}, node {_obj.Instance?.PlacementNode}\n" +
                   (_obj.Dirty ? "Modified (not yet saved to the workspace)" : "Unmodified") +
-                  "\nCollision for scenery lives in the world's havok asset and is not moved with the visual (under investigation).";
+                  "\nIts collision (its model's Havok asset) moves and turns with it in the game (verified). Scaling does not scale the collision " +
+                  "(Havok shapes keep their size): fit it with Edit Collision (toolbar) or the collision right-click menu.";
         }
         finally { _filling = false; }
     }

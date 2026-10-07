@@ -10,7 +10,7 @@ using NB.Studio.Viewport;
 
 namespace NB.Studio;
 
-public sealed class MainForm : Form
+public sealed partial class MainForm : Form
 {
     Workspace? _ws;
     AssetIndex? _index;
@@ -136,23 +136,47 @@ public sealed class MainForm : Form
         _view.GrassChanged += s => Log("  " + s);
         _view.SelectionCollisionChanged += s => Log("Collision: " + s);
         _view.TextureSource = n => _scene?.LoadTexture(n);
-        _view.EditStarted += (o, before) => _pendingBefore = before;
-        _view.ObjectEdited += o => PushUndo(o, _pendingBefore, o.Transform);
+        // a confirmed G / R / T or gizmo drag: one undo step for the whole selection
+        _view.ObjectsEdited += list =>
+        {
+            if (list.Count == 1) PushUndo(list[0].Obj, list[0].Before, list[0].Obj.Transform);
+            else { _history.PushTransforms(list.Select(x => (x.Obj, x.Before, x.Obj.Transform)).ToList()); UpdateTitle(); foreach (var x in list) RefreshNode(x.Obj); }
+        };
+        _view.SelectionSetChanged += OnSelectionSet;
+        _view.HiddenChanged += n => { FillTree(); _status.Text = n > 0 ? $"{n} object(s) hidden in the 3D view (this session only) — U or Alt+H shows them again." : "Every object is shown again."; };
         _view.ContextMenuRequested += (o, p) => { if (o != null) { _menuPoint = p; BuildObjectMenu(o); _objMenu.Show(_view, p); } };
-        _transform.TransformChanged += (o, before) => { PushUndo(o, before, o.Transform); _view.Refresh3D(); UpdateTitle(); };
+        _transform.TransformChanged += (o, before) =>
+        {
+            // typed values with several objects selected: the same change for all of them, one undo step
+            if (o != _collProxy && o == _view.Selected && _view.SelectedObjects.Count > 1)
+            {
+                var all = _view.ApplyDeltaToOthers(before);
+                _history.PushTransforms(all.Select(x => (x.Obj, x.Before, x.Obj.Transform)).ToList());
+                foreach (var x in all) RefreshNode(x.Obj);
+            }
+            else PushUndo(o, before, o.Transform);
+            _view.Refresh3D(); UpdateTitle();
+        };
+        _transform.InfoFor = CollisionInfo;
+        InitCollisionEditing();
         _transform.LinkChanged += (o, before) => { _history.PushLink(o, before, o.Marker!.Link); _view.Refresh3D(); UpdateTitle(); Log($"{o.Name}: next path node {before} -> {o.Marker!.Link} (World > Save to write it)"); };
         _history.Limit = _settings.UndoSteps;
         _history.Log = Log;
         _history.Changed += UpdateUndoUi;
         _view.CollisionInfo += s => Log("Collision: " + s);
-        _view.SScales = _settings.SScales;
         FormClosed += (_, _) =>
         {
             _history.Detach();
             // a test game still being started: give its controller back (the virtual pad would otherwise stay plugged in)
             if (_qtBoot is { IsCompleted: false }) { _qtCts?.Cancel(); try { using var pad = new QuickTest.VirtualPad(_qtPort); pad.Unplug(); } catch (Exception) { } }
         };
-        _tree.AfterSelect += (_, e) => { if (!_syncingTree && e.Node?.Tag is SceneObject o) _view.Select(o, focus: true); };
+        _tree.AfterSelect += (_, e) =>
+        {
+            if (_syncingTree || e.Node?.Tag is not SceneObject o) return;
+            // Ctrl / Shift + click in the list adds or removes, like in the 3D view
+            if ((ModifierKeys & (Keys.Control | Keys.Shift)) != 0 && _view.Selected != null) _view.ToggleSelect(o);
+            else _view.Select(o, focus: true);
+        };
         _tree.ShowNodeToolTips = true;
         _tree.AfterCheck += (_, e) => { if (e.Node?.Tag is SceneObject o) { o.Visible = e.Node.Checked; _view.Refresh3D(); } else if (e.Action != TreeViewAction.Unknown && e.Node != null) foreach (TreeNode c in e.Node.Nodes) c.Checked = e.Node.Checked; };
         _tree.NodeMouseClick += (_, e) => { if (e.Button == MouseButtons.Right && e.Node.Tag is SceneObject o) { _menuPoint = null; _tree.SelectedNode = e.Node; BuildObjectMenu(o); _objMenu.Show(_tree, e.Location); } };
@@ -191,7 +215,7 @@ public sealed class MainForm : Form
         FormClosing += (_, e) =>
         {
             if (_scripted) return;   // test runs end without questions
-            if (_scene != null && _scene.Objects.Any(o => o.Dirty) &&
+            if (_scene != null && (_scene.Objects.Any(o => o.Dirty) || CollisionDirty) &&
                 MessageBox.Show(this, "There are unsaved world edits. Quit anyway?", Text, MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) e.Cancel = true;
             else if (_atmos.HasUnsaved && !e.Cancel &&
                 MessageBox.Show(this, "There are unsaved sky, light and fog changes (Atmosphere tab). Quit anyway?", Text, MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) e.Cancel = true;
@@ -258,10 +282,10 @@ public sealed class MainForm : Form
                 "Lines that start with ↳ are Acts (the challenges). They use the same world with their own objects.",
                 () => Scr(_leftTabs), () => _leftTabs.SelectedIndex = 0));
             steps.Add(new("The 3D view",
-                "Your world, in 3D.\n• Look around: hold the right mouse button and move the mouse.\n• Fly: W A S D, Q and E for down and up, Shift to go faster. Tip: hold the right mouse button while you fly, then S always flies backwards (otherwise, with something selected, S scales it).\n" +
+                "Your world, in 3D.\n• Look around: hold the right mouse button and move the mouse.\n• Fly: W A S D, Q and E for down and up, Shift to go faster.\n" +
                 "• The buttons in the top-right corner switch the view: Wireframe, Solid, Textured, or Rendered (lit like the game). Collision shows what Banjo and the vehicles bump into.\n" +
                 "• Select: left-click an object.\n• Move it: press G and move the mouse, then click to drop it. Press X, Y or Z while moving to slide along one direction only.\n" +
-                "• Scale it: press S (with X, Y or Z for one direction).\n• Made a mistake? Ctrl+Z undoes it.",
+                "• Scale it: press T (with X, Y or Z for one direction), or use the Scale tool (3).\n• Ctrl+click or Shift+click adds objects to the selection; B or Ctrl+drag selects a rectangle. H hides the selection, U shows everything again.\n• Made a mistake? Ctrl+Z undoes it.",
                 () => Scr(_center), () => _center.SelectedIndex = 0));
             steps.Add(new("The toolbar",
                 "Quick buttons for the tools: Select, Move, Rotate and Scale.\n\nUndo / Redo (Ctrl+Z / Ctrl+Y) take back any change. Save World (Ctrl+S) writes your changes into the workspace. Test in Xenia (F5) starts your modded game right in the world you have open, so you can try it at once.",
@@ -353,6 +377,7 @@ public sealed class MainForm : Form
         file.DropDownItems.Add(new ToolStripSeparator());
         file.DropDownItems.Add(new ToolStripMenuItem("&Settings…", null, (_, _) => ShowSettings(), Keys.Control | Keys.Oemcomma) { ShortcutKeyDisplayString = "Ctrl+," });
         file.DropDownItems.Add(new ToolStripSeparator());
+        file.DropDownItems.Add(new ToolStripMenuItem("&Close Workspace", null, async (_, _) => await CloseWorkspace(), Keys.Control | Keys.W) { ToolTipText = "Close the open workspace and go back to the start page" });
         file.DropDownItems.Add("E&xit", null, (_, _) => Close());
 
         var edit = new ToolStripMenuItem("&Edit");
@@ -420,7 +445,11 @@ public sealed class MainForm : Form
         var vG = new ToolStripMenuItem("Grass (chunk-17 grass layers)") { Checked = _view.ShowGrass, CheckOnClick = true,
             ToolTipText = "Grass tiles laid out like the game: the grass model at every cell of each layer with density, lifted by the layer's height texture and coloured by its shadow texture (time-of-day variant of the current light)." };
         vG.CheckedChanged += (_, _) => _view.ShowGrass = vG.Checked;
-        view.DropDownItems.AddRange(new ToolStripItem[] { vMode, new ToolStripSeparator(), vT, vS, vO, vG, vM, vP, vC, vSC });
+        view.DropDownItems.AddRange(new ToolStripItem[] { vMode, new ToolStripSeparator(), vT, vS, vO, vG, vM, vP, vC, vSC, CollisionViewMenuItem(), new ToolStripSeparator(),
+            new ToolStripMenuItem("Hide Selected", null, (_, _) => _view.HideSelection()) { ShortcutKeyDisplayString = "H", ToolTipText = "Hidden in the 3D view for this session only (not deleted, not saved)" },
+            new ToolStripMenuItem("Unhide All", null, (_, _) => _view.UnhideAll()) { ShortcutKeyDisplayString = "U / Alt+H" },
+            new ToolStripMenuItem("Select All Shown", null, (_, _) => SelectAllShown()) { ShortcutKeyDisplayString = "Ctrl+A" },
+            new ToolStripMenuItem("Box Select", null, (_, _) => _view.ArmBoxSelect()) { ShortcutKeyDisplayString = "B / Ctrl+drag" } });
 
         var build = new ToolStripMenuItem("&Build");
         build.DropDownItems.Add("&Validate Workspace", null, async (_, _) => await ValidateWorkspace());
@@ -522,7 +551,7 @@ public sealed class MainForm : Form
         };
         var help = new ToolStripMenuItem("&Help");
         help.DropDownItems.Add("Controls", null, (_, _) => MessageBox.Show(this,
-            "3D view:\n  Right-drag: look    WASD / Q E or the arrow keys: fly (Shift = fast; with a selection S scales it, except while you fly: right button held or W A D Q E just used; File > Settings)\n  Wheel: dolly    Middle-drag: pan    Left-click: select    F: focus selection    Esc: deselect\n  View modes: the bar in the top-right corner (Wire, Solid, Texture, Render) or Shift+Z. Render uses the level's light setup (click the light line to switch).\n\nTransforms (Blender style), with an object selected:\n  G move on the camera plane, R rotate, S scale; then X / Y / Z constrain to that world axis (drawn as a line in the axis colour;\n  press again for the object's own axis, again for free). Type a value (e.g. G Z 5 Enter); Ctrl snaps.\n  Left click / Enter confirms (one undo step), right click / Esc cancels.\n  1 / 2 / 3: move / rotate / scale gizmo; drag the selection with the left button (ground plane), or drag an axis handle\n  (or hold X, Y or Z) to constrain to that axis.\n  Right-click an object for its context menu.\n\nEdits are held in memory until World > Save (Ctrl+S) writes the bundle into the workspace.\nCtrl+Z / Ctrl+Y undo and redo any change, including imports, duplicates, deletes and saved tag or atmosphere edits (File > Settings: number of steps).\nCtrl+C / Ctrl+X copy / cut the selected object, Ctrl+V pastes a copy where the mouse points, Del deletes it (all undoable).\nF5 plays the open world in Xenia (no title screen or menus), Shift+F5 starts at the 3D view's camera, Ctrl+F5 starts at the title screen.", "Controls"));
+            "3D view:\n  Right-drag: look    WASD / Q E or the arrow keys: fly (Shift = fast; S always flies backwards)\n  Wheel: dolly    Middle-drag: pan    Left-click: select    Ctrl / Shift + click: add or remove    B or Ctrl+drag: rectangle    Ctrl+A: all shown    F: focus    Esc: deselect\n  H: hide the selection (this session only)    U or Alt+H: show everything again\n  View modes: the bar in the top-right corner (Wire, Solid, Texture, Render) or Shift+Z. Render uses the level's light setup (click the light line to switch).\n\nTransforms (Blender style), with an object selected:\n  G move on the camera plane, R rotate, T scale; then X / Y / Z constrain to that world axis (drawn as a line in the axis colour;\n  press again for the object's own axis, again for free). Type a value (e.g. G Z 5 Enter); Ctrl snaps.\n  Left click / Enter confirms (one undo step, also for several selected objects), right click / Esc cancels.\n  1 / 2 / 3: move / rotate / scale gizmo; drag the selection with the left button (ground plane), or drag an axis handle\n  (or hold X, Y or Z) to constrain to that axis.\n  Right-click an object for its context menu.\n\nEdits are held in memory until World > Save (Ctrl+S) writes the bundle into the workspace.\nCtrl+Z / Ctrl+Y undo and redo any change, including imports, duplicates, deletes and saved tag or atmosphere edits (File > Settings: number of steps).\nCtrl+C / Ctrl+X copy / cut the selected objects, Ctrl+V pastes copies where the mouse points (keeping their layout), Del deletes them (all undoable).\nEdit Collision (toolbar): click / drag to select collision, G / R / T to move it, Del, Ctrl+C / X / V / D, right-click for boxes, ramps and planes.\nF5 plays the open world in Xenia (no title screen or menus), Shift+F5 starts at the 3D view's camera, Ctrl+F5 starts at the title screen.", "Controls"));
         help.DropDownItems.Add("Take the Tour (for beginners)", null, (_, _) => StartTour());
         help.DropDownItems.Add("File Format Notes (docs)", null, (_, _) => OpenDocs());
         ms.Items.AddRange(new ToolStripItem[] { file, edit, world, view, build, tools, mods, help });
@@ -540,6 +569,7 @@ public sealed class MainForm : Form
         ts.Items.Add(Mode("Move (1)", GizmoMode.Move));
         ts.Items.Add(Mode("Rotate (2)", GizmoMode.Rotate));
         ts.Items.Add(Mode("Scale (3)", GizmoMode.Scale));
+        ts.Items.AddRange(CollisionToolbarItems());
         ts.Items.Add(new ToolStripSeparator());
         ts.Items.Add(new ToolStripButton("Save World (Ctrl+S)", null, (_, _) => SaveWorld()));
         ts.Items.Add(new ToolStripButton("Test in Xenia (F5)", null, async (_, _) => await QuickTestXenia(false)) { ToolTipText = "Play the open world in Xenia: no title screen, menus or intro (Shift+F5: start at the 3D view's camera; Ctrl+F5: title screen)" });
@@ -563,7 +593,8 @@ public sealed class MainForm : Form
         var sc = new ToolStripMenuItem("Show Collision of Selection") { Checked = _view.ShowSelectionCollision, ToolTipText = "Magenta wireframe of this object's own Havok collision (the aid_havok asset of each of its models), drawn on top." };
         sc.Click += (_, _) => { _view.Select(o); SetSelectionCollision(!_view.ShowSelectionCollision); };
         _objMenu.Items.Add(sc);
-        _objMenu.Items.Add(new ToolStripMenuItem("Hide in Editor", null, (_, _) => { o.Visible = false; FillTree(); _view.Refresh3D(); }));
+        _objMenu.Items.Add(new ToolStripMenuItem(_view.SelectedObjects.Count > 1 && _view.IsSelected(o) ? $"Hide {_view.SelectedObjects.Count} Selected Objects" : "Hide", null, (_, _) => { if (!_view.IsSelected(o)) _view.Select(o); _view.HideSelection(); }) { ShortcutKeyDisplayString = "H", ToolTipText = "Hidden in the 3D view for this session only (not deleted, not saved)." });
+        _objMenu.Items.Add(new ToolStripMenuItem("Unhide All", null, (_, _) => _view.UnhideAll()) { ShortcutKeyDisplayString = "U", Enabled = _view.HiddenCount > 0 || _scene?.Objects.Any(x => !x.Visible) == true });
         _objMenu.Items.Add(new ToolStripSeparator());
         var imp = _objMenu.Items.Add("Import Model (replace geometry with OBJ/FBX)…", null, async (_, _) => await ImportModel(o));
         imp.Enabled = o.Kind == SceneObjectKind.Scenery;
@@ -577,7 +608,10 @@ public sealed class MainForm : Form
         col.ToolTipText = colAsset != null
             ? $"Replaces the Havok collision mesh {colAsset} (all instances of this model) with the triangles of an OBJ/FBX, or with the box around it; a new MOPP tree is built."
             : "This object's model has no replaceable mesh collision in this bundle (none, or breakable scenery with physics pieces, which is not supported).";
-        var dup = _objMenu.Items.Add("Duplicate", null, async (_, _) => await DuplicateObject(o, new Vector3(2, 0, 0)));
+        var dup = _objMenu.Items.Add(_view.SelectedObjects.Count > 1 && _view.IsSelected(o) ? $"Duplicate {_view.SelectedObjects.Count} Selected" : "Duplicate", null, async (_, _) =>
+        {
+            if (_view.IsSelected(o) && _view.SelectedObjects.Count > 1) await DuplicateSelection(); else await DuplicateObject(o, new Vector3(2, 0, 0));
+        });
         dup.Enabled = o.Kind == SceneObjectKind.Scenery;
         dup.ToolTipText = "Adds a new scenery instance (copy of this one, 2 units along X). Verified in Xenia.";
         var cp = new ToolStripMenuItem("Copy", null, (_, _) => { _view.Select(o); CopySelection(); }) { ShortcutKeyDisplayString = "Ctrl+C", Enabled = o.Kind == SceneObjectKind.Scenery };
@@ -647,10 +681,49 @@ public sealed class MainForm : Form
         if (d.ShowDialog(this) != DialogResult.OK) return;
         _settings.Save();
         _history.Limit = _settings.UndoSteps; _history.ApplyLimit();
-        _view.SScales = _settings.SScales;
         _start.SetAutoOpen(_settings.AutoOpenLast);
-        Log($"Settings saved: {_settings.UndoSteps} undo steps, S key {(_settings.SScales ? "scales the selection" : "flies backwards")}, " +
+        Log($"Settings saved: {_settings.UndoSteps} undo steps, " +
             $"{(_settings.AutoOpenLast ? "opens the last workspace at start" : "starts on the start page")}.");
+    }
+
+    /// <summary>
+    /// File > Close Workspace (Ctrl+W): back to the start page. Unsaved world edits (objects, collision) can be saved first;
+    /// a test game NB Studio started for this workspace can be closed; the scene, the panels and the undo history are cleared.
+    /// </summary>
+    async Task CloseWorkspace()
+    {
+        if (_ws == null) { Log("No workspace is open."); return; }
+        if (_busy) { Log("Close Workspace: NB Studio is busy, try again in a moment."); return; }
+        _view.CancelTransform();
+        if (!_scripted && _scene != null && (_scene.Objects.Any(o => o.Dirty) || CollisionDirty || _atmos.HasUnsaved))
+        {
+            var ans = MessageBox.Show(this, "Save the world changes before closing the workspace?" + (_atmos.HasUnsaved ? "\n\n(Unsaved sky, light and fog changes of the Atmosphere tab are not saved by this.)" : ""),
+                "Close Workspace", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+            if (ans == DialogResult.Cancel) return;
+            if (ans == DialogResult.Yes) SaveWorld();
+        }
+        if (_qtProcess is { HasExited: false } qt)
+        {
+            if (_scripted || MessageBox.Show(this, "The test game NB Studio started for this workspace is still running. Close it too?", "Close Workspace", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
+            { _qtCts?.Cancel(); await CloseTestGame(qt); }
+        }
+        var root = _ws.Root;
+        _view.CollisionMode = false;
+        _soups.Clear(); _soupWhy.Clear(); _soupMesh.Clear(); _collSel.Clear(); _collAt.Clear(); _collProxy = null; _collClip = null;
+        _view.SetScene(null);
+        _scene = null; _sceneEntry = null; _sceneAct = null; _acts = new();
+        _tree.Nodes.Clear(); _worlds.Items.Clear();
+        _transform.SetObject(null); _dialogue.Show(null, null, null);
+        try { _atmos.SetWorkspace(null, null); } catch (Exception) { }
+        _texLib?.Close();
+        _history.Attach(null);
+        _ws = null; _index = null; _clip.Clear();
+        _status.Text = "";
+        _start.SetLastWorkspace(root);
+        _start.SetStatus("");
+        _start.Visible = true; _start.BringToFront();
+        UpdateTitle(); UpdateUndoUi();
+        Log($"Workspace {Path.GetFileName(root.TrimEnd('\\', '/'))} closed.");
     }
 
     async Task NewWorkspace()
@@ -1045,17 +1118,28 @@ public sealed class MainForm : Form
     static string Cap(string s) => s.Length == 0 ? s : char.ToUpperInvariant(s[0]) + s[1..];
     static string Fmt(Vector3 v) => string.Create(System.Globalization.CultureInfo.InvariantCulture, $"({v.X:0.##}, {v.Y:0.##}, {v.Z:0.##})");
 
-    async Task DeleteObject(SceneObject o, bool confirm = true, string verb = "Deleted")
+    async Task DeleteObject(SceneObject o, bool confirm = true, string verb = "Deleted") => await DeleteObjects(new[] { o }, confirm, verb);
+
+    /// <summary>Deletes scenery objects (hidden: zero scale, far below) with ONE bundle write (one undo step) and one reload.</summary>
+    async Task DeleteObjects(IReadOnlyList<SceneObject> objs, bool confirm = true, string verb = "Deleted")
     {
-        if (!CanAddOrRemove(o, "Delete")) return;
-        if (confirm && MessageBox.Show(this, $"Delete {o.Name} from the world?\n\nIt is hidden (zero scale, moved far below the level) rather than removed from the tables, because the game refers to scenery by index. Ctrl+Z brings it back.", Text, MessageBoxButtons.OKCancel) != DialogResult.OK) return;
+        var list = objs.Where(o => o.Kind == SceneObjectKind.Scenery && o.Instance != null).ToList();
+        int skipped = objs.Count - list.Count;
+        if (list.Count == 0) { if (objs.Count > 0) CanAddOrRemove(objs[0], "Delete"); return; }
+        if (!CanAddOrRemove(null, "Delete")) return;
+        if (skipped > 0) Log($"{verb}: {skipped} selected object(s) are markers or terrain and stay (only scenery can be deleted so far).");
+        string names = list.Count == 1 ? list[0].Name : $"{list.Count} objects";
+        if (confirm && MessageBox.Show(this, $"Delete {names} from the world?\n\nScenery is hidden (zero scale, moved far below the level) rather than removed from the tables, because the game refers to scenery by index. Ctrl+Z brings it back.", Text, MessageBoxButtons.OKCancel) != DialogResult.OK) return;
         try
         {
-            NB.Core.World.InstanceEditor.Hide(_scene!.Caff, _scene.Background.View.Symbol, o.Instance!.Index);
-            o.Transform = o.OriginalTransform;   // an unsaved move of the deleted object is not carried over the reload
-            _ws!.SaveResident(_scene.Bundle, _scene.Caff, $"{verb.ToLowerInvariant()} {o.Name} (hidden)");
+            foreach (var o in list)
+            {
+                NB.Core.World.InstanceEditor.Hide(_scene!.Caff, _scene.Background.View.Symbol, o.Instance!.Index);
+                o.Transform = o.OriginalTransform;   // an unsaved move of a deleted object is not carried over the reload
+            }
+            _ws!.SaveResident(_scene!.Bundle, _scene.Caff, $"{verb.ToLowerInvariant()} {(list.Count == 1 ? list[0].Name : $"{list.Count} objects: " + string.Join(", ", list.Take(6).Select(o => o.Name)))} (hidden)");
             _view.Select(null);
-            Log($"{verb} {o.Name} (instance {o.Instance.Index} hidden; Ctrl+Z brings it back). Reloading world…");
+            Log($"{verb} {names} ({string.Join(", ", list.Take(8).Select(o => "instance " + o.Instance!.Index))}{(list.Count > 8 ? " …" : "")} hidden; Ctrl+Z brings {(list.Count == 1 ? "it" : "them")} back). Reloading world…");
             await OpenWorld(_sceneEntry!, _sceneAct);
         }
         catch (Exception e) { Error("Delete failed", e); }
@@ -1069,32 +1153,33 @@ public sealed class MainForm : Form
 
     bool CopySelection()
     {
-        var o = _view.Selected;
-        if (o == null || _scene == null) { Log("Copy: select an object first (click it in the 3D view)."); return false; }
-        if (!CanAddOrRemove(o, "Copy")) return false;
+        var sel = _view.SelectedObjects;
+        if (sel.Count == 0 || _scene == null) { Log("Copy: select an object first (click it in the 3D view)."); return false; }
+        var list = sel.Where(o => o.Kind == SceneObjectKind.Scenery && o.Instance != null).ToList();
+        if (list.Count == 0) { CanAddOrRemove(sel[0], "Copy"); return false; }
         _clip.Clear();
-        _clip.Add(new ClipItem(_scene.Bundle, o.Instance!.Index, o.Name, o.ModelName, o.Transform, o.BoundsMin, o.BoundsMax));
-        Log($"Copied {o.Name}. Ctrl+V pastes a copy where the mouse points in the 3D view (again for more copies).");
+        foreach (var o in list) _clip.Add(new ClipItem(_scene.Bundle, o.Instance!.Index, o.Name, o.ModelName, o.Transform, o.BoundsMin, o.BoundsMax));
+        Log($"Copied {(list.Count == 1 ? list[0].Name : $"{list.Count} objects")}{(sel.Count > list.Count ? $" ({sel.Count - list.Count} marker(s) / terrain not copied)" : "")}. Ctrl+V pastes where the mouse points in the 3D view (again for more copies).");
         return true;
     }
 
     async Task CutSelection()
     {
-        var o = _view.Selected;
-        if (o == null) { Log("Cut: select an object first."); return; }
-        if (CopySelection()) await DeleteObject(o, confirm: false, verb: "Cut");
+        var sel = _view.SelectedObjects.ToList();
+        if (sel.Count == 0) { Log("Cut: select an object first."); return; }
+        if (CopySelection()) await DeleteObjects(sel, confirm: false, verb: "Cut");
     }
 
     async Task DeleteSelection()
     {
-        var o = _view.Selected;
-        if (o == null) { Log("Delete: select an object first."); return; }
-        await DeleteObject(o, confirm: false);
+        var sel = _view.SelectedObjects.ToList();
+        if (sel.Count == 0) { Log("Delete: select an object first."); return; }
+        await DeleteObjects(sel, confirm: false);
     }
 
-    /// <summary>Ctrl+V: a copy of the copied object on the surface under the mouse (or <paramref name="at"/>, a 3D-view
-    /// pixel; with the mouse outside the view: under the view's centre), rotation and scale kept; in front of the camera
-    /// when the ray hits nothing.</summary>
+    /// <summary>Ctrl+V: copies of the copied objects; the first one on the surface under the mouse (or <paramref name="at"/>, a
+    /// 3D-view pixel; with the mouse outside the view: under the view's centre), the others where they were relative to it;
+    /// rotation and scale kept; in front of the camera when the ray hits nothing. One bundle write (one undo step).</summary>
     async Task<SceneObject?> PasteClipboard(Point? at = null)
     {
         if (_clip.Count == 0) { Log("Paste: nothing copied yet (select an object and press Ctrl+C)."); return null; }
@@ -1104,9 +1189,45 @@ public sealed class MainForm : Form
         if (!CanAddOrRemove(null, "Paste")) return null;
         float size = (c.BoundsMax - c.BoundsMin).Length();
         var (p, hit, mouse) = _view.SurfaceAt(at, Math.Clamp(size * 2, 10, 200));
-        var world = SceneViewport.PlaceOn(c.Transform, c.BoundsMin, c.BoundsMax, p);
-        Log($"Paste {c.Name} " + (hit != null ? $"on {hit.Name}{(mouse || at != null ? " under the mouse" : " at the centre of the view")}" : "in front of the camera (nothing under the mouse)"));
-        return await AddCopy(c.Instance, null, world, "pasted", c.Name);
+        var first = SceneViewport.PlaceOn(c.Transform, c.BoundsMin, c.BoundsMax, p);
+        var shift = first.Translation - c.Transform.Translation;
+        Log($"Paste {(_clip.Count == 1 ? c.Name : $"{_clip.Count} objects")} " + (hit != null ? $"on {hit.Name}{(mouse || at != null ? " under the mouse" : " at the centre of the view")}" : "in front of the camera (nothing under the mouse)"));
+        var items = _clip.Select(x => { var w = x.Transform; w.Translation += shift; return (x.Instance, x.Name, w); }).ToList();
+        var copies = await AddCopies(items, "pasted");
+        return copies.FirstOrDefault();
+    }
+
+    /// <summary>Duplicate (context menu): every selected scenery object, 2 units along X.</summary>
+    async Task DuplicateSelection()
+    {
+        var list = _view.SelectedObjects.Where(o => o.Kind == SceneObjectKind.Scenery && o.Instance != null).ToList();
+        if (list.Count == 0) { Log("Duplicate: select scenery objects first."); return; }
+        await AddCopies(list.Select(o => { var w = o.Transform; w.Translation += new Vector3(2, 0, 0); return (o.Instance!.Index, o.Name, w); }).ToList(), "duplicated");
+    }
+
+    /// <summary>Adds copies of scenery instances (one world-bundle write = one undo step, one reload); the copies are selected.</summary>
+    async Task<List<SceneObject>> AddCopies(IReadOnlyList<(int Src, string Name, Matrix4x4 World)> items, string verb)
+    {
+        var res = new List<SceneObject>();
+        if (items.Count == 0 || !CanAddOrRemove(null, "Paste")) return res;
+        try
+        {
+            var made = new List<int>();
+            // copies of the same instance are added in one go (each re-creation of the instance tables is kept small, B21)
+            foreach (var g in items.GroupBy(x => x.Src))
+            {
+                int ni = NB.Core.World.InstanceEditor.DuplicateMany(_scene!.Caff, _scene.Background.View.Symbol, g.Key, g.Select(x => x.World).ToList());
+                made.AddRange(Enumerable.Range(ni, g.Count()));
+            }
+            string what = items.Count == 1 ? $"{items[0].Name} as instance {made[0]} at {Fmt(items[0].World.Translation)}" : $"{items.Count} objects ({string.Join(", ", items.Take(4).Select(x => x.Name))}{(items.Count > 4 ? ", …" : "")}) as instances {made.Min()}..{made.Max()}";
+            _ws!.SaveResident(_scene!.Bundle, _scene.Caff, $"{verb} {what}");
+            Log($"{Cap(verb)} {what} (Ctrl+Z removes {(items.Count == 1 ? "it" : "them")}). Reloading world…");
+            await OpenWorld(_sceneEntry!, _sceneAct);
+            res = _scene!.Objects.Where(x => x.Instance != null && made.Contains(x.Instance.Index)).ToList();
+            if (res.Count > 0) _view.SelectMany(res);
+        }
+        catch (Exception e) { Error(Cap(verb) + " failed", e); }
+        return res;
     }
 
     // ------------------------------------------------------------------ edit keys
@@ -1147,6 +1268,7 @@ public sealed class MainForm : Form
         var f = FocusedControl();
         bool typing = IsTextEntry(f);
         var tb = f as TextBoxBase;
+        if (!typing && SceneKeysActive(f) && HandleCollisionKey(k)) return true;   // Edit Collision: Del, Ctrl+C / X / V / D act on the collision selection
         switch (k)
         {
             case Keys.Control | Keys.Z:
@@ -1171,8 +1293,43 @@ public sealed class MainForm : Form
                 if (typing || !SceneKeysActive(f)) return false;
                 if (_view.Transforming) return false;
                 _ = DeleteSelection(); return true;
+            case Keys.Control | Keys.A:
+                if (typing || !SceneKeysActive(f)) return false;
+                SelectAllShown(); return true;
+            case Keys.Alt | Keys.H:
+                if (typing || !SceneKeysActive(f)) return false;
+                _view.UnhideAll(); return true;
         }
         return false;
+    }
+
+    /// <summary>Ctrl+A: every object shown in the 3D view (not the terrain).</summary>
+    void SelectAllShown()
+    {
+        if (_scene == null) return;
+        var all = _scene.Objects.Where(o => o.Visible && o.Kind != SceneObjectKind.Terrain && !(o.Kind == SceneObjectKind.Scenery && SceneViewport.IsHidden(o))).ToList();
+        _view.SelectMany(all);
+        Log($"Selected {all.Count:N0} objects (Esc clears).");
+    }
+
+    /// <summary>Several objects selected: the Scene list marks them, the status bar counts them.</summary>
+    void OnSelectionSet(IReadOnlyList<SceneObject> sel)
+    {
+        var set = sel.ToHashSet();
+        _tree.BeginUpdate();
+        void Walk(TreeNodeCollection ns)
+        {
+            foreach (TreeNode n in ns)
+            {
+                bool on = n.Tag is SceneObject o && set.Contains(o) && sel.Count > 1;
+                var want = on ? SystemColors.Highlight : Color.Empty; var fore = on ? SystemColors.HighlightText : Color.Empty;
+                if (n.BackColor != want) { n.BackColor = want; n.ForeColor = n.Tag is SceneObject so && SpawnPoints.Is(so) && !on ? Color.FromArgb(20, 130, 50) : fore; }
+                Walk(n.Nodes);
+            }
+        }
+        Walk(_tree.Nodes);
+        _tree.EndUpdate();
+        if (sel.Count > 1) _status.Text = $"{sel.Count} objects selected ({sel[0].Name} leads: the gizmo and Properties; G / R / T and typed values move them all) — Ctrl / Shift + click adds or removes, Esc clears.";
     }
 
     void UpdateUndoUi()
@@ -1483,8 +1640,12 @@ public sealed class MainForm : Form
         // the same world again (after a duplicate, a delete, an import, an undo ...): keep the camera, the selection, the
         // undo history and any unsaved transform edits
         bool reload = _scene != null && _sceneEntry == w && _sceneAct == act;
-        if (!reload && _scene != null && _scene.Objects.Any(o => o.Dirty) &&
+        if (!reload && _scene != null && (_scene.Objects.Any(o => o.Dirty) || CollisionDirty) &&
             MessageBox.Show(this, "Discard unsaved edits in the current world?", Text, MessageBoxButtons.YesNo) != DialogResult.Yes) return;
+        // another world: its collision edits go; the same world reloaded: unsaved collision edits stay (as transforms do)
+        if (!reload) { _soups.Clear(); _soupWhy.Clear(); _soupMesh.Clear(); }
+        else foreach (var k in _soups.Where(kv => kv.Value?.Dirty != true).Select(kv => kv.Key).ToList()) { _soups.Remove(k); _soupMesh.Remove(k); _soupWhy.Remove(k); }
+        _collSel.Clear(); _collAt.Clear(); _collProxy = null;
         var carry = reload ? _scene!.Objects.Where(o => o.Dirty).Select(o => (Key: UndoHistory.KeyOf(o), o.Transform, Link: o.Marker?.Link)).ToList() : null;
         string? selKey = reload && _view.Selected != null ? UndoHistory.KeyOf(_view.Selected) : null;
         _busy = true; SetProgress($"Loading {w.Display}…", 0);
@@ -1583,6 +1744,8 @@ public sealed class MainForm : Form
 
     void OnSelection(SceneObject? o)
     {
+        if (_collProxy != null && o != _collProxy && _collSel.Count > 0) { _collSel.Clear(); _collAt.Clear(); _collProxy = null; _view.InvalidateCollisionSelection(); }
+        if (o != null && o == _collProxy) { _transform.SetObject(o); UpdateCollisionStatus(); return; }   // the collision selection's stand-in
         _transform.SetObject(o);
         // a character (a marker placing an actor): its dialogue lines, and the Dialogue tab when the user wants it shown
         if (o?.Marker != _dialogueFor?.Marker || o == null)
@@ -1617,6 +1780,9 @@ public sealed class MainForm : Form
     void PushUndo(SceneObject o, Matrix4x4 before, Matrix4x4 after)
     {
         if (before == after) return;
+        if (o == _collProxy) { ApplyCollisionTransform(before, after); _collProxyBase = after; return; }
+        if (o.Kind == SceneObjectKind.Scenery && Matrix4x4.Decompose(before, out var s0, out _, out _) && Matrix4x4.Decompose(after, out var s1, out _, out _) && Vector3.Distance(s0, s1) > 1e-3f)
+            Log($"{o.Name}: the game moves and turns an object's collision with it, but does not scale it — use Edit Collision to fit the collision to the new size.");
         _history.PushTransform(o, before, after);
         UpdateTitle();
         RefreshNode(o);
@@ -1629,7 +1795,7 @@ public sealed class MainForm : Form
 
     async Task UndoRedo(bool undo)
     {
-        if (_view.Transforming) { _view.CancelTransform(); Log("Transform cancelled."); return; }   // a G / R / S in progress is cancelled, not undone
+        if (_view.Transforming) { _view.CancelTransform(); Log("Transform cancelled."); return; }   // a G / R / T in progress is cancelled, not undone
         if (_busy || _undoing) { Log((undo ? "Undo" : "Redo") + ": NB Studio is busy (loading or saving), try again in a moment."); return; }
         _undoing = true;
         try
@@ -1643,6 +1809,10 @@ public sealed class MainForm : Form
             {
                 case TransformStep t when t.Obj != null:
                     _view.Select(t.Obj); RefreshNode(t.Obj); break;
+                case GroupStep g:
+                    _view.SelectMany(g.Steps.OfType<TransformStep>().Where(x => x.Obj != null).Select(x => x.Obj!));
+                    foreach (var x in g.Steps.OfType<TransformStep>()) if (x.Obj != null) RefreshNode(x.Obj);
+                    break;
                 case LinkStep l when l.Obj != null:
                     _view.Select(l.Obj); RefreshNode(l.Obj); break;
                 case FileStep:
@@ -1683,9 +1853,17 @@ public sealed class MainForm : Form
         if (_scene == null || _ws == null) return;
         try
         {
-            int n;
-            using (_history.Suppress()) n = _scene.Save();
-            Log(n == 0 ? "No world changes to save." : $"Saved {n} changed object(s) → {Path.GetRelativePath(_ws.Root, _ws.Game.ResidentPath(_scene.Bundle))} (uncompressed CAFF, checksum recomputed).");
+            int n; List<string> coll;
+            using (_history.Suppress())
+            {
+                coll = WriteCollisionEdits();   // edited collision assets are rebuilt in the world's CAFF first
+                n = _scene.Save();
+                if (coll.Count > 0 && !_scene.DirtyBundles.Contains(_scene.Bundle))
+                    _ws.SaveResident(_scene.Bundle, _scene.Caff, $"collision edits: {coll.Count} asset(s)");
+            }
+            Log(n == 0 && coll.Count == 0 ? "No world changes to save." : $"Saved {n} changed object(s){(coll.Count > 0 ? $" and {coll.Count} edited collision asset(s)" : "")} → {Path.GetRelativePath(_ws.Root, _ws.Game.ResidentPath(_scene.Bundle))} (uncompressed CAFF, checksum recomputed).");
+            foreach (var l in coll) Log(l);
+            UpdateCollisionStatus();
             FillTree(); UpdateTitle();
         }
         catch (Exception e) { Error("Saving failed", e); }
@@ -1693,7 +1871,7 @@ public sealed class MainForm : Form
 
     void UpdateTitle()
     {
-        int dirty = _scene?.Objects.Count(o => o.Dirty) ?? 0;
+        int dirty = (_scene?.Objects.Count(o => o.Dirty) ?? 0) + (CollisionDirty ? 1 : 0);
         Text = "Nuts & Bolts Mod Tool" + (_ws != null ? $" — {Path.GetFileName(_ws.Root)}" : "") + (_scene != null ? $" — {WorldCatalog.DisplayNames.GetValueOrDefault(_scene.Background.View.Name.Replace("aid_model_banjox_background_", "").Replace("_default", ""), "")} [{_scene.Bundle:x6}]" : "") + (dirty > 0 || _tags.HasUnsaved || _atmos.HasUnsaved ? " *" : "");
     }
 
@@ -2321,7 +2499,7 @@ public sealed class MainForm : Form
                         // --settings key=value (UndoSteps, SScales)
                         var kv = Next().Split('=');
                         if (kv[0] == "UndoSteps") { _settings.UndoSteps = int.Parse(kv[1]); _history.Limit = _settings.UndoSteps; _history.ApplyLimit(); }
-                        else if (kv[0] == "SScales") { _settings.SScales = bool.Parse(kv[1]); _view.SScales = _settings.SScales; }
+                        else if (kv[0] == "SScales") { _settings.SScales = bool.Parse(kv[1]); }
                         L($"script: setting {kv[0]} = {kv[1]}; undo history {_history.Count} step(s)"); break;
                     }
                     case "--new-workspace":
@@ -2347,6 +2525,17 @@ public sealed class MainForm : Form
                     }
                     case "--exe-mods-check": ApplyExeMods(); L("script: executable mods checked (see the log above)"); break;
                     case "--export-console": { var dir = Next(); int n = await Task.Run(() => _ws!.Export(dir, true, null, bakeExeMods: true)); L($"script: console export {n} file(s) -> {dir}"); break; }
+                    case "--select-many":
+                    {
+                        // --select-many name1;name2;...: several objects (Ctrl+click in a script)
+                        var names = Next().Split(';');
+                        var objs = names.Select(q => _scene!.Objects.First(x => x.Name.Contains(q, StringComparison.OrdinalIgnoreCase))).ToList();
+                        _view.SelectMany(objs); L($"script: selected {string.Join(", ", objs.Select(x => $"{x.Name} at {Fmt(x.Transform.Translation)}"))}"); break;
+                    }
+                    case "--sel-list": L($"script: selection {string.Join(", ", _view.SelectedObjects.Select(x => $"{x.Name} at {Fmt(x.Transform.Translation)}"))}; hidden {_view.HiddenCount}"); break;
+                    case "--hide": _view.HideSelection(); L($"script: hidden; {_view.HiddenCount} hidden"); break;
+                    case "--unhide": _view.UnhideAll(); L("script: unhide all"); break;
+                    case "--close-workspace": await CloseWorkspace(); L($"script: workspace closed; start page visible {_start.Visible}; title {Text}"); break;
                     case "--history": L($"script: history {_history.Count} step(s); undo: {_history.UndoLabel ?? "-"}; redo: {_history.RedoLabel ?? "-"}"); break;
                     case "--menu-shot":
                     {
@@ -2563,6 +2752,7 @@ public sealed class MainForm : Form
                     case "--start-bg": { var f = Next(); _start.SetBackground(f); L("script: start page background " + f); break; }
                     case "--exit": L("script: exit"); Close(); return;
                     default:
+                        if (await CollisionScript(a[i], Next, L)) break;
                         if (await _view.RunScriptCommand(a[i], Next, L)) break;
                         L("script: unknown argument " + a[i]); break;
                 }

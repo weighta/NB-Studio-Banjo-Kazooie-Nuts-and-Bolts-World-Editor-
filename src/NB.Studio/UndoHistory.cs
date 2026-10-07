@@ -26,6 +26,18 @@ public sealed class LinkStep : UndoStep
     public int Before, After;
 }
 
+/// <summary>Several steps made by one action (moving a multi-selection, a typed delta for several objects): one undo.</summary>
+public sealed class GroupStep : UndoStep
+{
+    public readonly List<UndoStep> Steps = new();
+}
+
+/// <summary>An edit kept by its owner (collision edits: snapshots of the edited triangles): undo / redo call back.</summary>
+public sealed class CallbackStep : UndoStep
+{
+    public Action Undo = () => { }, Redo = () => { };
+}
+
 /// <summary>Workspace files written by one action (duplicate, delete, model import, tag or atmosphere save, …): the
 /// version before the action, and (once undone) the version after it, are kept as copies in the undo folder.</summary>
 public sealed class FileStep : UndoStep
@@ -118,7 +130,7 @@ public sealed class UndoHistory
         var map = new Dictionary<string, SceneObject>();
         foreach (var o in scene.Objects) map.TryAdd(KeyOf(o), o);
         lock (_gate)
-            foreach (var s in _undo.Concat(_redo))
+            foreach (var s in _undo.Concat(_redo).SelectMany(s => s is GroupStep g ? g.Steps : new List<UndoStep> { s }))
             {
                 if (s is TransformStep t) t.Obj = map.GetValueOrDefault(t.Key);
                 else if (s is LinkStep l) l.Obj = map.GetValueOrDefault(l.Key);
@@ -134,6 +146,23 @@ public sealed class UndoHistory
         string what = label ?? (scaled ? "Scale" : turned && before.Translation != after.Translation ? "Move and rotate" : turned ? "Rotate" : "Move");
         Push(new TransformStep { Obj = o, Key = KeyOf(o), Before = before, After = after, Label = $"{what} {o.Name}" });
     }
+
+    /// <summary>Transforms of several objects as ONE step (a multi-selection moved, turned or scaled).</summary>
+    public void PushTransforms(IReadOnlyList<(SceneObject O, Matrix4x4 Before, Matrix4x4 After)> edits)
+    {
+        var steps = edits.Where(e => e.Before != e.After).ToList();
+        if (steps.Count == 0) return;
+        if (steps.Count == 1) { PushTransform(steps[0].O, steps[0].Before, steps[0].After); return; }
+        var g = new GroupStep();
+        foreach (var (o, b, a) in steps) g.Steps.Add(new TransformStep { Obj = o, Key = KeyOf(o), Before = b, After = a });
+        var first = steps[0];
+        string what = first.Before.Translation != first.After.Translation && Scale(first.Before) == Scale(first.After) ? "Move" : Scale(first.Before) != Scale(first.After) ? "Scale" : "Rotate";
+        g.Label = $"{what} {steps.Count} objects";
+        Push(g);
+    }
+
+    /// <summary>An in-memory edit with its own undo / redo (collision edits).</summary>
+    public void PushCallback(string label, Action undo, Action redo) => Push(new CallbackStep { Label = label, Undo = undo, Redo = redo });
 
     public void PushLink(SceneObject o, int before, int after)
     {
@@ -291,6 +320,8 @@ public sealed class UndoHistory
             case TransformStep t when t.Obj != null: t.Obj.Transform = undo ? t.Before : t.After; break;
             case LinkStep l when l.Obj?.Marker != null: l.Obj.Marker.Link = undo ? l.Before : l.After; break;
             case FileStep f: SwapFiles(f, undo); break;
+            case CallbackStep c: if (undo) c.Undo(); else c.Redo(); break;
+            case GroupStep g: foreach (var x in undo ? Enumerable.Reverse(g.Steps) : g.Steps) Apply(x, undo); break;
         }
     }
 

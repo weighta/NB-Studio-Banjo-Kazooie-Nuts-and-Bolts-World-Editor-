@@ -11,7 +11,6 @@ public sealed class SettingsDialog : Form
 
     readonly Settings _s;
     readonly NumericUpDown _undo = new() { Minimum = 1, Maximum = 1000, Width = 90, BackColor = Color.FromArgb(46, 49, 60), ForeColor = Text1, BorderStyle = BorderStyle.FixedSingle, Font = new Font("Segoe UI", 10.5f) };
-    readonly CheckBox _sScales = Check("S scales the selected object (Blender style)");
     readonly CheckBox _autoOpen = Check("Open the last workspace when NB Studio starts");
     readonly CheckBox _freshSave = Check("Fresh save for every test (also forgets vehicles saved in the garage)");
     readonly TextBox _xenia = new() { BackColor = Color.FromArgb(46, 49, 60), ForeColor = Text1, BorderStyle = BorderStyle.FixedSingle, Font = new Font("Segoe UI", 9.5f) };
@@ -61,10 +60,9 @@ public sealed class SettingsDialog : Form
 
         // ---- 3D view
         var viewCard = Section("3D view", ref y, 112);
-        _sScales.Location = new Point(16, 36); _sScales.Checked = s.SScales;
-        viewCard.Controls.Add(_sScales);
-        viewCard.Controls.Add(Note("While you fly (right mouse button held, or W A D Q E pressed a moment ago), S always flies backwards. " +
-            "Untick to make S fly backwards all the time (scale with the Scale tool, 3, instead).", 36, 64, 520, 40));
+        viewCard.Controls.Add(Note("W A S D, Q and E fly (S always flies backwards). G moves, R turns and T scales the selection (Blender's S: " +
+            "scaling on S kept catching people who flew backwards, so it moved to T); the Scale tool (3) scales with the mouse. " +
+            "H hides the selection for this session, U shows everything again.", 16, 36, 530, 70));
 
         // ---- start
         var startCard = Section("Starting NB Studio", ref y, 72);
@@ -109,7 +107,6 @@ public sealed class SettingsDialog : Form
         ok.Click += (_, _) =>
         {
             _s.UndoSteps = (int)_undo.Value;
-            _s.SScales = _sScales.Checked;
             _s.AutoOpenLast = _autoOpen.Checked;
             _s.QuickTestFreshSave = _freshSave.Checked;
             var list = _modIds.Where((_, i) => _mods.GetItemChecked(i)).ToList();

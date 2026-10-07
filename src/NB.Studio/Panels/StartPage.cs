@@ -17,8 +17,8 @@ public sealed class StartPage : Control
 
     sealed record Hit(Rectangle Box, Action Click, string Kind, int Index);
 
-    readonly string? _last;
-    readonly List<string> _others = new();
+    string? _last;
+    List<string> _others = new();
     readonly List<string> _backgrounds;
     readonly Bitmap? _nut;
     Image? _bg; Bitmap? _bgScaled; Size _bgScaledFor;
@@ -86,6 +86,16 @@ public sealed class StartPage : Control
 
     /// <summary>Text under the cards while a workspace opens.</summary>
     public void SetStatus(string s) { _status = s; Invalidate(); }
+
+    /// <summary>After File > Close Workspace: the closed workspace becomes "Continue", its neighbours the other cards.</summary>
+    public void SetLastWorkspace(string? lastWorkspace)
+    {
+        _last = lastWorkspace != null && File.Exists(Path.Combine(lastWorkspace, "workspace.json")) ? lastWorkspace : null;
+        _others = _last == null ? new() : SafeDirs(Path.GetDirectoryName(_last.TrimEnd('\\', '/'))!)
+            .Where(d => File.Exists(Path.Combine(d, "workspace.json")) && !string.Equals(Path.GetFullPath(d).TrimEnd('\\'), Path.GetFullPath(_last).TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(d => File.GetLastWriteTime(Path.Combine(d, "workspace.json"))).Take(6).ToList();
+        Invalidate();
+    }
     public void SetAutoOpen(bool on) { _autoOpen = on; Invalidate(); }
 
     /// <summary>The background scaled to cover the page (cached per size: scaling a photo on every paint is slow).</summary>

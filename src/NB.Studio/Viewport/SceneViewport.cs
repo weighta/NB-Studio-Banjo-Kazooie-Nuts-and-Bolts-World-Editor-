@@ -15,7 +15,8 @@ public enum GizmoMode { Select, Move, Rotate, Scale }
 /// keys) to move (Shift = fast), wheel to dolly, middle-drag to pan, F to focus. Left click selects; left-drag on the
 /// selection moves/rotates/scales it according to <see cref="Mode"/>; dragging one of the gizmo's axis handles (or holding
 /// X, Y or Z) constrains the drag to that axis.
-/// Blender-style keys on the selection: G grab (move on the camera plane), R rotate, S scale; then X / Y / Z constrain to
+/// Blender-style keys on the selection: G grab (move on the camera plane), R rotate, T scale (S always flies backwards:
+/// scaling on S kept catching people who flew backwards, NB Studio 1.12); then X / Y / Z constrain to
 /// that world axis (press again: the object's own axis, again: free), digits type an exact value, Ctrl snaps, left click /
 /// Enter confirms, right click / Esc cancels. One undo step per confirmed transform.
 /// View modes (the bar in the top-right corner): Wireframe, Solid, Textured, Rendered (the level's light setup, normal and
@@ -157,9 +158,9 @@ public sealed partial class SceneViewport : UserControl
         foreach (var (o, _) in list)
         {
             if (drawn >= CollisionBudget) break;
-            foreach (var (asset, meshes, local) in _allColl[o])
+            foreach (var (asset, meshes, local) in CollisionParts(o))
             {
-                string key = (int)o.Kind + "|" + asset;
+                string key = (int)o.Kind + "|" + _collVer.GetValueOrDefault(asset) + "|" + asset;
                 if (!_collision.TryGetValue(key, out var batch))
                 {
                     if (built >= 24) { _gl.Invalidate(); continue; }   // a few new batches per frame: no stall when switching on
@@ -185,6 +186,7 @@ public sealed partial class SceneViewport : UserControl
     }
     /// <summary>Draw path-node links (marker type 22: record +8 = next node index).</summary>
     public bool ShowPaths = true;
+    static readonly bool DebugClicks = Environment.GetEnvironmentVariable("NB_STUDIO_DEBUG_CLICKS") == "1";
     /// <summary>Debug: draw everything (no frustum / size culling), to compare against the culled frame.</summary>
     public bool NoCull;
     readonly Dictionary<string, Renderer.LineBatch> _collision = new();
@@ -231,6 +233,8 @@ public sealed partial class SceneViewport : UserControl
     public event Action<SceneObject>? ObjectEdited;   // after a transform was confirmed (for undo)
     public event Action<SceneObject, Matrix4x4>? EditStarted;
     public event Action<SceneObject?, Point>? ContextMenuRequested;
+    /// <summary>Right click in Edit Collision mode: the collision under the mouse (or null) and the view pixel.</summary>
+    public event Action<CollisionHit?, Point>? CollisionContextMenuRequested;
     public event Action<ViewMode>? ViewModeChanged;
     public Func<string, (byte[] Rgba, int W, int H)?>? TextureSource { set => _r.TextureSource = value; }
 
@@ -471,6 +475,7 @@ public sealed partial class SceneViewport : UserControl
                 if (SpawnPoints.Is(o) && o.Model == null) { o.BoundsMin = SpawnBounds.Min; o.BoundsMax = SpawnBounds.Max; }
 
         _allColl = null; _collFor = null; CollisionSummary = "";
+        _collVer.Clear(); _collSelVer++; _rectFrom = null;
         if (_showColl && scene != null) StartCollisionDecode();
         _lights = null; _skies.Clear(); _sky = null; _r.Lighting = new SceneLighting();
         _water = null; _r.MaterialOverrides.Clear();
@@ -518,9 +523,12 @@ public sealed partial class SceneViewport : UserControl
     public void Select(SceneObject? o, bool focus = false)
     {
         if (o != Selected) CancelTransform();
+        bool many = _extra.Count > 0;
+        _extra.Clear();
         Selected = o;
         if (focus && o != null) Focus(o);
         SelectionChanged?.Invoke(o);
+        if (many || o != null) SelectionSetChanged?.Invoke(SelectedObjects);
         _gl.Invalidate();
     }
 
@@ -624,7 +632,7 @@ public sealed partial class SceneViewport : UserControl
             {
                 if (!DrawsModel(o)) continue;
                 if (!NoCull && o.Kind != SceneObjectKind.Terrain) { var (wc, wr) = WorldBounds(o); if (!fr.Visible(wc, wr) || BeyondCullDistance(o, wc)) continue; }
-                var tint = o == Selected ? new Vector4(1f, 0.55f, 0.1f, _viewMode == ViewMode.Wireframe ? 1f : 0.35f) : o.Dirty ? new Vector4(0.2f, 0.9f, 0.3f, 0.15f) : Vector4.Zero;
+                var tint = IsSelected(o) ? new Vector4(1f, 0.55f, 0.1f, _viewMode == ViewMode.Wireframe ? 1f : 0.35f) : o.Dirty ? new Vector4(0.2f, 0.9f, 0.3f, 0.15f) : Vector4.Zero;
                 _r.DrawModel(o.Model, o.Transform, tint, NoCull ? null : fr);
                 foreach (var (cm, cl) in o.Children) _r.DrawModel(cm, cl * o.Transform, tint, NoCull ? null : fr);
             }
@@ -644,6 +652,7 @@ public sealed partial class SceneViewport : UserControl
             _r.DrawLineBatch(_staticLines, vp, onTop: true);
             DrawSpawnFigures(vp);
             DrawSelectionCollision(vp);
+            if (ShowCollision) DrawCollisionSelection(vp);
             if (Selected != null) DrawGizmo(vp);
         }
         DrawOverlays(W, H);
@@ -813,6 +822,7 @@ public sealed partial class SceneViewport : UserControl
     {
         var lines = new List<(Vector3, Vector3, Vector3)>();
         AddBox(lines, Selected!, new Vector3(1, 0.6f, 0.1f));
+        foreach (var x in _extra) AddBox(lines, x, new Vector3(1, 0.75f, 0.35f));
         var p = Selected!.Transform.Translation;
         if (_xf != XfKind.None)
         {
@@ -911,6 +921,8 @@ public sealed partial class SceneViewport : UserControl
             using (var bmp = DrawBar(showLight)) _r.UpdateOverlay(_barOv, bmp, barKey);
         _r.DrawOverlay(_barOv, cr.X, cr.Y, W, H);
         DrawSpawnLabels(W, H);
+        DrawCollisionRect(W, H);
+        DrawHiddenNote(W, H);
         DrawTip(W, H);
         var hud = HudText();
         if (hud != null)
@@ -1198,7 +1210,7 @@ public sealed partial class SceneViewport : UserControl
         }
         string hint = _xfDrag
             ? "hold X / Y / Z or drag an axis handle to constrain · Esc cancels"
-            : "X / Y / Z constrain (again: world ↔ local, then free) · type a value · Ctrl snap · LMB / Enter confirm · RMB / Esc cancel";
+            : "X / Y / Z constrain (again: world ↔ local, then free) · type a value · Ctrl snap · LMB / Enter confirm · RMB / Esc cancel" + (_xfStarts.Count > 1 ? $" · {_xfStarts.Count} objects" : "");
         var col = _xfAxis >= 0 ? Color.FromArgb(255, (int)(AxisColour[_xfAxis].X * 255), (int)(AxisColour[_xfAxis].Y * 255), (int)(AxisColour[_xfAxis].Z * 255)) : Color.FromArgb(255, 240, 170, 40);
         return (main, hint, col);
     }
@@ -1230,6 +1242,7 @@ public sealed partial class SceneViewport : UserControl
         if (_xf != XfKind.None) { if (!drag) { _xf = kind; _xfTyped = ""; UpdateTransform(); } return; }
         _xf = kind; _xfDrag = drag; _xfAxis = axis; _xfSpace = space; _xfTyped = ""; _xfDragKeyAxis = false;
         _xfStart = Selected.Transform; _xfMouse0 = _mouse;
+        BeginMulti();
         _xfValue = kind == XfKind.Scale ? 1 : 0;
         EditStarted?.Invoke(Selected, _xfStart);
         _gl.Focus();
@@ -1241,6 +1254,9 @@ public sealed partial class SceneViewport : UserControl
         if (_xf == XfKind.None) return;
         var o = Selected; var start = _xfStart;
         _xf = XfKind.None; _xfAxis = -1; _xfTyped = "";
+        var changed = (_xfStarts.Count > 0 ? _xfStarts : new List<(SceneObject, Matrix4x4)> { (o!, start) }).Where(x => x.Item1 != null && x.Item1.Transform != x.Item2).ToList();
+        _xfStarts = new();
+        if (changed.Count > 0) ObjectsEdited?.Invoke(changed);
         if (o != null && o.Transform != start) { ObjectEdited?.Invoke(o); SelectionChanged?.Invoke(o); }
         if (o?.Kind == SceneObjectKind.Marker) _linesVersion++;
         _gl.Invalidate();
@@ -1249,6 +1265,7 @@ public sealed partial class SceneViewport : UserControl
     public void CancelTransform()
     {
         if (_xf == XfKind.None) return;
+        CancelMulti(); _xfStarts = new();
         if (Selected != null) { Selected.Transform = _xfStart; SelectionChanged?.Invoke(Selected); if (Selected.Kind == SceneObjectKind.Marker) _linesVersion++; }
         _xf = XfKind.None; _xfAxis = -1; _xfTyped = "";
         _gl.Invalidate();
@@ -1366,6 +1383,7 @@ public sealed partial class SceneViewport : UserControl
         }
         // markers (boxes, path-node links) are in the static line batch: rebuild it so the path follows the node live
         if (o.Kind == SceneObjectKind.Marker) _linesVersion++;
+        UpdateMulti();   // the other selected objects follow
         SelectionChanged?.Invoke(o);
         _gl.Invalidate();
     }
@@ -1396,7 +1414,7 @@ public sealed partial class SceneViewport : UserControl
         var f = Forward(); var r = Right(); var d = Vector3.Zero;
         // S is Scale while something is selected (Blender), but while flying (right button held, other fly keys held,
         // or flying a moment ago) S flies backwards
-        bool sFlies = _sFlies || !SScales || _looking || Selected == null || Selected.Kind == SceneObjectKind.Terrain || ScaleLocked(Selected);
+        const bool sFlies = true;   // S always flies backwards (T scales)
         if (_keys.Contains(Keys.W) || _keys.Contains(Keys.Up)) d += f;
         if ((_keys.Contains(Keys.S) && sFlies) || _keys.Contains(Keys.Down)) d -= f;
         if (_keys.Contains(Keys.D) || _keys.Contains(Keys.Right)) d += r;
@@ -1420,7 +1438,7 @@ public sealed partial class SceneViewport : UserControl
                 case Keys.Return: if (!_xfDrag) ConfirmTransform(); return;
                 case Keys.G: if (!_xfDrag) BeginTransform(XfKind.Grab, false); return;
                 case Keys.R: if (!_xfDrag) BeginTransform(XfKind.Rotate, false); return;
-                case Keys.S: if (!_xfDrag) BeginTransform(XfKind.Scale, false); return;
+                case Keys.T: if (!_xfDrag) BeginTransform(XfKind.Scale, false); return;
                 case Keys.Back: if (_xfTyped.Length > 0) _xfTyped = _xfTyped[..^1]; UpdateTransform(); return;
                 case Keys.OemMinus: case Keys.Subtract: _xfTyped = _xfTyped.StartsWith('-') ? _xfTyped[1..] : "-" + _xfTyped; UpdateTransform(); return;
                 case Keys.OemPeriod: case Keys.Decimal: if (!_xfTyped.Contains('.')) _xfTyped += "."; UpdateTransform(); return;
@@ -1434,8 +1452,7 @@ public sealed partial class SceneViewport : UserControl
         // G / R / S start a transform only on a fresh key press (not key repeat) and never while flying, so holding S to
         // fly back and letting go of the right button can't turn into a scale
         bool flying = Flying;
-        if (e.KeyCode == Keys.S && fresh && (flying || !SScales)) _sFlies = true;
-        bool canEdit = Selected != null && Selected.Kind != SceneObjectKind.Terrain && fresh && !flying && !_sFlies;
+        bool canEdit = Selected != null && Selected.Kind != SceneObjectKind.Terrain && fresh && !flying;
         switch (e.KeyCode)
         {
             case Keys.F when Selected != null: Focus(Selected); break;
@@ -1444,7 +1461,10 @@ public sealed partial class SceneViewport : UserControl
             case Keys.D3: Mode = GizmoMode.Scale; _gl.Invalidate(); break;
             case Keys.G when canEdit: BeginTransform(XfKind.Grab, false); e.Handled = true; break;
             case Keys.R when canEdit: BeginTransform(XfKind.Rotate, false); e.Handled = true; break;
-            case Keys.S when canEdit && !ScaleLocked(Selected): BeginTransform(XfKind.Scale, false); e.Handled = true; break;
+            case Keys.T when canEdit && !ScaleLocked(Selected): BeginTransform(XfKind.Scale, false); e.Handled = true; break;
+            case Keys.H when fresh && !e.Shift: HideSelection(); e.Handled = true; break;
+            case Keys.U when fresh: UnhideAll(); e.Handled = true; break;
+            case Keys.B when fresh: ArmBoxSelect(); e.Handled = true; break;
             case Keys.Z when e.Shift: ViewMode = (ViewMode)(((int)_viewMode + 1) % 4); break;
             case Keys.Escape: Select(null); break;
         }
@@ -1486,9 +1506,14 @@ public sealed partial class SceneViewport : UserControl
                 _dragMoved = false;
                 return;
             }
+            if (CollisionMouseDown(e)) return;   // Edit Collision: click / rectangle picks collision, not objects
+            if (ObjectRectDown(e)) return;       // B or Ctrl: rectangle / Ctrl+click toggles
             var hit = Pick(e.Location);
-            if (hit.Obj != null && hit.Obj == Selected && Selected.Kind != SceneObjectKind.Terrain && kind != XfKind.None)
+            if (DebugClicks) CollisionInfo?.Invoke($"click {e.Location} mods {ModifierKeys} hit {hit.Obj?.Name ?? "-"} selected {SelectedObjects.Count}");
+            if ((ModifierKeys & Keys.Shift) != 0 && hit.Obj != null) { ToggleSelect(hit.Obj); return; }
+            if (hit.Obj != null && IsSelected(hit.Obj) && hit.Obj.Kind != SceneObjectKind.Terrain && kind != XfKind.None)
             {
+                if (hit.Obj != Selected) SelectMany(SelectedObjects, hit.Obj);   // drag a selected object: it leads, the others follow
                 BeginTransform(kind, drag: true);
                 _dragMoved = false;
                 UpdateTransform();
@@ -1504,9 +1529,12 @@ public sealed partial class SceneViewport : UserControl
             _looking = false;
             if (_dragMoved) _lastFly = DateTime.UtcNow;
             if (_suppressRightUp) { _suppressRightUp = false; return; }
+            if (!_dragMoved && _collMode) { CollisionContextMenuRequested?.Invoke(PickCollision(e.Location), e.Location); return; }
             if (!_dragMoved) { var hit = Pick(e.Location); if (hit.Obj != null) Select(hit.Obj); ContextMenuRequested?.Invoke(hit.Obj ?? Selected, e.Location); }
         }
         if (e.Button == MouseButtons.Middle) _panning = false;
+        if (ObjectRectUp(e)) return;
+        if (CollisionMouseUp(e)) return;
         if (e.Button == MouseButtons.Left && _xf != XfKind.None && _xfDrag)
         {
             if (_dragMoved) ConfirmTransform(); else CancelTransform();
@@ -1530,6 +1558,7 @@ public sealed partial class SceneViewport : UserControl
             if (_xfDrag && (Math.Abs(e.X - _xfMouse0.X) + Math.Abs(e.Y - _xfMouse0.Y) > 2)) _dragMoved = true;
             UpdateTransform();
         }
+        else if (CollisionMouseMove(e)) { }
         else
         {
             int hb = BarHit(e.Location);
