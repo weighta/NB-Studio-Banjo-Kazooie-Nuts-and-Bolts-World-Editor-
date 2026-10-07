@@ -126,6 +126,14 @@ public sealed partial class MainForm : Form
         _start.OpenRequested += async () => { using var d = new FolderBrowserDialog { Description = "Workspace folder (contains workspace.json)" }; if (d.ShowDialog(this) == DialogResult.OK) await OpenWorkspace(d.SelectedPath); };
         _start.NewRequested += async () => await NewWorkspace();
         _start.WorkspaceRequested += async p => await OpenWorkspace(p);
+        _start.ManageRequested += async () => await ManageWorkspaces();
+        _start.DeleteRequested += async p =>
+        {
+            var done = await NB.Studio.Panels.WorkspaceManager.DeleteWithConfirm(this, new List<string> { p }, _ws?.Root, null, t => _start.SetStatus(t));
+            _start.SetStatus(done.Count > 0 ? $"Deleted {Path.GetFileName(p)}." : "");
+            foreach (var d in done) Log($"Workspace deleted: {d} (your game was not changed).");
+            _start.SetLastWorkspace(_settings.LastWorkspace);
+        };
         _start.AutoOpenChanged += on => { _settings.AutoOpenLast = on; _settings.Save(); };
         _start.TourRequested += StartTour;
         Controls.Add(_start); Controls.SetChildIndex(_start, 0);
@@ -383,6 +391,7 @@ public sealed partial class MainForm : Form
         file.DropDownItems.Add(new ToolStripMenuItem("&Settings…", null, (_, _) => ShowSettings(), Keys.Control | Keys.Oemcomma) { ShortcutKeyDisplayString = "Ctrl+," });
         file.DropDownItems.Add(new ToolStripSeparator());
         file.DropDownItems.Add(new ToolStripMenuItem("&Close Workspace", null, async (_, _) => await CloseWorkspace(), Keys.Control | Keys.W) { ToolTipText = "Close the open workspace and go back to the start page" });
+        file.DropDownItems.Add(new ToolStripMenuItem("&Manage Workspaces…", null, async (_, _) => await ManageWorkspaces()) { ToolTipText = "Every workspace with the disk space it uses: open, show in Explorer or delete" });
         file.DropDownItems.Add("E&xit", null, (_, _) => Close());
 
         var edit = new ToolStripMenuItem("&Edit");
@@ -695,6 +704,19 @@ public sealed partial class MainForm : Form
     /// File > Close Workspace (Ctrl+W): back to the start page. Unsaved world edits (objects, collision) can be saved first;
     /// a test game NB Studio started for this workspace can be closed; the scene, the panels and the undo history are cleared.
     /// </summary>
+    /// <summary>File > Manage Workspaces / the start page's "All workspaces…": list, sizes, open, delete.</summary>
+    async Task ManageWorkspaces()
+    {
+        var extra = new List<string>();
+        if (_settings.LastWorkspace != null) extra.Add(_settings.LastWorkspace);
+        if (_ws != null) extra.Add(_ws.Root);
+        using var d = new NB.Studio.Panels.WorkspaceManager(_ws?.Root, extra);
+        var r = d.ShowDialog(this);
+        foreach (var p in d.Deleted) Log($"Workspace deleted: {p} (your game was not changed).");
+        if (_start.Visible) _start.SetLastWorkspace(_settings.LastWorkspace);
+        if (r == DialogResult.OK && d.OpenPath != null) await OpenWorkspace(d.OpenPath);
+    }
+
     async Task CloseWorkspace()
     {
         if (_ws == null) { Log("No workspace is open."); return; }

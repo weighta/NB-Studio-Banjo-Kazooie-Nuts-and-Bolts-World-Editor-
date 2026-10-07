@@ -12,7 +12,8 @@ namespace NB.Studio.Panels;
 public sealed class StartPage : Control
 {
     public event Action? OpenRequested, NewRequested, TourRequested;
-    public event Action<string>? WorkspaceRequested;
+    public event Action<string>? WorkspaceRequested, DeleteRequested;
+    public event Action? ManageRequested;
     public event Action<bool>? AutoOpenChanged;
 
     sealed record Hit(Rectangle Box, Action Click, string Kind, int Index);
@@ -42,7 +43,7 @@ public sealed class StartPage : Control
         if (_last != null)
             _others = SafeDirs(Path.GetDirectoryName(_last.TrimEnd('\\', '/'))!)
                 .Where(d => File.Exists(Path.Combine(d, "workspace.json")) && !string.Equals(Path.GetFullPath(d).TrimEnd('\\'), Path.GetFullPath(_last).TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
-                .OrderByDescending(d => File.GetLastWriteTime(Path.Combine(d, "workspace.json"))).Take(6).ToList();
+                .OrderByDescending(d => File.GetLastWriteTime(Path.Combine(d, "workspace.json"))).Take(MaxChips).ToList();
         var dir = Path.Combine(AppContext.BaseDirectory, "Assets", "Backgrounds");
         _backgrounds = Directory.Exists(dir) ? Directory.GetFiles(dir, "*.jpg").OrderBy(f => f).ToList() : new();
         var nut = Path.Combine(AppContext.BaseDirectory, "Assets", "nut_gray.png");
@@ -50,6 +51,8 @@ public sealed class StartPage : Control
         NextBackground();
         Cursor = Cursors.Default;
     }
+
+    const int MaxChips = 12;
 
     static IEnumerable<string> SafeDirs(string dir) { try { return Directory.GetDirectories(dir); } catch (Exception) { return Array.Empty<string>(); } }
 
@@ -93,7 +96,7 @@ public sealed class StartPage : Control
         _last = lastWorkspace != null && File.Exists(Path.Combine(lastWorkspace, "workspace.json")) ? lastWorkspace : null;
         _others = _last == null ? new() : SafeDirs(Path.GetDirectoryName(_last.TrimEnd('\\', '/'))!)
             .Where(d => File.Exists(Path.Combine(d, "workspace.json")) && !string.Equals(Path.GetFullPath(d).TrimEnd('\\'), Path.GetFullPath(_last).TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
-            .OrderByDescending(d => File.GetLastWriteTime(Path.Combine(d, "workspace.json"))).Take(6).ToList();
+            .OrderByDescending(d => File.GetLastWriteTime(Path.Combine(d, "workspace.json"))).Take(MaxChips).ToList();
         Invalidate();
     }
     public void SetAutoOpen(bool on) { _autoOpen = on; Invalidate(); }
@@ -204,9 +207,9 @@ public sealed class StartPage : Control
                 var name = Path.GetFileName(d);
                 var sz = g.MeasureString(name, fSmall);
                 var r = new Rectangle(cx, y, (int)sz.Width + 22, 28);
-                if (r.Right > x + cw) { cx = x; y += 34; r.X = cx; }
+                if (r.Right > x + cw && cx > x) { cx = x; y += 34; r = new Rectangle(cx, y, r.Width, r.Height); }
                 int idx = _hits.Count; bool hot = _hover == idx;
-                _hits.Add(new Hit(r, () => WorkspaceRequested?.Invoke(d), "chip", idx));
+                _hits.Add(new Hit(r, () => WorkspaceRequested?.Invoke(d), "chip:" + d, idx));
                 using (var path = Rounded(r, 14))
                 {
                     using var fill = new SolidBrush(hot ? CardHi : Color.FromArgb(150, 22, 24, 32)); g.FillPath(fill, path);
@@ -215,7 +218,20 @@ public sealed class StartPage : Control
                 using (var b = new SolidBrush(hot ? Text1 : Text2)) g.DrawString(name, fSmall, b, r.X + 11, r.Y + 5);
                 cx = r.Right + 8;
             }
-            y += 40;
+            {
+                // every workspace, sizes, delete
+                var name = "All workspaces…";
+                var sz = g.MeasureString(name, fSmall);
+                var r = new Rectangle(cx, y, (int)sz.Width + 22, 28);
+                if (r.Right > x + cw && cx > x) { cx = x; y += 34; r = new Rectangle(cx, y, r.Width, r.Height); }
+                int idx = _hits.Count; bool hot = _hover == idx;
+                _hits.Add(new Hit(r, () => ManageRequested?.Invoke(), "manage", idx));
+                using (var path = Rounded(r, 14)) using (var pen = new Pen(hot ? Accent : Color.FromArgb(150, Accent))) g.DrawPath(pen, path);
+                using (var b = new SolidBrush(hot ? AccentHi : Accent)) g.DrawString(name, fSmall, b, r.X + 11, r.Y + 5);
+            }
+            y += 34;
+            using (var b = new SolidBrush(Text3)) g.DrawString("Right-click a workspace to delete it.", fSmall, b, x + 2, y);
+            y += 28;
         }
 
         // auto-open switch
@@ -277,8 +293,20 @@ public sealed class StartPage : Control
     protected override void OnMouseClick(MouseEventArgs e)
     {
         base.OnMouseClick(e);
-        if (e.Button != MouseButtons.Left) return;
         var h = _hits.FirstOrDefault(t => t.Box.Contains(e.Location));
+        if (e.Button == MouseButtons.Right)
+        {
+            if (h?.Kind.StartsWith("chip:") != true) return;
+            var path = h.Kind[5..];
+            var menu = new ContextMenuStrip();
+            menu.Items.Add("Open", null, (_, _) => WorkspaceRequested?.Invoke(path));
+            menu.Items.Add("Show in Explorer", null, (_, _) => { try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe", $"\"{path}\"") { UseShellExecute = true }); } catch (Exception) { } });
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add("Delete workspace…", null, (_, _) => DeleteRequested?.Invoke(path));
+            menu.Show(this, e.Location);
+            return;
+        }
+        if (e.Button != MouseButtons.Left) return;
         h?.Click();
     }
 
