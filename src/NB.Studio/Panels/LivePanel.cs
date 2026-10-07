@@ -29,13 +29,68 @@ public sealed class LivePanel : UserControl
     public Func<Vector3?>? ViewCameraPosition;
     public event Action<string>? Log;
 
-    /// <summary>Named teleport targets (game units). The Seattle landmarks come from seattle/gen (geo.py).</summary>
-    public static readonly (string Name, Vector3 Pos)[] Bookmarks =
+    /// <summary>Teleport targets of the open world: its player start markers (from the scene).</summary>
+    public Func<IEnumerable<(string Name, Vector3 Pos)>>? WorldBookmarks;
+    /// <summary>Folder of the open workspace (bookmarks you add are kept there, per world) and a key for the open world.</summary>
+    public Func<string?>? WorkspaceDir;
+    public Func<string?>? WorldKey;
+    readonly List<(string Name, Vector3 Pos, bool Mine)> _bookmarks = new();
+
+    sealed record SavedBookmark(string World, string Name, float X, float Y, float Z);
+    string? BookmarkFile => WorkspaceDir?.Invoke() is string d ? Path.Combine(d, "studio-bookmarks.json") : null;
+
+    List<SavedBookmark> LoadSaved()
     {
-        ("Spawn (Westlake Park)", new(8, 2, 306)), ("Pike Place Market", new(-150, 0, 345)), ("Pier 57 / Great Wheel", new(-173, -17, 513)),
-        ("Space Needle", new(-400, -5, -180)), ("Lumen Field", new(170, -17, 1040)), ("T-Mobile Park", new(150, -17, 1200)),
-        ("Mumbo's Motors", new(-45, 2, 340)), ("I-5 (north deck)", new(302, 3, -135)), ("Elliott Bay (water)", new(-215, -17, 500)),
-    };
+        try { if (BookmarkFile is string f && File.Exists(f)) return System.Text.Json.JsonSerializer.Deserialize<List<SavedBookmark>>(File.ReadAllText(f)) ?? new(); }
+        catch (Exception e) { Log?.Invoke("Live: bookmarks could not be read: " + e.Message); }
+        return new();
+    }
+
+    void SaveSaved(List<SavedBookmark> l)
+    {
+        if (BookmarkFile is not string f) return;
+        File.WriteAllText(f, System.Text.Json.JsonSerializer.Serialize(l, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+    }
+
+    /// <summary>Refills the bookmark list: the open world's player starts, then the bookmarks you added for this world.</summary>
+    public void RefreshBookmarks()
+    {
+        _bookmarks.Clear();
+        try { foreach (var (n, p) in WorldBookmarks?.Invoke() ?? Enumerable.Empty<(string, Vector3)>()) _bookmarks.Add((n, p, false)); } catch (Exception) { }
+        var world = WorldKey?.Invoke();
+        foreach (var b in LoadSaved().Where(b => b.World == world)) _bookmarks.Add((b.Name, new(b.X, b.Y, b.Z), true));
+        _marks.Items.Clear();
+        foreach (var b in _bookmarks) _marks.Items.Add(b.Mine ? b.Name : b.Name + "  (marker)");
+        if (_marks.Items.Count == 0) _marks.Items.Add("(no bookmarks: open a world, or Add)");
+        _marks.SelectedIndex = 0;
+    }
+
+    void AddBookmark()
+    {
+        if (_x == null) { Log?.Invoke("Live: attach to the game first, then Add saves where the vehicle (or Banjo on foot) is."); return; }
+        if (WorkspaceDir?.Invoke() == null || WorldKey?.Invoke() is not string world) { Log?.Invoke("Live: open a workspace and a world first."); return; }
+        var pos = CurrentPos();
+        using var dlg = new Form { Text = "Add Bookmark", FormBorderStyle = FormBorderStyle.FixedDialog, StartPosition = FormStartPosition.CenterParent, Width = 360, Height = 140, MinimizeBox = false, MaximizeBox = false };
+        var box = new TextBox { Left = 12, Top = 12, Width = 320, Text = $"Bookmark {pos.X:F0}, {pos.Y:F0}, {pos.Z:F0}" };
+        var ok = new Button { Text = "Add", Left = 176, Top = 48, Width = 75, DialogResult = DialogResult.OK };
+        var cancel = new Button { Text = "Cancel", Left = 257, Top = 48, Width = 75, DialogResult = DialogResult.Cancel };
+        dlg.Controls.AddRange(new Control[] { box, ok, cancel }); dlg.AcceptButton = ok; dlg.CancelButton = cancel;
+        if (dlg.ShowDialog(this) != DialogResult.OK || box.Text.Trim().Length == 0) return;
+        var l = LoadSaved(); l.Add(new SavedBookmark(world, box.Text.Trim(), pos.X, pos.Y, pos.Z)); SaveSaved(l);
+        RefreshBookmarks(); _marks.SelectedIndex = _marks.Items.Count - 1;
+        Log?.Invoke($"Live: bookmark \"{box.Text.Trim()}\" saved at {pos} (this workspace, this world).");
+    }
+
+    void RemoveBookmark()
+    {
+        int i = _marks.SelectedIndex;
+        if (i < 0 || i >= _bookmarks.Count || !_bookmarks[i].Mine) { Log?.Invoke("Live: only bookmarks you added can be removed (marker bookmarks come from the world)."); return; }
+        var world = WorldKey?.Invoke(); var (name, pos, _) = _bookmarks[i];
+        var l = LoadSaved();
+        int k = l.FindIndex(b => b.World == world && b.Name == name && new Vector3(b.X, b.Y, b.Z) == pos);
+        if (k >= 0) { l.RemoveAt(k); SaveSaved(l); }
+        RefreshBookmarks();
+    }
 
     public LivePanel(Func<byte[]?> textProbe)
     {
@@ -48,12 +103,15 @@ public sealed class LivePanel : UserControl
         var go = new Button { Text = "Go", Width = 50 }; go.Click += (_, _) => Teleport(new((float)_tp[0].Value, (float)_tp[1].Value, (float)_tp[2].Value));
         var here = new Button { Text = "Use current", Width = 90 }; here.Click += (_, _) => { if (_x != null) SetTp(_x.PlayerPosition); };
         tpRow.Controls.AddRange(new Control[] { go, here, _foot });
-        var bmRow = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 68, WrapContents = true };
-        foreach (var b in Bookmarks) _marks.Items.Add(b.Name);
-        _marks.SelectedIndex = 0;
-        var bmGo = new Button { Text = "Teleport", Width = 80 }; bmGo.Click += (_, _) => Teleport(Bookmarks[_marks.SelectedIndex].Pos);
+        var bmRow = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 72, WrapContents = true };
+        _marks.DropDownStyle = ComboBoxStyle.DropDownList;
+        _marks.DropDown += (_, _) => RefreshBookmarks();
+        var bmGo = new Button { Text = "Teleport", Width = 80 };
+        bmGo.Click += (_, _) => { int i = _marks.SelectedIndex; if (i >= 0 && i < _bookmarks.Count) Teleport(_bookmarks[i].Pos); };
+        var bmAdd = new Button { Text = "Add", Width = 50 }; bmAdd.Click += (_, _) => AddBookmark();
+        var bmDel = new Button { Text = "Remove", Width = 65 }; bmDel.Click += (_, _) => RemoveBookmark();
         var toView = new Button { Text = "To 3D-view camera", Width = 130 }; toView.Click += (_, _) => { if (ViewCameraPosition?.Invoke() is Vector3 v) Teleport(v); };
-        bmRow.Controls.AddRange(new Control[] { new Label { Text = "Bookmark", AutoSize = true, Padding = new Padding(0, 8, 0, 0) }, _marks, bmGo, toView });
+        bmRow.Controls.AddRange(new Control[] { new Label { Text = "Bookmark", AutoSize = true, Padding = new Padding(0, 8, 0, 0) }, _marks, bmGo, bmAdd, bmDel, toView });
         var nudgeRow = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 68, WrapContents = true };
         nudgeRow.Controls.Add(new Label { Text = "Nudge by", AutoSize = true, Padding = new Padding(0, 8, 0, 0) });
         nudgeRow.Controls.Add(_step);
@@ -94,6 +152,7 @@ public sealed class LivePanel : UserControl
         Controls.AddRange(new Control[] { help, camRow, gRow, nudgeRow, bmRow, tpRow, _pos, top });
         _attach.Click += (_, _) => Attach();
         // opening the tab attaches by itself when a game is running (F5 starts NB's Xenia build, not xenia_canary.exe)
+        VisibleChanged += (_, _) => { if (Visible) RefreshBookmarks(); };
         VisibleChanged += (_, _) => { if (Visible && _x == null && System.Linq.Enumerable.Any(XeniaLive.GameProcessNames, n => System.Diagnostics.Process.GetProcessesByName(n).Length > 0)) Attach(); };
         _timer.Tick += (_, _) => Poll();
         SetEnabled(false);

@@ -74,6 +74,10 @@ public sealed partial class MainForm : Form
         }) { Dock = DockStyle.Fill };
         _live.Log += s => BeginInvoke(() => Log(s));
         _live.ViewCameraPosition = () => _view.CameraPosition;
+        _live.WorkspaceDir = () => _ws?.Root;
+        _live.WorldKey = () => _scene == null ? null : $"{_scene.Bundle:x6}{(_sceneAct != null ? "/" + _sceneAct : "")}";
+        _live.WorldBookmarks = () => _scene == null ? Enumerable.Empty<(string, Vector3)>() :
+            _scene.Objects.Where(SpawnPoints.Is).Select(o => (SpawnPoints.Label(o) ?? o.Name, o.Transform.Translation));
         _live.ShowInView += p => { _view.SetCamera(p + new Vector3(0, 45, -70), 0, -30); _center.SelectedIndex = 0; };
         _atmos = new AtmospherePanel(() =>
         {
