@@ -129,6 +129,13 @@ public static class SceneBuilder
         public string? Collision { get; set; }
         public string? FlatNormal { get; set; }
         public string? NeutralParallax { get; set; }
+        /// <summary>Terrain import for terrain far from the original town (ULTRA Lab): tiles go only to single-layer buffers without
+        /// vertex colours when there are enough (ModelImporter avoidLayered), and every vertex gets its buffer's average
+        /// vertex colour instead of the colour of the
+        /// nearest original vertex. Off by default (the Seattle scene was built and console-tested that way); on, terrain far
+        /// from the original town (the ULTRA Lab) no longer inherits dark or transparent baked colours from the town's edge
+        /// vertices, which showed as black patches and see-through holes (convoy round 3).</summary>
+        public bool UniformVertexColour { get; set; }
     }
     public sealed class TerrainMaterial { public string Target { get; set; } = ""; public string Texture { get; set; } = ""; }
     public sealed class HideDef { public bool All { get; set; } public List<string> Keep { get; set; } = new(); public List<string> Names { get; set; } = new(); }
@@ -268,7 +275,7 @@ public static class SceneBuilder
                 var meshes = noTerrain ? new List<ImportMesh>() : ObjReader.ReadAny(P(sc.Terrain.Obj));
                 foreach (var mesh in meshes)
                     mesh.Name = sc.Terrain.Materials.TryGetValue(mesh.Name, out var tm) ? Tex(tm.Texture) : mesh.Name;
-                var ir = ModelImporter.Replace(caff, b, meshes, spatialTiles: sc.FitCullingTree && !noTerrain);
+                var ir = ModelImporter.Replace(caff, b, meshes, spatialTiles: sc.FitCullingTree && !noTerrain, uniformVertexColour: sc.Terrain.UniformVertexColour, avoidLayered: sc.Terrain.UniformVertexColour);
                 rep.TerrainTriangles = ir.Triangles;
                 rep.Notes.AddRange(ir.Notes.Where(n => n.StartsWith("mapping") || n.StartsWith("warning") || n.StartsWith("material")).Select(n => "terrain: " + n));
                 ModelEdit.SetLodDistances(caff, b, 1e6f, 1f, keepLod0: true);

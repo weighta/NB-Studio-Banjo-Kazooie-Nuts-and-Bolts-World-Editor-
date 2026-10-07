@@ -1799,6 +1799,46 @@ static class Program
                     Console.WriteLine($"+0x{off:X}: 0x{old:X8} -> 0x{val:X8}");
                     return 0;
                 }
+                case "ws-delete":
+                {
+                    // ws-delete <workspace>: link-safe removal (NB.Core.Project.WorkspaceFiles.Delete; hard links to the game lose
+                    // only their workspace name)
+                    NB.Core.Project.WorkspaceFiles.Delete(args[1], new Progress<(string Text, double Fraction)>(p => { }));
+                    Console.WriteLine("deleted " + args[1]);
+                    return 0;
+                }
+                case "terrain-blocks":
+                {
+                    // terrain-blocks <caff> <model> [texture substring]: per draw its vertex buffer, draw block, node, LOD-only flag,
+                    // triangle count and diffuse texture, and whether a culling cell references its block (convoy round 3:
+                    // terrain tiles imported into a buffer whose block no cell draws were invisible)
+                    var c = NB.Core.Formats.CaffFile.Read(File.ReadAllBytes(args[1]));
+                    int sym = c.Symbols.FindIndex(s => NB.Core.Formats.AssetIds.DisplayName(s) == args[2]) + 1;
+                    var m = NB.Core.Models.ModelAsset.Parse(c, sym);
+                    var (root, cells) = NB.Core.Models.ModelEdit.GetCullCells(c, sym);
+                    var cellOf = cells.Where(x => x.Group >= 0).GroupBy(x => x.Group).ToDictionary(g => g.Key, g => g.First());
+                    Console.WriteLine($"{m.Draws.Count} draws, {cells.Count} cells ({cellOf.Count} groups referenced)");
+                    using var dump = args.Length > 4 ? new StreamWriter(args[4]) : null;   // [out.txt]: every drawn triangle's centroid x z, draw index
+                    foreach (var (dr, i) in m.Draws.Select((x, i) => (x, i)))
+                    {
+                        string tex = NB.Core.Models.ObjExporter.DiffuseTexture(dr) ?? "-";
+                        if (args.Length > 3 && !tex.Contains(args[3])) continue;
+                        cellOf.TryGetValue(dr.Block, out var cell);
+                        var used = dr.Indices.Where(k => k < dr.Positions.Length).Select(k => dr.Positions[k]).ToList();
+                        string bb = used.Count == 0 ? "-" : $"({used.Min(p => p.X):F0},{used.Min(p => p.Z):F0})..({used.Max(p => p.X):F0},{used.Max(p => p.Z):F0})";
+                        bool vcol = dr.Layout.Any(e => e.Format == NB.Core.Models.VtxFormat.k_8_8_8_8);
+                        Console.Write($"xz {bb} vcol {(vcol ? "Y" : "n")} layers {dr.Textures.Count} ");
+                        if (dump != null)
+                            for (int t = 0; t + 2 < dr.Indices.Length; t += 3)
+                            {
+                                if (dr.Indices[t] >= dr.Positions.Length || dr.Indices[t + 1] >= dr.Positions.Length || dr.Indices[t + 2] >= dr.Positions.Length) continue;
+                                var a = dr.Positions[dr.Indices[t]]; var b2 = dr.Positions[dr.Indices[t + 1]]; var c2 = dr.Positions[dr.Indices[t + 2]];
+                                dump.WriteLine($"{(a.X + b2.X + c2.X) / 3:F1} {(a.Z + b2.Z + c2.Z) / 3:F1} {i}");
+                            }
+                        Console.WriteLine($"#{i} vb 0x{dr.VbRecord:X} ib 0x{dr.IbObject:X} block {dr.Block} node {dr.Node}{(m.LodOnlyNodes.Contains(dr.Node) ? " LOD-ONLY" : "")} tris {dr.Indices.Length / 3} cell {(cell == null ? "NONE" : $"{cell.Index} {cell.Min}..{cell.Max}")} {tex.Replace("aid_texture_banjox_", "")}");
+                    }
+                    return 0;
+                }
                 case "marker-dump":
                 {
                     // marker-dump <caff> <marker asset> <type> <index>: raw words of one marker record

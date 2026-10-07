@@ -29,7 +29,7 @@ public static class ModelImporter
     public const int MaxChunkVertices = 60000;   // 16-bit indices allow 65,535
 
     public static Result Replace(CaffFile caff, int symbol, IReadOnlyList<ImportMesh> meshes, bool spatialTiles = false, ISet<int>? keepVbRecords = null, ISet<int>? excludeVbRecords = null,
-        bool forceByMaterial = false, bool uniformVertexColour = false, bool trimHidden = false)
+        bool forceByMaterial = false, bool uniformVertexColour = false, bool trimHidden = false, bool avoidLayered = false)
     {
         var m = ModelAsset.Parse(caff, symbol);
         // spatial tiling (terrain): new geometry bounds, original culling layout (root box + centre of every draw block)
@@ -159,8 +159,23 @@ public static class ModelImporter
                 // only buffers drawn at LOD 0 (created models keep LOD 0 forever; buffers of LOD 1+ draws are never shown)
                 var all = m.Draws.Where(x => string.Equals(MatOf(x), mat, StringComparison.OrdinalIgnoreCase) && !m.LodOnlyNodes.Contains(x.Node) && keepVbRecords?.Contains(x.VbRecord) != true && excludeVbRecords?.Contains(x.VbRecord) != true).Select(x => x.VbRecord).Distinct().ToList();
                 float span = mesh.Positions.Count == 0 ? 0 : mesh.Positions.Max(p => MathF.Max(MathF.Abs(p.X), MathF.Max(MathF.Abs(p.Y), MathF.Abs(p.Z))));
+                // avoidLayered (terrain): a buffer whose draws carry a blend / transparency mask or a second colour
+                // texture is a layer drawn over another one (masked, see-through); a whole tile imported there showed as
+                // see-through holes and dark patches (ULTRA Lab hills, convoy round 3). Such buffers are used last.
+                bool Layered(int vb) => m.Draws.Where(x => x.VbRecord == vb).Any(x => x.Textures.Skip(1).Any(t =>
+                    t.Texture.Contains("blend") || t.Texture.Contains("transparency") || t.Texture.Contains("_mask") ||
+                    (t.Texture.Contains("_colour") && !t.Texture.Contains("specular")) || t.Texture.StartsWith("aid_texture_banjox_seattle_") || t.Texture.StartsWith("aid_texture_banjox_lab_")));
                 var vbs = all.Where(vb => (!all.Any(HasUv) || HasUv(vb)) && (span < 256 || Pos32(vb)))
                     .OrderBy(vb => VCol(vb) ? 1 : 0).ThenBy(Layers).ToList();
+                if (avoidLayered)
+                {
+                    var clean = vbs.Where(vb => !Layered(vb) && !VCol(vb)).ToList();
+                    var noLayer = vbs.Where(vb => !Layered(vb)).ToList();
+                    int need = (mesh.Positions.Count + MaxChunkVertices - 1) / MaxChunkVertices;
+                    var pick = clean.Count >= need ? clean : noLayer.Count >= need ? noLayer : vbs;
+                    if (pick.Count < vbs.Count) notes.Add($"material {mat}: {pick.Count} of {vbs.Count} buffers used (layered/vertex-colour buffers left out)");
+                    vbs = pick;
+                }
                 if (vbs.Count == 0) throw new InvalidDataException($"material {mat}: no vertex buffer with texture coordinates{(span >= 256 ? " and float32 positions" : "")} to hold the imported mesh");
                 if (vbs.Count == 0) continue;
                 var parts = spatialTiles && tileSpace != null ? SpatialTiles(mesh, MaxChunkVertices, vbs.Count, TileTriangles) : Split(mesh, MaxChunkVertices);
