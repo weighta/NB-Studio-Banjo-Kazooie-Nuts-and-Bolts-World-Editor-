@@ -24,7 +24,6 @@ public static class LiveLight
     {
         var key = x.Read(FogGlobals, 8);
         if (key.Length != 8 || key.All(b => b == 0)) return 0;
-        var marker = new byte[] { 0x3F, 0x7E, 0xB8, 0x52 };   // 0.995 at -0x38 from the fog start (light-setup default)
         foreach (var (va, size) in x.Regions(0x40000000, 0x50000000))
             for (long off = 0; off < size; off += 1 << 24)
             {
@@ -32,7 +31,9 @@ public static class LiveLight
                 var d = x.Read((uint)(va + off), n);
                 for (int i = d.AsSpan().IndexOf(key); i >= 0;)
                 {
-                    if (i >= 0xD0 && i + 0xC8 <= d.Length && d.AsSpan(i - 0x38, 4).SequenceEqual(marker) && d.AsSpan(i + 0xC0, 8).SequenceEqual(key))
+                    // the fog block's second copy 0xC0 further on, and colours (ambient, sun) in 0..1: the light object
+                    // (the value at -0x38 used before is the setup's op 0x53 +0x30: 0.995 in Showdown Town, 0.92 in Nutty Acres)
+                    if (i >= 0xD0 && i + 0xC8 <= d.Length && d.AsSpan(i + 0xC0, 8).SequenceEqual(key) && Colours(d, i - 0xD0))
                         return (uint)(va + off + i - 0xD0);
                     int next = d.AsSpan(i + 1).IndexOf(key);
                     if (next < 0) break;
@@ -40,6 +41,16 @@ public static class LiveLight
                 }
             }
         return 0;
+    }
+
+    static bool Colours(byte[] d, int o)
+    {
+        foreach (int k in new[] { 0x10, 0x14, 0x18, 0x20, 0x24, 0x28 })
+        {
+            float f = BE.F32(d, o + k);
+            if (!(f >= 0 && f <= 1.001f)) return false;
+        }
+        return true;
     }
 
     static float[] Rgb(uint c) => new[] { ((c >> 16) & 0xFF) / 255f, ((c >> 8) & 0xFF) / 255f, (c & 0xFF) / 255f };

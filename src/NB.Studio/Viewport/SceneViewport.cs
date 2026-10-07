@@ -154,7 +154,8 @@ public sealed partial class SceneViewport : UserControl
             else list.Add((o, -1));
         }
         list.Sort((a, b) => a.D.CompareTo(b.D));
-        int built = 0, drawn = 0;
+        int drawn = 0; bool waiting = false;
+        long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
         foreach (var (o, _) in list)
         {
             if (drawn >= CollisionBudget) break;
@@ -163,25 +164,21 @@ public sealed partial class SceneViewport : UserControl
                 string key = (int)o.Kind + "|" + _collVer.GetValueOrDefault(asset) + "|" + asset;
                 if (!_collision.TryGetValue(key, out var batch))
                 {
-                    if (built >= 24) { _gl.Invalidate(); continue; }   // a few new batches per frame: no stall when switching on
-                    var segs = new List<(Vector3, Vector3)>(); var seen = new HashSet<(int, int, int)>();
-                    for (int mi = 0; mi < meshes.Count; mi++)
-                    {
-                        var m = meshes[mi];
-                        for (int t = 0; t + 2 < m.Triangles.Count; t += 3)
-                            for (int e = 0; e < 3; e++)
-                            {
-                                int a = m.Triangles[t + e], b = m.Triangles[t + (e + 1) % 3];
-                                if (a < m.Positions.Count && b < m.Positions.Count && seen.Add((mi, Math.Min(a, b), Math.Max(a, b)))) segs.Add((m.Positions[a], m.Positions[b]));
-                            }
-                    }
-                    batch = _r.CreateLineBatch(segs, CollisionColour(o.Kind));
-                    _collision[key] = batch; built++;
+                    // the wireframe of a collision mesh is worked out on a worker thread and uploaded when ready, a few
+                    // milliseconds of uploads per frame: backing away (hundreds of new pieces in range) no longer stalls
+                    // the frames that follow — before, up to 24 meshes were built per frame on the UI thread (up to
+                    // 130 ms frames, which made the first moments of a drag lag)
+                    if (!_collPending.TryGetValue(key, out var task)) _collPending[key] = task = Task.Run(() => CollisionSegments(meshes));
+                    if (!task.IsCompleted || System.Diagnostics.Stopwatch.GetElapsedTime(t0).TotalMilliseconds > 3) { waiting = true; continue; }
+                    _collPending.Remove(key);
+                    batch = _r.CreateLineBatch(task.Result, CollisionColour(o.Kind));
+                    _collision[key] = batch;
                 }
                 _r.DrawLineBatch(batch, local * o.Transform * vp);
             }
             drawn++;
         }
+        if (waiting) RedrawSoon();
         _collObjectsDrawn = drawn;
     }
     /// <summary>Draw path-node links (marker type 22: record +8 = next node index).</summary>
@@ -190,6 +187,33 @@ public sealed partial class SceneViewport : UserControl
     /// <summary>Debug: draw everything (no frustum / size culling), to compare against the culled frame.</summary>
     public bool NoCull;
     readonly Dictionary<string, Renderer.LineBatch> _collision = new();
+    /// <summary>Collision wireframes being worked out on worker threads (key as in <see cref="_collision"/>).</summary>
+    readonly Dictionary<string, Task<List<(Vector3, Vector3)>>> _collPending = new();
+
+    /// <summary>The edges of collision meshes, each once.</summary>
+    static List<(Vector3, Vector3)> CollisionSegments(List<NB.Core.Havok.CollisionMesh> meshes)
+    {
+        var segs = new List<(Vector3, Vector3)>(); var seen = new HashSet<(int, int, int)>();
+        for (int mi = 0; mi < meshes.Count; mi++)
+        {
+            var m = meshes[mi];
+            for (int t = 0; t + 2 < m.Triangles.Count; t += 3)
+                for (int e = 0; e < 3; e++)
+                {
+                    int a = m.Triangles[t + e], b = m.Triangles[t + (e + 1) % 3];
+                    if (a < m.Positions.Count && b < m.Positions.Count && seen.Add((mi, Math.Min(a, b), Math.Max(a, b)))) segs.Add((m.Positions[a], m.Positions[b]));
+                }
+        }
+        return segs;
+    }
+
+    System.Windows.Forms.Timer? _redrawSoon;
+    /// <summary>One more frame in ~40 ms (work finishing on worker threads), without rendering back to back meanwhile.</summary>
+    void RedrawSoon()
+    {
+        if (_redrawSoon == null) { _redrawSoon = new() { Interval = 40 }; _redrawSoon.Tick += (_, _) => { _redrawSoon.Stop(); _gl.Invalidate(); }; }
+        if (!_redrawSoon.Enabled) _redrawSoon.Start();
+    }
     /// <summary>Draw the selected object's own Havok collision (magenta, on top), independent of View > Collision.</summary>
     public bool ShowSelectionCollision { get => _showSelColl; set { if (_showSelColl != value) { _showSelColl = value; _gl.Invalidate(); } } }
     bool _showSelColl;
@@ -467,7 +491,7 @@ public sealed partial class SceneViewport : UserControl
     {
         CancelTransform();
         if (_ready) { _gl.MakeCurrent(); _r.Clear(); foreach (var b in _collision.Values) _r.DeleteLineBatch(b); }
-        _collision.Clear();
+        _collision.Clear(); _collPending.Clear();
         if (_ready && _selCollBatch != null) _r.DeleteLineBatch(_selCollBatch);
         _selCollBatch = null; _selCollFor = null;
         if (_ready && _staticLines != null) _r.DeleteLineBatch(_staticLines);
@@ -600,9 +624,34 @@ public sealed partial class SceneViewport : UserControl
         _ => new(0.42f, 0.55f, 0.72f, 1),
     };
 
+    long _lastFrame;
+    int _frameCacheFbo, _frameCacheRb, _frameCacheW, _frameCacheH;
+    (Vector3, float, float, int, int, ViewMode, int, bool, int, bool, bool, float, Vector3) _frameCacheKey;
+
+    /// <summary>Copies the colour of the view to the frame cache (after the scene is drawn) or back.</summary>
+    void CopyFrame(bool fromCache, int W, int H)
+    {
+        if (_frameCacheFbo == 0 || _frameCacheW != W || _frameCacheH != H)
+        {
+            if (_frameCacheFbo == 0) { _frameCacheFbo = GL.GenFramebuffer(); _frameCacheRb = GL.GenRenderbuffer(); }
+            GL.BindRenderbuffer(RenderbufferTarget.Renderbuffer, _frameCacheRb);
+            GL.RenderbufferStorage(RenderbufferTarget.Renderbuffer, RenderbufferStorage.Rgba8, W, H);
+            GL.BindFramebuffer(FramebufferTarget.Framebuffer, _frameCacheFbo);
+            GL.FramebufferRenderbuffer(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0, RenderbufferTarget.Renderbuffer, _frameCacheRb);
+            GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+            _frameCacheW = W; _frameCacheH = H;
+        }
+        GL.BindFramebuffer(FramebufferTarget.ReadFramebuffer, fromCache ? _frameCacheFbo : 0);
+        GL.BindFramebuffer(FramebufferTarget.DrawFramebuffer, fromCache ? 0 : _frameCacheFbo);
+        GL.BlitFramebuffer(0, 0, W, H, 0, 0, W, H, ClearBufferMask.ColorBufferBit, BlitFramebufferFilter.Nearest);
+        GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+    }
+
     void Render(bool swap = true)
     {
         if (!_ready) return;
+        _lastFrame = System.Diagnostics.Stopwatch.GetTimestamp();
+        using var _p = Prof.Time(_xf != XfKind.None ? "render (transforming)" : "render");
         _gl.MakeCurrent();
         int W = _gl.Width, H = _gl.Height;
         if (W < 1 || H < 1) return;   // minimized
@@ -612,9 +661,24 @@ public sealed partial class SceneViewport : UserControl
         GL.ClearColor(cc.X, cc.Y, cc.Z, cc.W);
         GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
         var view = View(); var vp = view * Proj();
-        if (Scene != null)
+        // dragging something that is drawn as lines only (a player start, a path node, any marker box): the rest of the
+        // frame does not change, so it is drawn once and copied back for every mouse move (the far view of Showdown Town
+        // takes 20-35 ms to draw; the copy well under 1 ms)
+        bool cacheable = Scene != null && _xf != XfKind.None && !SelectedObjects.Any(o => DrawsModel(o));
+        var ck = (_camPos, _yaw, _pitch, W, H, _viewMode, _linesVersion, ShowCollision, _collision.Count, ShowMarkers, ShowPaths, _fov, _r.Lighting.SunDirection);
+        bool cacheHit = cacheable && _frameCacheKey.Equals(ck) && _frameCacheFbo != 0;
+        if (cacheHit) using (Prof.Time("  render: cached scene")) CopyFrame(fromCache: true, W, H);
+        if (Scene != null && !cacheHit)
         {
-            if (_viewMode == ViewMode.Rendered && _r.Shadows) RenderShadowMap(W, H);
+            if (_viewMode == ViewMode.Rendered && _r.Shadows)
+            {
+                // the sun's shadow map only depends on the camera, the sun and what casts shadows: dragging a marker
+                // (a player start, a path node …) keeps the one of the frame before (the far view's shadow pass took ~15 ms)
+                var sk = (_camPos, _yaw, _pitch, _r.Lighting.SunDirection, ShadowReach, ShadowCasters, NoCull, _r.ShadowCull);
+                if (!(_xf != XfKind.None && _shadowKey == sk && !SelectedObjects.Any(o => DrawsModel(o))))
+                    using (Prof.Time("  render: shadow map")) RenderShadowMap(W, H);
+                _shadowKey = sk;
+            }
             _r.Begin(vp, _camPos, Right(), Vector3.Normalize(Vector3.Cross(Right(), Forward())));
             if (_viewMode is ViewMode.Rendered or ViewMode.Textured && _sky != null)
             {
@@ -631,6 +695,7 @@ public sealed partial class SceneViewport : UserControl
             // (sunk below the level / shrunk to nothing) is skipped unless selected
             float minSize = MathF.Tan(_fov * MathF.PI / 360) / Math.Max(1, H) * 0.75f;
             var fr = new Renderer.Frustum(vp, _camPos, NoCull ? 0 : minSize);
+            var _pobj = Prof.Time("  render: objects");
             foreach (var o in Scene.Objects)
             {
                 if (!DrawsModel(o)) continue;
@@ -640,26 +705,33 @@ public sealed partial class SceneViewport : UserControl
                 foreach (var (cm, cl) in o.Children) _r.DrawModel(cm, cl * o.Transform, tint, NoCull ? null : fr);
             }
             if (_water != null && ShowTerrain && _viewMode is ViewMode.Textured or ViewMode.Rendered) _r.DrawModel(_water, Matrix4x4.Identity, Vector4.Zero, NoCull ? null : fr);
+            _pobj.Dispose();
             _r.GrassTilesDrawn = 0;
-            DrawGrassLayers(NoCull ? null : fr);
-            _r.FlushTransparent();
+            using (Prof.Time("  render: grass")) DrawGrassLayers(NoCull ? null : fr);
+            using (Prof.Time("  render: transparent")) _r.FlushTransparent();
             GL.PolygonMode(MaterialFace.FrontAndBack, PolygonMode.Fill);
-            if (ShowCollision) DrawAllCollision(vp, fr);
+            if (ShowCollision) using (Prof.Time("collision overlay")) DrawAllCollision(vp, fr);
             var key = (_linesVersion, ShowMarkers, ShowPaths);
             if (_staticLines == null || _staticKey != key)
             {
+                using var _pl = Prof.Time("marker line batch rebuild");
                 if (_staticLines != null) _r.DeleteLineBatch(_staticLines);
                 _staticLines = _r.CreateColoredLineBatch(StaticLines());
                 _staticKey = key;
             }
             _r.DrawLineBatch(_staticLines, vp, onTop: true);
+            if (cacheable) { CopyFrame(fromCache: false, W, H); _frameCacheKey = ck; } else _frameCacheKey = default;
+        }
+        if (Scene != null)
+        {
+            if (_movingLines.Count > 0) _r.Lines(MovingLines(), vp, true);
             DrawSpawnFigures(vp);
             DrawSelectionCollision(vp);
             if (ShowCollision) DrawCollisionSelection(vp);
             if (Selected != null) DrawGizmo(vp);
         }
-        DrawOverlays(W, H);
-        if (swap) _gl.SwapBuffers();
+        using (Prof.Time("  render: overlays")) DrawOverlays(W, H);
+        if (swap) using (Prof.Time("  render: swap")) _gl.SwapBuffers();
     }
 
     /// <summary>Sun shadow map around the part of the level in front of the camera (orthographic, 2 × 260 units).</summary>
@@ -697,19 +769,29 @@ public sealed partial class SceneViewport : UserControl
     /// include high geometry (Nutty Acres' cloud rings 250+ units up cast no shadow in the game).</summary>
     public float ShadowReach = 250;
 
+    (Vector3, float, float, Vector3, float, int, bool, int)? _shadowKey;
     Renderer.LineBatch? _staticLines;
     (int, bool, bool) _staticKey;
     int _linesVersion;
 
     /// <summary>Marker boxes, scenery crosses and path links: rebuilt only when the scene or its markers change
     /// (<see cref="Refresh3D"/>), not every frame.</summary>
-    List<(Vector3, Vector3, Vector3)> StaticLines()
+    List<(Vector3, Vector3, Vector3)> StaticLines() => MarkerLines(o => !_movingLines.Contains(o), (a, b) => !_movingLines.Contains(a) && !_movingLines.Contains(b));
+
+    /// <summary>Markers being moved (with the path links that touch them): drawn every frame, so a drag does not rebuild
+    /// the line batch of all markers on every mouse move (2–36 ms each in Showdown Town's 1,452 markers).</summary>
+    readonly HashSet<SceneObject> _movingLines = new();
+
+    List<(Vector3, Vector3, Vector3)> MovingLines() => MarkerLines(_movingLines.Contains, (a, b) => _movingLines.Contains(a) || _movingLines.Contains(b));
+
+    List<(Vector3, Vector3, Vector3)> MarkerLines(Func<SceneObject, bool> box, Func<SceneObject, SceneObject, bool> link)
     {
         var lines = new List<(Vector3, Vector3, Vector3)>();
         if (Scene == null) return lines;
         {
             foreach (var o in Scene.Objects.Where(o => o.Visible && (o.Model == null || (o.Kind == SceneObjectKind.Marker && !_showObjects)) && (o.Kind != SceneObjectKind.Marker || ShowMarkers)))
             {
+                if (!box(o)) continue;
                 if (SpawnPoints.Is(o)) continue;   // drawn every frame, thicker: DrawSpawnFigures
                 if (o.Kind == SceneObjectKind.Marker) AddBox(lines, o, MarkerColor(o.Marker!.Type));
                 else AddCross(lines, o.Transform.Translation, 2, new Vector3(1, 0, 1));
@@ -720,7 +802,7 @@ public sealed partial class SceneViewport : UserControl
                 var byKey = new Dictionary<(MarkerAsset, int), SceneObject>();
                 foreach (var n in nodes) byKey.TryAdd((n.MarkerSet!, n.Marker!.Index), n);
                 foreach (var n in nodes)
-                    if (n.Marker!.Link != n.Marker.Index && byKey.TryGetValue((n.MarkerSet!, n.Marker.Link), out var next))
+                    if (n.Marker!.Link != n.Marker.Index && byKey.TryGetValue((n.MarkerSet!, n.Marker.Link), out var next) && link(n, next))
                     {
                         var a = n.Transform.Translation + Vector3.UnitY * 0.5f; var b = next.Transform.Translation + Vector3.UnitY * 0.5f;
                         lines.Add((a, b, new Vector3(1f, 0.45f, 0.05f)));
@@ -1002,6 +1084,7 @@ public sealed partial class SceneViewport : UserControl
     void HoverTick()
     {
         _hoverTimer.Stop();
+        using var _p = Prof.Time("hover pick");
         if (Scene == null || _looking || _panning || _xf != XfKind.None || !_gl.ClientRectangle.Contains(_mouse)) return;
         var o = Pick(_mouse).Obj;
         if (!SpawnPoints.Is(o)) return;
@@ -1253,6 +1336,9 @@ public sealed partial class SceneViewport : UserControl
         _xf = kind; _xfDrag = drag; _xfAxis = axis; _xfSpace = space; _xfTyped = ""; _xfDragKeyAxis = false;
         _xfStart = Selected.Transform; _xfMouse0 = _mouse;
         BeginMulti();
+        _movingLines.Clear();
+        foreach (var m in SelectedObjects) if (m.Kind == SceneObjectKind.Marker) _movingLines.Add(m);
+        if (_movingLines.Count > 0) _linesVersion++;
         _xfValue = kind == XfKind.Scale ? 1 : 0;
         EditStarted?.Invoke(Selected, _xfStart);
         _gl.Focus();
@@ -1264,6 +1350,7 @@ public sealed partial class SceneViewport : UserControl
         if (_xf == XfKind.None) return;
         var o = Selected; var start = _xfStart;
         _xf = XfKind.None; _xfAxis = -1; _xfTyped = "";
+        if (_movingLines.Count > 0) { _movingLines.Clear(); _linesVersion++; }
         var changed = (_xfStarts.Count > 0 ? _xfStarts : new List<(SceneObject, Matrix4x4)> { (o!, start) }).Where(x => x.Item1 != null && x.Item1.Transform != x.Item2).ToList();
         _xfStarts = new();
         if (changed.Count > 0) ObjectsEdited?.Invoke(changed);
@@ -1274,6 +1361,7 @@ public sealed partial class SceneViewport : UserControl
 
     public void CancelTransform()
     {
+        if (_movingLines.Count > 0) { _movingLines.Clear(); _linesVersion++; }
         if (_xf == XfKind.None) return;
         CancelMulti(); _xfStarts = new();
         if (Selected != null) { Selected.Transform = _xfStart; SelectionChanged?.Invoke(Selected); if (Selected.Kind == SceneObjectKind.Marker) _linesVersion++; }
@@ -1306,6 +1394,7 @@ public sealed partial class SceneViewport : UserControl
     void UpdateTransform()
     {
         if (_xf == XfKind.None || Selected == null) return;
+        using var _p = Prof.Time("UpdateTransform (incl. SelectionChanged)");
         var o = Selected; var start = _xfStart; var piv = start.Translation;
         bool snap = _keys.Contains(Keys.ControlKey);
         // a drag constrained by holding X / Y / Z
@@ -1411,7 +1500,7 @@ public sealed partial class SceneViewport : UserControl
             }
         }
         // markers (boxes, path-node links) are in the static line batch: rebuild it so the path follows the node live
-        if (o.Kind == SceneObjectKind.Marker) _linesVersion++;
+        if (o.Kind == SceneObjectKind.Marker && !_movingLines.Contains(o)) _linesVersion++;
         UpdateMulti();   // the other selected objects follow
         SelectionChanged?.Invoke(o);
         _gl.Invalidate();
@@ -1541,6 +1630,13 @@ public sealed partial class SceneViewport : UserControl
 
     void OnMouseDown(object? s, MouseEventArgs e)
     {
+        if (Prof.On && e.Button == MouseButtons.Left) Prof.Flush("before mouse down");
+        using var _p = Prof.Time("mouse down");
+        OnMouseDownCore(e);
+    }
+
+    void OnMouseDownCore(MouseEventArgs e)
+    {
         _gl.Focus();
         _lastMouse = _mouse = e.Location;
         if (_xf != XfKind.None && !_xfDrag)
@@ -1596,6 +1692,12 @@ public sealed partial class SceneViewport : UserControl
 
     void OnMouseUp(object? s, MouseEventArgs e)
     {
+        try { OnMouseUpCore(e); }
+        finally { if (Prof.On && e.Button == MouseButtons.Left) Prof.Flush($"mouse up at {Fmt(_camPos)} (view {_viewMode}, collision {(ShowCollision ? "on" : "off")}, edit collision {(_collMode ? "on" : "off")})"); }
+    }
+
+    void OnMouseUpCore(MouseEventArgs e)
+    {
         if (e.Button == MouseButtons.Right)
         {
             _looking = false;
@@ -1634,6 +1736,9 @@ public sealed partial class SceneViewport : UserControl
         {
             if (_xfDrag && (Math.Abs(e.X - _xfMouse0.X) + Math.Abs(e.Y - _xfMouse0.Y) > 2)) _dragMoved = true;
             UpdateTransform();
+            // paint now when the last frame is older than a frame time: WM_PAINT is only handled when no input is
+            // waiting, so a quickly moved mouse kept the view from updating until it stopped ("lags, then jumps")
+            if (System.Diagnostics.Stopwatch.GetElapsedTime(_lastFrame).TotalMilliseconds >= 15) _gl.Update();
         }
         else if (CollisionMouseMove(e)) { }
         else
@@ -1670,6 +1775,7 @@ public sealed partial class SceneViewport : UserControl
     public (SceneObject? Obj, float Dist) Pick(Point p)
     {
         if (Scene == null) return (null, 0);
+        using var _p = Prof.Time("Pick (objects)");
         var (ro, rd) = Ray(p);
         SceneObject? best = null; float bestT = float.MaxValue;
         foreach (var o in Scene.Objects)
@@ -1793,7 +1899,7 @@ public sealed partial class SceneViewport : UserControl
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) { _timer.Dispose(); if (_ready) { _gl.MakeCurrent(); _r.DeleteOverlay(_barOv); _r.DeleteOverlay(_hudOv); _r.Dispose(); } }
+        if (disposing) { _timer.Dispose(); _redrawSoon?.Dispose(); if (_ready) { _gl.MakeCurrent(); if (_frameCacheFbo != 0) { GL.DeleteFramebuffer(_frameCacheFbo); GL.DeleteRenderbuffer(_frameCacheRb); } _r.DeleteOverlay(_barOv); _r.DeleteOverlay(_hudOv); _r.Dispose(); } }
         base.Dispose(disposing);
     }
 }

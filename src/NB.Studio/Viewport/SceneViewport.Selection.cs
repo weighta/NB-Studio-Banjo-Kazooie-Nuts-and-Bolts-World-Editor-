@@ -61,7 +61,7 @@ public sealed partial class SceneViewport
             if (o == Selected) continue;
             if (ScaleLocked(o) && scales) { var m = start; m.Translation = Vector3.Transform(start.Translation, x); o.Transform = m; }
             else o.Transform = start * x;
-            if (o.Kind == SceneObjectKind.Marker) _linesVersion++;
+            if (o.Kind == SceneObjectKind.Marker && !_movingLines.Contains(o)) _linesVersion++;
         }
     }
 

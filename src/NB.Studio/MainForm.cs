@@ -1797,7 +1797,7 @@ public sealed partial class MainForm : Form
             }
             else _history.DropSceneSteps();
             if (_ws != null) { _settings.LastWorlds[_ws.Root] = WorldKey(w, act); _settings.Save(); }
-            try { _atmos.SetWorld(w.Bundle, w.Display); } catch (Exception e) { Log("Atmosphere: " + e.Message); }
+            try { _atmos.SetWorld(w.Bundle, act?.Display ?? w.Display, act?.ActBundle ?? 0); } catch (Exception e) { Log("Atmosphere: " + e.Message); }
             _view.SetScene(scene, keepCamera: reload);
             FillTree();
             if (selKey != null && scene.Objects.FirstOrDefault(o => UndoHistory.KeyOf(o) == selKey) is { } sel) _view.Select(sel);
@@ -1881,6 +1881,15 @@ public sealed partial class MainForm : Form
     {
         if (_collProxy != null && o != _collProxy && _collSel.Count > 0) { _collSel.Clear(); _collAt.Clear(); _collProxy = null; _view.InvalidateCollisionSelection(); }
         if (o != null && o == _collProxy) { _transform.SetObject(o); UpdateCollisionStatus(); return; }   // the collision selection's stand-in
+        if (o != null && o == _movingSel && _view.Transforming)
+        {
+            // a mouse move of a transform: only the fields follow (the Tag Editor, Scene list and title catch up when it
+            // ends; refreshing the Tag Editor on every move cost ~8 ms)
+            _transform.SetObject(o);
+            _status.Text = $"{o.Name}  pos ({o.Transform.M41:F2}, {o.Transform.M42:F2}, {o.Transform.M43:F2})";
+            return;
+        }
+        _movingSel = o;
         _transform.SetObject(o);
         // a character (a marker placing an actor): its dialogue lines, and the Dialogue tab when the user wants it shown
         if (o?.Marker != _dialogueFor?.Marker || o == null)
@@ -1903,6 +1912,8 @@ public sealed partial class MainForm : Form
     }
 
     SceneObject? _dialogueFor;
+    /// <summary>The selection <see cref="OnSelection"/> last refreshed everything for.</summary>
+    SceneObject? _movingSel;
 
     static TreeNode? FindNode(TreeNodeCollection nodes, SceneObject o)
     {

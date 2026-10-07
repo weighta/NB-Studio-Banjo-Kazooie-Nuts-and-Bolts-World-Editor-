@@ -36,6 +36,11 @@ public sealed class LightSetup
     /// <summary>The asset's .data part (edited in place).</summary>
     public byte[] Data = Array.Empty<byte>();
     public int FogCommand;
+    /// <summary>Other resident copies of the same asset (same id) in other bundles: an act's light setup is copied into
+    /// its challenge bundles (World of Sports act 4: 8 bundles). Saving writes the edited bytes into every copy.</summary>
+    public List<(uint Bundle, int Symbol)> Copies = new();
+    /// <summary>Level scripts (op 0x52) that run this light setup, in the scanned bundles.</summary>
+    public List<string> UsedBy = new();
 
     public const int Ambient = 0x08, Sun = 0x0C, SunElevation = 0x10, SunAzimuth = 0x14, Intensity = 0x1C;
     public const int FogOn = 0x08, FogStart = 0x0C, FogEnd = 0x10, FogMax = 0x14, FogColour = 0x24;
@@ -135,7 +140,8 @@ public sealed record SkyDome(string Name, uint Id, List<string> Textures)
         get
         {
             int i = Name.LastIndexOf("skydome", StringComparison.Ordinal);
-            var s = i >= 0 ? Name[(i + "skydome".Length)..].TrimStart('s', '_') : Name;
+            var s = i >= 0 ? Name[(i + "skydome".Length)..] : Name;
+            if (i >= 0) { if (s.StartsWith("s_")) s = s[2..]; s = s.TrimStart('_'); }   // "skydomes_sunrise01" -> "sunrise01"
             return s.Length > 0 ? s : Name;
         }
     }
@@ -150,6 +156,12 @@ public sealed class TimeOfDay
 {
     public string Display = "";
     public LightSetup Light = null!;
+    /// <summary>The act whose script runs this setup is the open one (it is listed first).</summary>
+    public bool CurrentAct;
+    /// <summary>Scripts of other worlds / levels that also run this light setup (shown before saving).</summary>
+    public List<string> SharedWith = new();
+    /// <summary>"stored in 01ede7 (Nutty Acres act 6), run by aid_script_banjox_nuttyacres_act6_main" …</summary>
+    public string Where = "";
     public string? PhaseScript;
     public uint PhaseBundle;
     public int PhaseSymbol;
@@ -183,32 +195,72 @@ public sealed class WorldAtmosphere
 
     static readonly string[] PhaseOrder = { "morning", "midday", "main", "day", "afternoon", "evening", "dusk", "sunset", "night" };
 
-    public static WorldAtmosphere Load(Workspace ws, AssetIndex index, uint worldBundle)
+    public uint ActBundle;
+
+    /// <summary>
+    /// The sky, light and fog of a world (and of the act opened with it). Where a level's light setup lives:
+    /// <list type="bullet">
+    /// <item>Showdown Town: in the world bundle 234cec, run by the time-of-day scripts in the common bundle 685374.</item>
+    /// <item>Every other world: one setup per act (aid_script_banjox_lightsetup_&lt;world&gt;_act&lt;N&gt;_main, in the act's
+    /// own bundle, e.g. Nutty Acres act 6 = 01ede7), run (op 0x52) by the act's main script in 685374 that also loads the
+    /// world (op 0x01 = the background model), with the act's skydome (op 0x2C). Challenge bundles of an act carry
+    /// identical copies (<see cref="LightSetup.Copies"/>, written too on save).</item>
+    /// <item>Spiral Mountain, Banjo's house, LOGBOX, the multiplayer ("live_") levels: scripts named after the world or
+    /// loading its background, in the world / act / common bundles.</item>
+    /// </list>
+    /// Same scan as the 3D view's Rendered mode (<see cref="WorldLooks"/>). <paramref name="actBundle"/> (0 = none): the
+    /// act opened with the world; its setup comes first and its bundle's copy is the one edited.
+    /// </summary>
+    public static WorldAtmosphere Load(Workspace ws, AssetIndex index, uint worldBundle, uint actBundle = 0)
     {
-        worldBundle &= 0xFFFFFF;
-        var a = new WorldAtmosphere(ws) { WorldBundle = worldBundle };
+        worldBundle &= 0xFFFFFF; actBundle &= 0xFFFFFF;
+        var a = new WorldAtmosphere(ws) { WorldBundle = worldBundle, ActBundle = actBundle };
         var world = a.Caff(worldBundle);
-        // light setups stored in the world bundle
-        var lights = new List<LightSetup>();
-        for (int s = 1; s <= world.Symbols.Count; s++)
+        // the world's key ("nuttyacres") and background model (what level scripts load with op 0x01)
+        uint bgId = 0;
+        for (int s = 1; s <= world.Symbols.Count && bgId == 0; s++)
         {
-            var name = AssetIds.DisplayName(world.Symbols[s - 1]);
-            if (!name.StartsWith("aid_script_banjox_lightsetup_")) continue;
-            var part = DataPart(world, s);
-            if (part == null) continue;
-            int fog = LightSetup.FindFog(part.Data);
-            if (fog < 0) continue;
-            lights.Add(new LightSetup { Name = name, Bundle = worldBundle, Symbol = s, Id = AssetIds.IdOf(world.Symbols[s - 1]) ?? 0, Data = part.Data, FogCommand = fog });
+            var n = AssetIds.DisplayName(world.Symbols[s - 1]);
+            if (n.StartsWith("aid_model_banjox_background_") && n.EndsWith("_default"))
+            { a.WorldName = n["aid_model_banjox_background_".Length..^"_default".Length]; bgId = AssetIds.IdOf(world.Symbols[s - 1]) ?? 0; }
         }
-        if (lights.Count > 0)
+        var names = new Dictionary<uint, string>();
+        foreach (var e in index.Entries) if (e.Id != 0 && !e.Streamed) names.TryAdd(e.Id, e.Name);
+        bool IsLight(uint id) => names.TryGetValue(id, out var n) && n.StartsWith("aid_script_banjox_lightsetup_");
+        // background models of every world: a script that loads another world's background is that world's (the Car Park's
+        // showdowntown_carpark script, the title screen's Spiral Mountain …)
+        var backgrounds = index.Entries.Where(e => !e.Streamed && e.Type == "model" && e.Name.StartsWith("aid_model_banjox_background_") && e.Name.EndsWith("_default"))
+            .Select(e => e.Id).ToHashSet();
+
+        // light setups by id: the act's copy first, then the world's, then any resident copy
+        var lights = new Dictionary<uint, LightSetup?>();
+        LightSetup? Light(uint id)
         {
-            var parts = lights[0].Name["aid_script_banjox_lightsetup_".Length..].Split('_');
-            a.WorldName = parts[0];
+            if (lights.TryGetValue(id, out var have)) return have;
+            var entries = index.Entries.Where(e => e.Id == id && !e.Streamed && e.Symbol > 0)
+                .OrderBy(e => e.Bundle == actBundle && actBundle != 0 ? 0 : e.Bundle == worldBundle ? 1 : 2).ThenBy(e => e.Bundle).ToList();
+            LightSetup? l = null;
+            foreach (var e in entries)
+            {
+                try
+                {
+                    var c = a.Caff(e.Bundle);
+                    var part = DataPart(c, e.Symbol);
+                    int fog = part == null ? -1 : LightSetup.FindFog(part.Data);
+                    if (fog < 0) continue;
+                    l = new LightSetup { Name = e.Name, Bundle = e.Bundle, Symbol = e.Symbol, Id = id, Data = part!.Data, FogCommand = fog };
+                    l.Copies = entries.Where(x => x != e).Select(x => (x.Bundle, x.Symbol)).Distinct().ToList();
+                    break;
+                }
+                catch (Exception) { }
+            }
+            return lights[id] = l;
         }
-        // time-of-day scripts: op 0x52 runs a light setup, op 0x2C sets the skydome
-        var byId = lights.ToDictionary(l => l.Id);
+
+        // level scripts in the world, act and common bundles: op 0x52 runs a light setup, op 0x2C sets the skydome
         var phaseOf = new Dictionary<LightSetup, TimeOfDay>();
-        foreach (var bundle in new[] { worldBundle, CommonBundle }.Distinct())
+        var runners = new Dictionary<uint, List<(string Script, bool Ours)>>();
+        foreach (var bundle in new[] { worldBundle, actBundle, CommonBundle }.Where(b => b != 0).Distinct())
         {
             if (bundle != worldBundle && !index.Entries.Any(e => e.Bundle == bundle && !e.Streamed)) continue;
             CaffFile c;
@@ -217,29 +269,81 @@ public sealed class WorldAtmosphere
             {
                 var name = AssetIds.DisplayName(c.Symbols[s - 1]);
                 if (!name.StartsWith("aid_script_") || name.StartsWith("aid_script_banjox_lightsetup_")) continue;
-                if (a.WorldName.Length > 0 && !name.Contains(a.WorldName)) continue;
                 var part = DataPart(c, s);
                 if (part == null || part.Data.Length < 8) continue;
                 ScriptAsset sc;
                 try { sc = ScriptAsset.Parse(part.Data); } catch (Exception) { continue; }
-                var run = sc.Commands.Where(k => k.Op == 0x52 && k.Data.Length >= 12).Select(k => k.Arg(0)).FirstOrDefault(id => byId.ContainsKey(id));
-                if (run == 0) continue;
-                var light = byId[run];
-                var dome = sc.Commands.FirstOrDefault(k => k.Op == 0x2C && k.Data.Length >= 12);
-                string tail = a.WorldName.Length > 0 && name.Contains(a.WorldName + "_") ? name[(name.IndexOf(a.WorldName + "_", StringComparison.Ordinal) + a.WorldName.Length + 1)..] : name;
-                var cand = new TimeOfDay
+                var runs = sc.Commands.Where(k => k.Op == 0x52 && k.Data.Length >= 12).Select(k => k.Arg(0)).Where(IsLight).Distinct().ToList();
+                if (runs.Count == 0) continue;
+                bool loadsWorld = bgId != 0 && sc.Commands.Any(k => k.Op == 0x01 && k.Data.Length >= 12 && k.Arg(0) == bgId);
+                bool loadsOther = sc.Commands.Any(k => k.Op == 0x01 && k.Data.Length >= 12 && k.Arg(0) != bgId && backgrounds.Contains(k.Arg(0)));
+                bool named = a.WorldName.Length > 0 && (name.Contains("_" + a.WorldName + "_") || name.EndsWith("_" + a.WorldName))
+                    && runs.All(id => names[id].Contains(a.WorldName)) && !loadsOther;
+                bool ours = loadsWorld || named;
+                foreach (var id in runs)
                 {
-                    Display = Title(tail), Light = light, PhaseScript = name, PhaseBundle = bundle, PhaseSymbol = s, PhaseData = part.Data,
-                    DomeOffset = dome != null ? dome.Offset + 8 : -1,
-                };
-                // several scripts can run the same light setup (Showdown Town: ..._midday and the older ..._main both run
-                // lightsetup_main): keep the time-of-day script (a phase word other than "main", with a skydome command)
-                if (!phaseOf.TryGetValue(light, out var had) || Score(cand) > Score(had)) phaseOf[light] = cand;
+                    if (!runners.TryGetValue(id, out var rl)) runners[id] = rl = new();
+                    rl.Add((name, ours));
+                }
+                if (!ours) continue;
+                var dome = sc.Commands.FirstOrDefault(k => k.Op == 0x2C && k.Data.Length >= 12);
+                foreach (var id in runs)
+                {
+                    var light = Light(id);
+                    if (light == null) continue;
+                    var cand = new TimeOfDay
+                    {
+                        Display = DisplayOf(name, a.WorldName), Light = light, PhaseScript = name, PhaseBundle = bundle, PhaseSymbol = s, PhaseData = part.Data,
+                        DomeOffset = dome != null ? dome.Offset + 8 : -1,
+                        CurrentAct = actBundle != 0 && (light.Bundle == actBundle || light.Copies.Any(x => x.Bundle == actBundle)),
+                    };
+                    // several scripts can run the same light setup (Showdown Town: ..._midday and the older ..._main both run
+                    // lightsetup_main): keep the time-of-day / act script (a phase word other than "main", with a skydome)
+                    if (!phaseOf.TryGetValue(light, out var had) || Score(cand) > Score(had)) phaseOf[light] = cand;
+                }
             }
         }
-        foreach (var l in lights)
-            a.Times.Add(phaseOf.TryGetValue(l, out var t) ? t : new TimeOfDay { Display = Title(l.ShortName), Light = l });
-        a.Times = a.Times.OrderBy(t => Rank(t)).ThenBy(t => t.Display).ToList();
+        // light setups stored in the world / act bundle that no script was found for (listed by name)
+        foreach (var b in new[] { worldBundle, actBundle }.Where(b => b != 0).Distinct())
+        {
+            CaffFile c;
+            try { c = a.Caff(b); } catch (Exception) { continue; }
+            for (int s = 1; s <= c.Symbols.Count; s++)
+            {
+                var name = AssetIds.DisplayName(c.Symbols[s - 1]);
+                if (!name.StartsWith("aid_script_banjox_lightsetup_")) continue;
+                var l = Light(AssetIds.IdOf(c.Symbols[s - 1]) ?? 0);
+                if (l == null || phaseOf.ContainsKey(l)) continue;
+                phaseOf[l] = new TimeOfDay { Display = Title(l.ShortName), Light = l, CurrentAct = b == actBundle };
+            }
+        }
+        foreach (var (l, t) in phaseOf)
+        {
+            if (runners.TryGetValue(l.Id, out var rl))
+            {
+                l.UsedBy = rl.Select(r => r.Script).Distinct().ToList();
+                var ours = rl.Where(r => r.Ours).Select(r => r.Script).ToHashSet();
+                // (a setup found only by name in the world / act bundle has no script of ours to compare with)
+                if (t.PhaseScript != null) t.SharedWith = rl.Where(r => !r.Ours && !ours.Contains(r.Script)).Select(r => r.Script).Distinct().ToList();
+                // one setup run by several acts (LOGBOX 720 acts 1-5 + WW, World of Sports acts 1 and 2): "Acts 1, 2"
+                var acts = ours.Select(x => System.Text.RegularExpressions.Regex.Match(x, "_" + a.WorldName + @"_act(\d+|ww)_main$"))
+                    .Where(m => m.Success).Select(m => m.Groups[1].Value == "ww" ? "WW" : m.Groups[1].Value).Distinct()
+                    .OrderBy(x => x == "WW" ? 99 : int.Parse(x)).ToList();
+                if (acts.Count > 1) t.Display = "Acts " + string.Join(", ", acts);
+            }
+            t.Where = $"stored in {l.Bundle:x6}" + (l.Copies.Count > 0 ? $" (+ {l.Copies.Count} cop{(l.Copies.Count == 1 ? "y" : "ies")}: {string.Join(", ", l.Copies.Select(x => x.Bundle.ToString("x6")).Distinct())})" : "")
+                + (l.UsedBy.Count > 0 ? $", run by {string.Join(", ", l.UsedBy.Select(u => u.Replace("aid_script_banjox_", "")))}" : "");
+            a.Times.Add(t);
+        }
+        // the open act first; multiplayer ("live_") levels and setups named after another world (Banjo's house holds a copy
+        // of Spiral Mountain's sunrise) last
+        bool Foreign(TimeOfDay t)
+        {
+            var n = t.Light.Name.Replace("aid_script_banjox_lightsetup_", "");
+            return WorldCatalog.DisplayNames.Keys.Any(k => k != a.WorldName && n.StartsWith(k + "_"));
+        }
+        a.Times = a.Times.OrderBy(t => t.CurrentAct ? 0 : 1).ThenBy(t => (t.PhaseScript ?? "").Contains("_live_") ? 1 : 0).ThenBy(t => Foreign(t) ? 1 : 0)
+            .ThenBy(t => Rank(t)).ThenBy(t => t.Display, StringComparer.OrdinalIgnoreCase).ToList();
         a.Snapshot();
         // skydome models of the world
         for (int s = 1; s <= world.Symbols.Count; s++)
@@ -247,38 +351,53 @@ public sealed class WorldAtmosphere
             var name = AssetIds.DisplayName(world.Symbols[s - 1]);
             if (!name.StartsWith("aid_model_") || !name.Contains("skydome")) continue;
             var tex = new List<string>();
-            try
-            {
-                var m = NB.Core.Models.ModelAsset.Parse(world, s);
-                foreach (var d in m.Draws) foreach (var (_, t) in d.Textures)
-                {
-                    var st = NB.Core.Models.ObjExporter.TextureFileStem(t);
-                    if (!tex.Contains(st)) tex.Add(st);
-                }
-            }
-            catch (Exception) { }
+            try { tex = DomeTextures(NB.Core.Models.ModelAsset.Parse(world, s)); } catch (Exception) { }
             a.Domes.Add(new SkyDome(name, AssetIds.IdOf(world.Symbols[s - 1]) ?? 0, tex));
         }
-        // domes used by a time-of-day script but stored elsewhere still get a name
+        // domes used by a time-of-day / act script but stored elsewhere (act bundles, Bundle/50): name and textures
         foreach (var t in a.Times.Where(t => t.DomeOffset >= 0))
-            if (!a.Domes.Any(d => d.Id == t.DomeId))
+            if (t.DomeId != 0 && !a.Domes.Any(d => d.Id == t.DomeId))
             {
-                var e = index.Entries.FirstOrDefault(x => x.Id == t.DomeId);
-                a.Domes.Add(new SkyDome(e?.Name ?? $"0x{t.DomeId:X8}", t.DomeId, new()));
+                var tex = new List<string>();
+                try { if (WorldLooks.LoadModel(ws, index, t.DomeId, null) is { } m) tex = DomeTextures(m); } catch (Exception) { }
+                a.Domes.Add(new SkyDome(names.GetValueOrDefault(t.DomeId) ?? $"0x{t.DomeId:X8}", t.DomeId, tex));
             }
         return a;
+    }
+
+    static List<string> DomeTextures(NB.Core.Models.ModelAsset m)
+    {
+        var tex = new List<string>();
+        foreach (var d in m.Draws) foreach (var (_, t) in d.Textures)
+        {
+            var st = NB.Core.Models.ObjExporter.TextureFileStem(t);
+            if (!tex.Contains(st)) tex.Add(st);
+        }
+        return tex;
+    }
+
+    /// <summary>"Act 6", "Morning", "Startofgame" … from a level script's name.</summary>
+    static string DisplayOf(string script, string world)
+    {
+        string tail = world.Length > 0 && script.Contains(world + "_") ? script[(script.IndexOf(world + "_", StringComparison.Ordinal) + world.Length + 1)..] : script.Replace("aid_script_banjox_", "");
+        var m = System.Text.RegularExpressions.Regex.Match(tail, @"^act(\d+|ww)_main$");
+        if (m.Success) return "Act " + (m.Groups[1].Value == "ww" ? "WW" : m.Groups[1].Value);
+        if (script.Contains("_live_")) return "Multiplayer: " + Title(tail);
+        return Title(tail);
     }
 
     static int Score(TimeOfDay t)
     {
         var key = (t.PhaseScript ?? "").ToLowerInvariant();
         int phase = Array.FindIndex(PhaseOrder, p => p != "main" && key.EndsWith(p));
-        return (t.DomeOffset >= 0 ? 2 : 0) + (phase >= 0 ? 4 : 0);
+        return (t.CurrentAct ? 16 : 0) + (System.Text.RegularExpressions.Regex.IsMatch(key, @"_act(\d+|ww)_main$") ? 8 : 0) + (t.DomeOffset >= 0 ? 2 : 0) + (phase >= 0 ? 4 : 0)
+            - (key.Contains("_live_") ? 8 : 0) - (key.Contains("_ui_frontend") || key.Contains("_demo") ? 6 : 0);
     }
 
     static int Rank(TimeOfDay t)
     {
         var key = (t.PhaseScript ?? t.Light.Name).ToLowerInvariant();
+        if (key.EndsWith("startofgame")) return -1;   // Spiral Mountain: the start of the game before its ending
         for (int i = 0; i < PhaseOrder.Length; i++) if (key.EndsWith(PhaseOrder[i])) return i;
         return PhaseOrder.Length;
     }
@@ -305,6 +424,18 @@ public sealed class WorldAtmosphere
     /// <summary>Writes the edited bundles into the workspace (one history snapshot + change-log entry each).</summary>
     public List<string> Save(string description)
     {
+        // identical copies of an edited light setup in other bundles (challenge bundles of an act) get the same bytes
+        foreach (var l in Times.Select(t => t.Light).Distinct())
+        {
+            if (l.Copies.Count == 0 || (_saved.TryGetValue(l.Data, out var before) && before.AsSpan().SequenceEqual(l.Data))) continue;
+            foreach (var (b, sym) in l.Copies)
+            {
+                var part = DataPart(Caff(b), sym);
+                if (part == null || part.Data.Length != l.Data.Length || part.Data.AsSpan().SequenceEqual(l.Data)) continue;
+                Buffer.BlockCopy(l.Data, 0, part.Data, 0, l.Data.Length);
+                MarkDirty(b);
+            }
+        }
         var saved = new List<string>();
         foreach (var bundle in _dirty.OrderBy(b => b))
         {
@@ -327,6 +458,16 @@ public sealed class WorldAtmosphere
             _saved[t.Light.Data] = (byte[])t.Light.Data.Clone();
             if (t.PhaseData != null) _saved[t.PhaseData] = (byte[])t.PhaseData.Clone();
         }
+    }
+
+    /// <summary>Bundles a save would write for the edits so far (the light setups' copies included).</summary>
+    public List<uint> BundlesToSave()
+    {
+        var set = new HashSet<uint>(_dirty);
+        foreach (var t in Times)
+            if (_saved.TryGetValue(t.Light.Data, out var before) && !before.AsSpan().SequenceEqual(t.Light.Data))
+                foreach (var (b, _) in t.Light.Copies) set.Add(b);
+        return set.OrderBy(b => b).ToList();
     }
 
     /// <summary>Discards unsaved edits: every light setup and time-of-day script gets its last saved bytes back.</summary>

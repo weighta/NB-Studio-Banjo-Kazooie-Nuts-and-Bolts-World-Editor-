@@ -312,18 +312,23 @@ public sealed class AtmospherePanel : UserControl
     }
 
     /// <summary>Called when a world opens in the 3D view: the tab edits that world.</summary>
-    public void SetWorld(uint bundle, string display)
+    /// <param name="act">The act bundle opened with the world (0: the world alone): its light setup is listed first and
+    /// its bundle's copy is the one edited.</param>
+    public void SetWorld(uint bundle, string display, uint act = 0)
     {
+        bundle &= 0xFFFFFF; act &= 0xFFFFFF;
         // the same world reopened (after a texture replace, snow, a world save …): keep the editor, its selection and its
         // unsaved edits, unless the bundle was reloaded from disk (Revert / Undo Last Bundle Save)
-        if (_at != null && (bundle & 0xFFFFFF) == _world && _ws != null && _at.IsCurrent) { _list.Invalidate(); if (_list.SelectedItem is string) BindWeather(); return; }
-        if (_at?.Dirty == true && bundle != _world && _ws != null)
+        if (_at != null && bundle == _world && act == _act && _ws != null && _at.IsCurrent) { _list.Invalidate(); if (_list.SelectedItem is string) BindWeather(); return; }
+        if (_at?.Dirty == true && (bundle != _world || act != _act) && _ws != null)
         {
             if (MessageBox.Show(this, $"Save the unsaved sky, light and fog changes of {_worldName} first?", "Atmosphere", MessageBoxButtons.YesNo) == DialogResult.Yes) Save();
         }
-        _world = bundle & 0xFFFFFF; _worldName = display;
+        _world = bundle; _act = act; _worldName = display;
         Reload();
     }
+    uint _act;
+    (uint, uint) _loadedFor;
 
     /// <summary>Puts the saved values back (and into the running game when live preview is on).</summary>
     public void Discard()
@@ -340,7 +345,9 @@ public sealed class AtmospherePanel : UserControl
 
     public void Reload()
     {
-        string? keep = _list.SelectedItem is TimeOfDay st ? st.Light.Name : _list.SelectedItem as string;
+        // another world or act: start at its own (first) entry rather than the selection of the previous one
+        string? keep = (_world, _act) != _loadedFor ? null : _list.SelectedItem is TimeOfDay st ? st.Light.Name : _list.SelectedItem as string;
+        _loadedFor = (_world, _act);
         if (_at?.Dirty == true) _at.Revert();   // never leave unsaved edits behind in the shared bundle objects
         _at = null; _cur = null; _edited.Clear();
         _undoStack.Clear(); _redoStack.Clear(); _gestureKey = null;
@@ -352,13 +359,13 @@ public sealed class AtmospherePanel : UserControl
             ShowEmpty(_ws == null ? "Open a workspace to edit sky, light, fog and weather." : "Open a world (Worlds tab, double-click Showdown Town) to edit its sky, light, fog and weather.");
             return;
         }
-        try { _at = WorldAtmosphere.Load(_ws, _index, _world); }
+        try { _at = WorldAtmosphere.Load(_ws, _index, _world, _act); }
         catch (Exception e) { ShowEmpty("The atmosphere of this world could not be read: " + e.Message); return; }
         _empty.Visible = false;
         _title.Text = $"Atmosphere — {_worldName}";
         _subtitle.Text = _at.Times.Count == 0
-            ? "This world has no light-setup scripts of its own (only weather can be edited here)."
-            : $"Sky, light and fog for {_at.Times.Count} time(s) of day, and weather. Sky and light changes are kept until you press Save to Workspace; Build > Create Distributable Patch then includes them.";
+            ? "No level script of this world runs a light setup (only weather can be edited here)."
+            : $"Sky, light and fog of {_at.Times.Count} light setup(s) used by this world ({(_at.WorldName == "showdowntown" ? "times of day" : "one per act")}{(_act != 0 ? ", the open act first" : "")}), and weather. Changes are kept until you press Save to Workspace; Build > Create Distributable Patch then includes them.";
         foreach (var t in _at.Times) _list.Items.Add(t);
         _list.Items.Add(WeatherItem);
         int sel = _list.Items.Cast<object>().ToList().FindIndex(i => i is TimeOfDay t ? t.Light.Name == keep : Equals(i, keep));
@@ -440,7 +447,26 @@ public sealed class AtmospherePanel : UserControl
         PushPreview(true);
     }
 
-    public void Save() => Save(null);
+    public void Save() { if (ConfirmShared()) Save(null); }
+
+    static readonly bool Scripted = Environment.GetCommandLineArgs().Length > 1;   // script runs: no questions
+
+    /// <summary>Before saving: says which other levels use an edited light setup and which bundles get the copies.</summary>
+    bool ConfirmShared()
+    {
+        if (_at == null || !_at.Dirty || Scripted) return true;
+        var lines = new List<string>();
+        foreach (var t in _edited)
+        {
+            if (t.SharedWith.Count > 0)
+                lines.Add($"• {t.Display}: {t.Light.Name.Replace("aid_script_banjox_lightsetup_", "")} is also used by {string.Join(", ", t.SharedWith.Select(x => x.Replace("aid_script_banjox_", "")))}.");
+            if (t.Light.Copies.Count > 0)
+                lines.Add($"• {t.Display}: the game keeps {t.Light.Copies.Count + 1} copies of this setup (bundles {t.Light.Bundle:x6}, {string.Join(", ", t.Light.Copies.Select(c => c.Bundle.ToString("x6")).Distinct())}): all of them are updated.");
+        }
+        if (lines.Count == 0) return true;
+        return MessageBox.Show(this, "Saving changes more than this level:\n\n" + string.Join("\n", lines) + $"\n\nBundles written: {string.Join(", ", _at.BundlesToSave().Select(b => b.ToString("x6")))}. Save?",
+            "Atmosphere", MessageBoxButtons.OKCancel, MessageBoxIcon.Information) == DialogResult.OK;
+    }
 
     /// <param name="also">Another change already made in the same bundle object (a sky texture), saved with these edits.</param>
     void Save(string? also)
@@ -535,7 +561,9 @@ public sealed class AtmospherePanel : UserControl
         {
             var v = t.Light.Values;
             _timeTitle.Text = t.Display;
-            _timeInfo.Text = $"Light setup {t.Light.Name} (bundle {t.Light.Bundle:x6})" + (t.PhaseScript != null ? $", run by the time-of-day script {t.PhaseScript} ({t.PhaseBundle:x6})." : ".");
+            _timeInfo.Text = $"Light setup {t.Light.Name}: {t.Where}." + (t.CurrentAct ? " Used by the act you opened." : "")
+                + (t.SharedWith.Count > 0 ? $" Also used by other levels: {string.Join(", ", t.SharedWith.Select(x => x.Replace("aid_script_banjox_", "")))}." : "")
+                + (t.DomeOffset >= 0 && t.PhaseScript != null ? $" Its skydome is set by {t.PhaseScript} ({t.PhaseBundle:x6})." : "");
             _ambient.Value = v.Ambient; _sun.Value = v.Sun; _intensity.Value = v.Intensity;
             _fogColour.Value = v.FogColour; _fogStart.Value = v.FogStart; _fogEnd.Value = v.FogEnd; _fogMax.Value = v.FogMax;
             _sunElev.Value = Deg(v.SunElevation); _sunAzim.Value = Deg(v.SunAzimuth); _fogOn.Checked = v.FogOn;
@@ -885,7 +913,8 @@ public sealed class AtmospherePanel : UserControl
             using (var amb = new SolidBrush(Ui.ToColor(v.Ambient))) g.FillEllipse(amb, swatch.X + 4, swatch.Bottom - 14, 10, 10);
             using (var pen = new Pen(Color.FromArgb(140, 255, 255, 255))) { g.DrawEllipse(pen, swatch.Right - 18, swatch.Y + 4, 12, 12); g.DrawEllipse(pen, swatch.X + 4, swatch.Bottom - 14, 10, 10); }
             title = t.Display;
-            sub = $"fog {v.FogStart:0}–{v.FogEnd:0} · {v.FogMax * 100:0}%" + (dome != null ? $"\nsky {dome.ShortName}" : "");
+            sub = $"fog {v.FogStart:0}–{v.FogEnd:0} · {v.FogMax * 100:0}%" + (dome != null ? $"\nsky {dome.ShortName}" : "") 
+                + (t.CurrentAct ? " · open act" : "") + (t.SharedWith.Count > 0 ? " · shared" : "");
             dirty = _edited.Contains(t);
         }
         else
