@@ -24,6 +24,9 @@ public static class WaterEditor
         public int Kind = 2;
         /// <summary>Horizontal triangles (3 points each, same Y), counter-clockwise seen from above.</summary>
         public List<Vector3> Triangles = new();
+        /// <summary>The region record's plane (+0x20..+0x5F: four corners). Usually the triangles' bounding box at their lowest
+        /// height; in Nutty Acres a ±943-unit square at y −35: the open sea around the island (read only, not written).</summary>
+        public Vector3[] Plane = Array.Empty<Vector3>();
     }
 
     const int RegionSize = 0xA0, Grid = 16;
@@ -42,6 +45,7 @@ public static class WaterEditor
             var reg = new Region { Kind = BE.S32(d, r + 4) };
             int nv = BE.S32(d, r + 0xC), vo = BE.S32(d, r + 0x10);
             for (int k = 0; k < nv; k++) reg.Triangles.Add(new Vector3(BE.F32(g, vo + 12 * k), BE.F32(g, vo + 12 * k + 4), BE.F32(g, vo + 12 * k + 8)));
+            reg.Plane = Enumerable.Range(0, 4).Select(k => new Vector3(BE.F32(d, r + 0x20 + 16 * k), BE.F32(d, r + 0x24 + 16 * k), BE.F32(d, r + 0x28 + 16 * k))).ToArray();
             list.Add(reg);
         }
         return list;

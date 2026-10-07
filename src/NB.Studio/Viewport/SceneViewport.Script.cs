@@ -66,6 +66,29 @@ public sealed partial class SceneViewport
             }
             case "--lod-cull": LodCulling = next() == "on"; _gl.Invalidate(); log($"script: LOD distance culling {(LodCulling ? "on" : "off")}"); return true;
             case "--fov": FieldOfView = F(next()); log($"script: fov {FieldOfView}"); return true;
+            case "--visgroup":
+            {
+                // --visgroup water off : the same path as the "Show" menu
+                var name = next(); bool on = next() is "on" or "1";
+                var g = Enum.Parse<Visgroup>(name, ignoreCase: true); SetVisible(g, on); Render();
+                log($"script: visgroup {g} {(on ? "shown" : "hidden")}; {string.Join(", ", VisgroupLabels.Select(v => $"{v.Group}={(IsVisible(v.Group) ? "on" : "off")}"))}"); return true;
+            }
+            case "--visgroups-shot":
+            {
+                // the 3D view with the "Show" menu open, drawn into one picture
+                var file = next();
+                ShowVisgroupsMenu(); Application.DoEvents();
+                using var v = Capture();
+                using (var g = Graphics.FromImage(v))
+                using (var m = new Bitmap(_visMenu.Width, _visMenu.Height))
+                {
+                    _visMenu.DrawToBitmap(m, new Rectangle(0, 0, m.Width, m.Height));
+                    var at = _gl.PointToClient(_visMenu.Bounds.Location);
+                    g.DrawImage(m, at.X, at.Y);
+                }
+                _visMenu.Close();
+                v.Save(file); log("script: visgroups menu captured"); return true;
+            }
             case "--gizmo": { var g = next().ToLowerInvariant(); Mode = g switch { "rotate" => GizmoMode.Rotate, "scale" => GizmoMode.Scale, "select" => GizmoMode.Select, _ => GizmoMode.Move }; _gl.Invalidate(); log($"script: gizmo {Mode}"); return true; }
             case "--view-size":
             {

@@ -480,7 +480,15 @@ public sealed partial class MainForm : Form
         var vG = new ToolStripMenuItem("Grass (chunk-17 grass layers)") { Checked = _view.ShowGrass, CheckOnClick = true,
             ToolTipText = "Grass tiles laid out like the game: the grass model at every cell of each layer with density, lifted by the layer's height texture and coloured by its shadow texture (time-of-day variant of the current light)." };
         vG.CheckedChanged += (_, _) => _view.ShowGrass = vG.Checked;
-        view.DropDownItems.AddRange(new ToolStripItem[] { vMode, new ToolStripSeparator(), vT, vS, vO, vG, vM, vP, vC, vSC, CollisionViewMenuItem(), new ToolStripSeparator(),
+        // water and sky dome; the "Show ▾" button of the 3D view toggles every group and keeps these items in step
+        var vW = new ToolStripMenuItem("Water (lakes, rivers, sea)") { Checked = _view.ShowWater, CheckOnClick = true, ToolTipText = "The world's water surfaces (chunk 38) and Nutty Acres' sea, in the Textured and Rendered modes." };
+        vW.CheckedChanged += (_, _) => _view.SetVisible(Visgroup.Water, vW.Checked);
+        var vSky = new ToolStripMenuItem("Sky Dome") { Checked = _view.ShowSky, CheckOnClick = true };
+        vSky.CheckedChanged += (_, _) => _view.SetVisible(Visgroup.Sky, vSky.Checked);
+        var visItems = new Dictionary<Visgroup, ToolStripMenuItem> { [Visgroup.Terrain] = vT, [Visgroup.Scenery] = vS, [Visgroup.Objects] = vO, [Visgroup.Grass] = vG,
+            [Visgroup.Water] = vW, [Visgroup.Sky] = vSky, [Visgroup.Markers] = vM, [Visgroup.Paths] = vP };
+        _view.VisibilityChanged += (g, on) => { if (visItems.TryGetValue(g, out var mi) && mi.Checked != on) mi.Checked = on; };
+        view.DropDownItems.AddRange(new ToolStripItem[] { vMode, new ToolStripSeparator(), vT, vS, vO, vG, vW, vSky, vM, vP, vC, vSC, CollisionViewMenuItem(), new ToolStripSeparator(),
             new ToolStripMenuItem("Hide Selected", null, (_, _) => _view.HideSelection()) { ShortcutKeyDisplayString = "H", ToolTipText = "Hidden in the 3D view for this session only (not deleted, not saved)" },
             new ToolStripMenuItem("Unhide All", null, (_, _) => _view.UnhideAll()) { ShortcutKeyDisplayString = "U / Alt+H" },
             new ToolStripMenuItem("Select All Shown", null, (_, _) => SelectAllShown()) { ShortcutKeyDisplayString = "Ctrl+A" },

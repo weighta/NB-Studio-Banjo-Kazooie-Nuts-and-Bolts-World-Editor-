@@ -35,7 +35,8 @@ static class Ui
     }
 }
 
-/// <summary>Colour field: a swatch (opens the colour picker) and an RRGGBB box.</summary>
+/// <summary>Colour field: a swatch (opens the colour picker) and an RRGGBB box. The picker (<see cref="ColourPicker"/>)
+/// reports every change at once (Changed), between PickStarted and PickEnded(ok); Cancel puts the first colour back.</summary>
 sealed class ColourField : FlowLayoutPanel
 {
     readonly Button _swatch = new() { Width = 46, Height = 24, FlatStyle = FlatStyle.Flat, Cursor = Cursors.Hand, Margin = new Padding(0, 2, 6, 0) };
@@ -43,6 +44,9 @@ sealed class ColourField : FlowLayoutPanel
     uint _value;
     bool _quiet;
     public event Action? Changed;
+    /// <summary>The picker opened / closed (true: OK). Changes in between are one pick (one undo step).</summary>
+    public event Action? PickStarted;
+    public event Action<bool>? PickEnded;
     public string Title = "Colour";
 
     public ColourField()
@@ -68,8 +72,39 @@ sealed class ColourField : FlowLayoutPanel
 
     void Pick()
     {
-        using var d = new ColorDialog { FullOpen = true, Color = Ui.ToColor(_value), AnyColor = true };
-        if (d.ShowDialog(FindForm()) == DialogResult.OK && Ui.ToRgb(d.Color) != _value) SetByUser(Ui.ToRgb(d.Color));
+        bool ok = false;
+        PickStarted?.Invoke();
+        try
+        {
+            using var p = new ColourPicker(_value, Title + " colour");
+            p.Picking += v => { if (v != _value) SetByUser(v); };
+            ok = p.ShowAt(_swatch) == DialogResult.OK;
+        }
+        finally { PickEnded?.Invoke(ok); }
+    }
+
+    /// <summary>Scripts: a pick through the picker window (shown, not modal) going through <paramref name="steps"/>, closed with
+    /// OK or Cancel; <paramref name="shot"/> saves an image of the picker after the last step.</summary>
+    public void ScriptPick(IReadOnlyList<uint> steps, bool ok, string? shot, Action? afterEachStep = null)
+    {
+        PickStarted?.Invoke();
+        try
+        {
+            using var p = new ColourPicker(_value, Title + " colour");
+            p.Picking += v => { if (v != _value) SetByUser(v); };
+            var at = _swatch.PointToScreen(new Point(0, _swatch.Height + 2));
+            p.Location = at;
+            p.Show(FindForm());
+            foreach (var v in steps) { p.Set(v); Application.DoEvents(); afterEachStep?.Invoke(); }
+            if (shot != null)
+            {
+                Application.DoEvents();
+                using var b = new Bitmap(p.Width, p.Height); p.DrawToBitmap(b, new Rectangle(0, 0, p.Width, p.Height)); b.Save(shot);
+            }
+            p.DialogResult = ok ? DialogResult.OK : DialogResult.Cancel;
+            p.Close();
+        }
+        finally { PickEnded?.Invoke(ok); }
     }
 
     void CommitHex()

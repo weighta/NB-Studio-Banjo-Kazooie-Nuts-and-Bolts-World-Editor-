@@ -460,6 +460,22 @@ public sealed class WorldAtmosphere
         }
     }
 
+    /// <summary>Forgets edits that were taken back (undone, a cancelled colour pick): a bundle whose light setups and
+    /// time-of-day scripts all hold their saved bytes again is no longer unsaved.</summary>
+    public void RefreshDirty()
+    {
+        foreach (var b in _dirty.ToList())
+        {
+            bool same = true;
+            foreach (var t in Times)
+            {
+                if (t.Light.Bundle == b && _saved.TryGetValue(t.Light.Data, out var l) && !l.AsSpan().SequenceEqual(t.Light.Data)) same = false;
+                if (t.PhaseData != null && t.PhaseBundle == b && _saved.TryGetValue(t.PhaseData, out var ph) && !ph.AsSpan().SequenceEqual(t.PhaseData)) same = false;
+            }
+            if (same) _dirty.Remove(b);
+        }
+    }
+
     /// <summary>Bundles a save would write for the edits so far (the light setups' copies included).</summary>
     public List<uint> BundlesToSave()
     {

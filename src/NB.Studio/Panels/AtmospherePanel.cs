@@ -226,6 +226,25 @@ public sealed class AtmospherePanel : UserControl
         t.Controls.Add(Ui.Row(reset));
 
         _ambient.Changed += () => Edit("ambient", v => v with { Ambient = _ambient.Value });
+        // the colour picker: every change previews at once; one undo step per pick, none when it was cancelled
+        foreach (var cf in new[] { _ambient, _sun, _fogColour, _fillColour })
+        {
+            cf.PickStarted += () => { _picking = true; _gestureKey = null; _undoBeforePick = _undoStack.Count; _redoBeforePick = new List<Snap>(_redoStack); };
+            cf.PickEnded += ok =>
+            {
+                _picking = false; _gestureKey = null;
+                if (!ok && _undoStack.Count > _undoBeforePick)
+                {
+                    // cancelled: the picker put the first colour back; the step it opened changes nothing
+                    var first = _undoStack[_undoBeforePick];
+                    _undoStack.RemoveRange(_undoBeforePick, _undoStack.Count - _undoBeforePick);
+                    _redoStack.Clear(); _redoStack.AddRange(_redoBeforePick);
+                    _edited.Clear(); _edited.UnionWith(first.Edited);
+                    _at?.RefreshDirty();
+                    _list.Invalidate(); UpdateButtons();
+                }
+            };
+        }
         _sun.Changed += () => Edit("sun", v => v with { Sun = _sun.Value });
         _intensity.Changed += () => Edit("intensity", v => v with { Intensity = _intensity.Value });
         _fogColour.Changed += () => Edit("fogcolour", v => v with { FogColour = _fogColour.Value });
@@ -968,6 +987,22 @@ public sealed class AtmospherePanel : UserControl
             case "fillintensity": _fillIntensity.SetByUser(F()); break;
             case "fillelev": _fillElev.SetByUser(F()); break;
             case "fillazim": _fillAzim.SetByUser(F()); break;
+            case "pickambient": case "picksun": case "pickfog": case "pickfill":
+            {
+                // "C1,C2,…;ok|cancel[;shot.png]": a pick through the picker window, previewing every step
+                var parts = value.Split(';');
+                var cf = field.ToLowerInvariant() switch { "picksun" => _sun, "pickfog" => _fogColour, "pickfill" => _fillColour, _ => _ambient };
+                var steps = parts[0].Split(',').Select(x => Convert.ToUInt32(x.Trim().TrimStart('#'), 16)).ToList();
+                int frames0 = _framesPushed, k = 0;
+                string? stepShots = parts.Length > 3 ? parts[3] : null;   // prefix: the 3D preview after every step
+                cf.ScriptPick(steps, parts.Length > 1 && parts[1] == "ok", parts.Length > 2 && parts[2].Length > 0 ? parts[2] : null, () =>
+                {
+                    System.Threading.Thread.Sleep(40); Application.DoEvents();
+                    if (stepShots != null && PreviewShown) using (var b = _view!.Capture()) b.Save($"{stepShots}{k++}.png");
+                });
+                _lastPick = $"pick of {steps.Count} colours drew {_framesPushed - frames0} preview frames";
+                break;
+            }
             case "undo": Undo(); break;
             case "redo": Redo(); break;
             case "preview": _previewOn.Checked = value is "on" or "1" or "true"; break;
@@ -988,7 +1023,7 @@ public sealed class AtmospherePanel : UserControl
     }
 
     public string ScriptState() => _cur != null ? $"{_cur.Display}: {_cur.Light.Values}, sun elevation {Deg(_cur.Light.Values.SunElevation):0.#}° azimuth {Deg(_cur.Light.Values.SunAzimuth):0.#}°, sky {DomeName(_cur.DomeId)}{(_edited.Contains(_cur) ? " (edited)" : "")}"
-        + $"; undo {_undoStack.Count} redo {_redoStack.Count}; preview {(PreviewShown ? $"shown, view light {_view!.LightingName}, sun dir {_view.CurrentLighting.SunDirection}, mode {_view.ViewMode}" : "hidden")} (tab {_tabs?.SelectedTab?.Text})" : "weather: " + _snowState.Text;
+        + $"; undo {_undoStack.Count} redo {_redoStack.Count}{(_lastPick != null ? "; " + _lastPick : "")}; preview {(PreviewShown ? $"shown, view light {_view!.LightingName}, sun dir {_view.CurrentLighting.SunDirection}, mode {_view.ViewMode}" : "hidden")} (tab {_tabs?.SelectedTab?.Text})" : "weather: " + _snowState.Text;
 
     /// <summary>Sky texture stems of the selected time of day (for scripts).</summary>
     public IEnumerable<string> SkyStems => _at?.Domes.FirstOrDefault(d => d.Id == _cur?.DomeId)?.Textures ?? Enumerable.Empty<string>();
@@ -1163,6 +1198,8 @@ public sealed class AtmospherePanel : UserControl
     sealed record Snap(TimeOfDay? Select, List<(byte[] Live, byte[] Copy)> Bytes, HashSet<TimeOfDay> Edited);
     readonly List<Snap> _undoStack = new(), _redoStack = new();
     string? _gestureKey; DateTime _gestureAt;
+    bool _picking; int _undoBeforePick; List<Snap> _redoBeforePick = new();
+    string? _lastPick;
 
     Snap TakeSnap()
     {
@@ -1180,7 +1217,8 @@ public sealed class AtmospherePanel : UserControl
     {
         if (_at == null) return;
         var now = DateTime.UtcNow;
-        bool same = key == _gestureKey && (now - _gestureAt).TotalMilliseconds < 800;
+        // a colour pick holds its step open until the picker closes, however long it takes
+        bool same = key == _gestureKey && ((now - _gestureAt).TotalMilliseconds < 800 || _picking);
         _gestureKey = key; _gestureAt = now;
         if (same) return;
         _undoStack.Add(TakeSnap());
@@ -1207,6 +1245,7 @@ public sealed class AtmospherePanel : UserControl
             }
         }
         _edited.Clear(); _edited.UnionWith(s.Edited);
+        _at.RefreshDirty();   // back at the saved state: nothing to save
         _gestureKey = null;
         Log?.Invoke($"Atmosphere: change {what} (unsaved)");
         if (s.Select != null && s.Select != _cur && _list.Items.Contains(s.Select)) _list.SelectedItem = s.Select;   // binds and previews

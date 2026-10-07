@@ -480,6 +480,7 @@ public sealed partial class SceneViewport : UserControl
                     SpecPower = 140, SpecColour = new Vector3(0.9f), Reflect = skyTex, ReflectStrength = 0.38f,
                 };
             }
+            AddSea(model, regions, skyTex);   // Nutty Acres' sea (SceneViewport.Visgroups.cs)
             return model.Draws.Count > 0 ? model : null;
         }
         catch (Exception e) { scene.Log.Add("water: " + e.Message); return null; }
@@ -680,7 +681,7 @@ public sealed partial class SceneViewport : UserControl
                 _shadowKey = sk;
             }
             _r.Begin(vp, _camPos, Right(), Vector3.Normalize(Vector3.Cross(Right(), Forward())));
-            if (_viewMode is ViewMode.Rendered or ViewMode.Textured && _sky != null)
+            if (_viewMode is ViewMode.Rendered or ViewMode.Textured && _sky != null && ShowSky)
             {
                 if (_skyFollows)
                 {
@@ -704,7 +705,7 @@ public sealed partial class SceneViewport : UserControl
                 _r.DrawModel(o.Model, o.Transform, tint, NoCull ? null : fr);
                 foreach (var (cm, cl) in o.Children) _r.DrawModel(cm, cl * o.Transform, tint, NoCull ? null : fr);
             }
-            if (_water != null && ShowTerrain && _viewMode is ViewMode.Textured or ViewMode.Rendered) _r.DrawModel(_water, Matrix4x4.Identity, Vector4.Zero, NoCull ? null : fr);
+            if (_water != null && ShowWater && ShowTerrain && _viewMode is ViewMode.Textured or ViewMode.Rendered) _r.DrawModel(_water, Matrix4x4.Identity, Vector4.Zero, NoCull ? null : fr);
             _pobj.Dispose();
             _r.GrassTilesDrawn = 0;
             using (Prof.Time("  render: grass")) DrawGrassLayers(NoCull ? null : fr);
@@ -1000,12 +1001,12 @@ public sealed partial class SceneViewport : UserControl
     {
         var br = BarRect;
         if (br.Contains(p)) return Math.Clamp((p.X - br.X) / BarSeg, 0, 3);
-        return CollRect.Contains(p) ? 4 : -1;
+        return CollRect.Contains(p) ? 4 : VisRect.Contains(p) ? VisHit : -1;
     }
 
     void DrawOverlays(int W, int H)
     {
-        var cr = CollRect;
+        var cr = VisRect;   // the bar bitmap starts with the "Show" button (SceneViewport.Visgroups.cs)
         bool showLight = _viewMode == ViewMode.Rendered;
         string barKey = $"{_viewMode}|{_hoverBar}|{(showLight ? LightingName : "")}|{_showColl}|{_showColl && _allColl == null}";
         if (_barOv.Key != barKey)
@@ -1131,7 +1132,7 @@ public sealed partial class SceneViewport : UserControl
     Bitmap DrawBar(bool showLight)
     {
         int h = showLight ? BarH + 4 + LightH : BarH, x0 = CollW + CollGap;
-        var bmp = new Bitmap(x0 + BarSeg * 4, h, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+        var bmp = new Bitmap(VisW + CollGap + x0 + BarSeg * 4, h, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
         using var g = Graphics.FromImage(bmp);
         g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
         g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
@@ -1139,6 +1140,8 @@ public sealed partial class SceneViewport : UserControl
         using var bg = new SolidBrush(BarBg);
         using var edge = new Pen(BarEdge, 1f);
         using var font = new Font("Segoe UI Semibold", 8.5f);
+        DrawVisButton(g, font, bg, edge);
+        g.TranslateTransform(VisW + CollGap, 0);
         // the collision toggle
         {
             using var cp = Rounded(new Rectangle(0, 0, CollW - 1, BarH - 1), 4);
@@ -1651,6 +1654,7 @@ public sealed partial class SceneViewport : UserControl
             int bh = BarHit(e.Location);
             if (bh is >= 0 and <= 3) { ViewMode = (ViewMode)bh; return; }
             if (bh == 4) { ShowCollision = !ShowCollision; return; }
+            if (bh == VisHit) { ShowVisgroupsMenu(); return; }
             if (_viewMode == ViewMode.Rendered && LightRect.Contains(e.Location)) { NextLight(); return; }
         }
         if (e.Button == MouseButtons.Right) { _looking = true; _dragMoved = false; }
