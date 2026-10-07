@@ -260,7 +260,9 @@ public sealed partial class SceneViewport : UserControl
         { Dock = DockStyle.Fill };
         Controls.Add(_gl);
         _gl.Load += (_, _) => { _gl.MakeCurrent(); _r.Init(); _ready = true; };
-        _gl.Paint += (_, _) => Render();
+        // flying moves on every frame by the real elapsed time: the 16 ms timer alone starves while the mouse looks
+        // around (WM_TIMER only arrives when no mouse / paint messages wait), so looking stopped the flight
+        _gl.Paint += (_, _) => { if (_gl.Focused) TickCore(FlySteps()); Render(); };
         _gl.Resize += (_, _) => _gl.Invalidate();
         _gl.MouseDown += OnMouseDown; _gl.MouseUp += OnMouseUp; _gl.MouseMove += OnMouseMove; _gl.MouseWheel += OnWheel;
         _gl.MouseLeave += (_, _) => { if (_hoverBar != -1 || _hoverHandle != -1) { _hoverBar = -1; _hoverHandle = -1; _gl.Invalidate(); } };
@@ -1454,12 +1456,23 @@ public sealed partial class SceneViewport : UserControl
 
     // ------------------------------------------------------------------ input
 
-    void Tick() { if (_gl.Focused) TickCore(); }
+    void Tick() { if (_gl.Focused) TickCore(FlySteps()); }
 
-    void TickCore()
+    readonly System.Diagnostics.Stopwatch _flyClock = System.Diagnostics.Stopwatch.StartNew();
+    double _flyLastMs;
+
+    /// <summary>Elapsed time since the last fly step, in 16.7 ms steps (capped, so a pause doesn't jump the camera).</summary>
+    float FlySteps()
+    {
+        double now = _flyClock.Elapsed.TotalMilliseconds, dt = now - _flyLastMs;
+        _flyLastMs = now;
+        return (float)Math.Clamp(dt / 16.667, 0, 3);
+    }
+
+    void TickCore(float steps = 1f)
     {
         if (_keys.Count == 0 || _xf != XfKind.None) return;
-        float speed = (_keys.Contains(Keys.ShiftKey) ? 4f : 1f) * 1.2f;
+        float speed = (_keys.Contains(Keys.ShiftKey) ? 4f : 1f) * 1.2f * steps;
         if (_keys.Contains(Keys.ControlKey)) return;
         var f = Forward(); var r = Right(); var d = Vector3.Zero;
         // S is Scale while something is selected (Blender), but while flying (right button held, other fly keys held,

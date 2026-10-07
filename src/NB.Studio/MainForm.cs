@@ -345,15 +345,16 @@ public sealed partial class MainForm : Form
     static string WorldKey(WorldEntry w, ActEntry? act) => $"{w.Bundle:x6}|{(act != null ? act.ActBundle.ToString("x6") : "")}";
 
     /// <summary>Reopens the world (or Act) that was last open in this workspace, so you're back where you were.</summary>
-    async Task OpenLastWorld()
+    async Task<bool> OpenLastWorld()
     {
-        if (_ws == null || !_settings.LastWorlds.TryGetValue(_ws.Root, out var key)) return;
+        if (_ws == null || !_settings.LastWorlds.TryGetValue(_ws.Root, out var key)) return false;
         var item = _worlds.Items.OfType<WorldItem>().FirstOrDefault(i => WorldKey(i.Entry, i.Act) == key);
-        if (item == null) return;
+        if (item == null) return false;
         _worlds.SelectedItem = item;
         _center.SelectedIndex = 0;
         Log($"Reopening {(item.Act?.Display ?? item.Entry.Display)} (last world viewed in this workspace).");
         await OpenWorld(item.Entry, item.Act);
+        return true;
     }
 
     Matrix4x4 _pendingBefore;
@@ -812,10 +813,10 @@ public sealed partial class MainForm : Form
         {
             var created = await Task.Run(() => Workspace.Create(src.SelectedPath, dst.SelectedPath, new Progress<(string F, double P)>(p => BeginInvoke(() => SetProgress("Copying " + p.F, p.P)))));
             ApplyNewWorkspaceMods(created);
-            await OpenWorkspace(dst.SelectedPath);
         }
-        catch (Exception e) { Error("Creating workspace failed", e); }
+        catch (Exception e) { Error("Creating workspace failed", e); return; }
         finally { _busy = false; SetProgress(null, 0); }
+        await OpenWorkspace(dst.SelectedPath);   // closes the open workspace first (CloseWorkspace refuses while busy)
     }
 
     /// <summary>A new workspace gets the mods of File > Settings > Mods for new workspaces (only those that fit its
@@ -842,6 +843,15 @@ public sealed partial class MainForm : Form
 
     async Task OpenWorkspace(string root)
     {
+        // switching from another workspace: close it properly (asks to save unsaved world edits), and remember its world so
+        // a workspace with no world of its own yet (a new one) opens the same level, fresh
+        string? previousWorld = _ws != null && _sceneEntry != null ? WorldKey(_sceneEntry, _sceneAct) : null;
+        if (_ws != null)
+        {
+            if (string.Equals(Path.GetFullPath(_ws.Root).TrimEnd('\\', '/'), Path.GetFullPath(root).TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase)) { Log("That workspace is already open."); return; }
+            await CloseWorkspace();
+            if (_ws != null) return;   // cancelled
+        }
         try
         {
             _start.SetStatus($"Opening {Path.GetFileName(root.TrimEnd('\\', '/'))}…"); Application.DoEvents();
@@ -854,7 +864,16 @@ public sealed partial class MainForm : Form
             UpdateTitle();
             _start.Visible = false;
             if (_settings.TourPending) { _settings.TourPending = false; _settings.Save(); StartTour(); }
-            else if (!_scripted) await OpenLastWorld();
+            else if (!_scripted && !await OpenLastWorld() && previousWorld != null)
+            {
+                var item = _worlds.Items.OfType<WorldItem>().FirstOrDefault(i => WorldKey(i.Entry, i.Act) == previousWorld);
+                if (item != null)
+                {
+                    _worlds.SelectedItem = item; _center.SelectedIndex = 0;
+                    Log($"Opening {(item.Act?.Display ?? item.Entry.Display)} of this workspace (the level you had open).");
+                    await OpenWorld(item.Entry, item.Act);
+                }
+            }
         }
         catch (Exception e) { _start.SetStatus(""); Error("Opening workspace failed", e); }
     }
