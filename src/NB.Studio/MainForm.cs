@@ -751,6 +751,7 @@ public sealed partial class MainForm : Form
         finally { _busy = false; SetProgress(null, 0); }
         if (exit != 0) { Log("Repair Damaged Collision: not repaired (see above). The world was not changed."); return; }
         Log("Repair Damaged Collision: repaired; reopening the world.");
+        _ws.ForgetCaches();   // the repair wrote the bundle from outside: read it again, not the cached damaged copy
         await OpenWorld(_sceneEntry, _sceneAct);
     }
 
