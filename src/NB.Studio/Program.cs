@@ -24,8 +24,10 @@ static class Program
         {
             if (!File.Exists(path)) return false;
             using var f = File.OpenRead(path);
-            var head = new byte[4];
-            return f.Read(head, 0, 4) == 4 && NB.Core.Formats.StfsPackage.IsStfs(head);
+            var head = new byte[0x28];
+            int n = f.Read(head, 0, head.Length);
+            // a 360 package, or a photo's content extracted from one (game header + JPEG): both open in the photo viewer
+            return (n >= 4 && NB.Core.Formats.StfsPackage.IsStfs(head.AsSpan(0, 4))) || (n == head.Length && NB.Core.Formats.NbPhoto.IsPhotoContent(head));
         }
         catch (IOException) { return false; }
     }

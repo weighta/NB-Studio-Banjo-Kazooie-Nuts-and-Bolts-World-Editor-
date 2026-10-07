@@ -203,12 +203,26 @@ public static class NbPhoto
 {
     public const uint TitleId = 0x4D5307ED;
 
-    public sealed record Photo(string Name, byte[] Jpeg, StfsPackage? Package, string FileInside);
+    public sealed record Photo(string Name, byte[] Jpeg, StfsPackage? Package, string FileInside)
+    {
+        /// <summary>The game's 32-byte photo header when the file is a photo's content extracted from a package (no package around it).</summary>
+        public byte[]? ContentHeader { get; init; }
+        /// <summary>What the file is: a 360 package, a content file extracted from one, or a plain picture.</summary>
+        public string Kind => Package != null ? $"{Package.Magic} package" : ContentHeader != null ? "content file (extracted from a package)" : "picture file";
+    }
+
+    /// <summary>
+    /// A photo's content as the game writes it inside its package (the "content" file a package extractor gives): a
+    /// 32-byte game header (f32, f32, u32 1, u32, u64 owner XUID at +0x10, u32, u32) and the JPEG at +0x20.
+    /// </summary>
+    public static bool IsPhotoContent(ReadOnlySpan<byte> d) =>
+        d.Length > 0x24 && d[0x20] == 0xFF && d[0x21] == 0xD8 && d[0x22] == 0xFF && System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(d[8..]) == 1;
 
     /// <summary>Every photo in <paramref name="path"/> (usually one).</summary>
     public static List<Photo> Read(string path)
     {
-        var data = File.ReadAllBytes(path);
+        byte[] data;   // shared read: the file may be open in another program (Explorer preview, an extractor)
+        using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete)) { data = new byte[fs.Length]; fs.ReadExactly(data); }
         var res = new List<Photo>();
         string fallback = Path.GetFileNameWithoutExtension(path);
         if (StfsPackage.IsStfs(data))
@@ -217,8 +231,9 @@ public static class NbPhoto
             foreach (var f in pkg.Files.Where(f => !f.IsDirectory))
                 if (FindJpeg(pkg.Extract(f)) is { } jpg)
                     res.Add(new Photo(pkg.DisplayName.Length > 0 ? pkg.DisplayName : fallback, jpg, pkg, f.Name));
-            if (res.Count == 0) throw new InvalidDataException($"the package \"{pkg.DisplayName}\" holds no photo ({pkg.Files.Count} file(s))");
+            if (res.Count == 0) throw new InvalidDataException($"the package \"{pkg.DisplayName}\" holds no photo ({pkg.Files.Count} file(s)){(pkg.TitleId == TitleId ? " - probably a vehicle save (blueprint): open it in the Vehicle Editor" : "")}");
         }
+        else if (IsPhotoContent(data) && FindJpeg(data) is { } cj) res.Add(new Photo(fallback, cj, null, "") { ContentHeader = data[..0x20] });
         else if (FindJpeg(data) is { } jpg) res.Add(new Photo(fallback, jpg, null, ""));
         else throw new InvalidDataException("not an Xbox 360 package and no JPEG inside");
         return res;
@@ -228,7 +243,7 @@ public static class NbPhoto
     public static ulong Owner(Photo photo)
     {
         var pkg = photo.Package;
-        if (pkg == null) return 0;
+        if (pkg == null) return photo.ContentHeader is { } h ? System.Buffers.Binary.BinaryPrimitives.ReadUInt64BigEndian(h.AsSpan(0x10)) : 0;
         var d = pkg.Extract(pkg.Files.First(f => f.Name == photo.FileInside));
         return d.Length >= 0x18 ? System.Buffers.Binary.BinaryPrimitives.ReadUInt64BigEndian(d.AsSpan(0x10)) : pkg.ProfileId;
     }

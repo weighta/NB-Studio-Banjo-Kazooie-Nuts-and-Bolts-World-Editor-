@@ -157,7 +157,8 @@ public sealed class PhotoViewerForm : Form
         if (it == null) { _status.Text = ""; return; }
         var p = it.Photo.Package;
         _status.Text = $"{it.Photo.Name}  ·  {it.Image.Width}×{it.Image.Height} JPEG, {it.Photo.Jpeg.Length / 1024:N0} KB"
-            + (p != null ? $"  ·  title {p.TitleId:X8}{(p.TitleId == NbPhoto.TitleId ? " (Nuts && Bolts)" : "")}, profile {p.ProfileId:X16}, {p.Magic} package" : "")
+            + (p != null ? $"  ·  title {p.TitleId:X8}{(p.TitleId == NbPhoto.TitleId ? " (Nuts && Bolts)" : "")}, profile {p.ProfileId:X16}, {p.Magic} package"
+               : it.Photo.ContentHeader != null ? $"  ·  content file extracted from a package (owner profile {NbPhoto.Owner(it.Photo):X16}; Import needs the package itself)" : "  ·  picture file")
             + $"  ·  {Path.GetFileName(it.Source)}";
     }
 
