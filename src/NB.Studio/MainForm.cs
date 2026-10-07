@@ -423,6 +423,8 @@ public sealed partial class MainForm : Form
         edit.DropDownItems.Add(new ToolStripMenuItem("Reset Selected Transform", null, (_, _) => { if (_view.Selected is { } o) ResetTransform(o); }));
 
         var world = new ToolStripMenuItem("&World");
+        world.DropDownItems.Add(new ToolStripMenuItem("Repair Damaged Collision…", null, async (_, _) => await RepairCollision())
+            { ToolTipText = "Repairs collision damaged by a collision save of NB Studio 1.12-1.13.4 (the game hangs loading the world); edits are kept" });
         world.DropDownItems.Add(new ToolStripMenuItem("&Save World Changes to Workspace", null, (_, _) => SaveWorld(), Keys.Control | Keys.S));
         world.DropDownItems.Add("Texture &Library (all textures of this world)…", null, (_, _) => OpenTextureLibrary(null));
         world.DropDownItems.Add("&Atmosphere: Sky, Light && Fog…", null, (_, _) => ShowAtmosphere(null));
@@ -715,6 +717,41 @@ public sealed partial class MainForm : Form
         foreach (var p in d.Deleted) Log($"Workspace deleted: {p} (your game was not changed).");
         if (_start.Visible) _start.SetLastWorkspace(_settings.LastWorkspace);
         if (r == DialogResult.OK && d.OpenPath != null) await OpenWorkspace(d.OpenPath);
+    }
+
+    /// <summary>
+    /// World > Repair Damaged Collision: runs NB.Cli collision-repair on the open world's bundle (collision damaged by a
+    /// 1.12-1.13.4 collision save: the game hangs loading it), then reopens the world. Edits are kept; the damaged
+    /// version goes to the workspace history.
+    /// </summary>
+    async Task RepairCollision()
+    {
+        if (_ws == null || _scene == null || _sceneEntry == null) { Log("Repair Damaged Collision: open a world first."); return; }
+        if (_busy) { Log("Repair Damaged Collision: NB Studio is busy, try again in a moment."); return; }
+        if (NB.Core.Havok.HkCollisionImport.DamagedAssets(_scene.Caff).Count == 0) { Log($"Repair Damaged Collision: the collision of world {_scene.Bundle:x6} is fine, nothing to repair."); return; }
+        if ((_scene.Objects.Any(o => o.Dirty) || CollisionDirty) && !_scripted &&
+            MessageBox.Show(this, "Unsaved edits of this world are lost by the repair (it reloads the world). Repair anyway?", "Repair Damaged Collision",
+                MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
+        var cli = new[] { Path.Combine(AppContext.BaseDirectory, "cli", "NB.Cli.exe"),
+                          Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "NB.Cli", "bin", "Release", "net9.0-windows", "NB.Cli.exe")) }
+            .FirstOrDefault(File.Exists);
+        if (cli == null) { Log("Repair Damaged Collision: NB.Cli.exe not found next to NB Studio (cli folder)."); return; }
+        _busy = true; SetProgress("Repairing collision…", 0.5);
+        int exit = -1;
+        try
+        {
+            var psi = new System.Diagnostics.ProcessStartInfo(cli) { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true };
+            foreach (var a in new[] { "collision-repair", _ws.Root, _scene.Bundle.ToString("x6") }) psi.ArgumentList.Add(a);
+            using var p = System.Diagnostics.Process.Start(psi)!;
+            var outText = await p.StandardOutput.ReadToEndAsync(); var errText = await p.StandardError.ReadToEndAsync();
+            await p.WaitForExitAsync(); exit = p.ExitCode;
+            foreach (var l in (outText + errText).Split('\n').Select(x => x.TrimEnd()).Where(x => x.Length > 0)) Log("  " + l);
+        }
+        catch (Exception e) { Log("Repair Damaged Collision failed: " + e.Message); }
+        finally { _busy = false; SetProgress(null, 0); }
+        if (exit != 0) { Log("Repair Damaged Collision: not repaired (see above). The world was not changed."); return; }
+        Log("Repair Damaged Collision: repaired; reopening the world.");
+        await OpenWorld(_sceneEntry, _sceneAct);
     }
 
     async Task CloseWorkspace()
@@ -1728,8 +1765,16 @@ public sealed partial class MainForm : Form
             // collision assets damaged by a 1.12-1.13 collision save (the game hangs on "SAVING CONTENT" loading this world)
             try
             {
-                foreach (var dmg in NB.Core.Havok.HkCollisionImport.DamagedAssets(scene.Caff))
-                    Log($"WARNING: damaged collision, the game will hang loading this world: {dmg}. Saving this world is refused until it is repaired: close the workspace (File > Close Workspace), run NB.Cli collision-repair \"{_ws?.Root}\" {scene.Bundle:x6} (it takes the lost table from the bundle's history in the workspace), then reopen it.");
+                var dmgList = NB.Core.Havok.HkCollisionImport.DamagedAssets(scene.Caff);
+                foreach (var dmg in dmgList)
+                    Log($"WARNING: damaged collision, the game will hang loading this world: {dmg}. Saving this world is refused until it is repaired: World > Repair Damaged Collision (it takes the lost table from the bundle's history in the workspace).");
+                if (dmgList.Count > 0 && !_scripted)
+                    BeginInvoke(async () =>
+                    {
+                        if (MessageBox.Show(this, "This world's collision was damaged by a collision save of NB Studio 1.12-1.13.4: the game hangs loading it (\"SAVING CONTENT\").\n\n" +
+                                "Repair it now? Your edits are kept; the damaged version goes to the workspace history.", "Damaged collision",
+                                MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes) await RepairCollision();
+                    });
             }
             catch (Exception x) { Log("  collision check: " + x.Message); }
             foreach (var l in scene.Log.Take(30)) Log("  " + l);
@@ -2805,6 +2850,7 @@ public sealed partial class MainForm : Form
                     }
                     case "--log": i++; break;
                     case "--start-bg": { var f = Next(); _start.SetBackground(f); L("script: start page background " + f); break; }
+                    case "--repair-collision": await RepairCollision(); L("script: repair collision done; damaged now: " + (_scene == null ? "?" : NB.Core.Havok.HkCollisionImport.DamagedAssets(_scene.Caff).Count.ToString())); break;
                     case "--exit": L("script: exit"); Close(); return;
                     default:
                         if (await CollisionScript(a[i], Next, L)) break;
