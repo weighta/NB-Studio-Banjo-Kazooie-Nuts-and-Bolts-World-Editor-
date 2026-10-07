@@ -587,6 +587,9 @@ public sealed class ModelAsset
 
         // decode geometry
         var poolCache = new Dictionary<int, List<VertexElement>>();
+        // draws of one vertex buffer share its decoded vertices (a model's pieces often draw ranges of one big buffer:
+        // the docks' walkway decoded its 330k-vertex buffer nine times, 3M vertices in all)
+        var decodedVb = new Dictionary<int, MeshDraw>();
         foreach (var dr in Draws)
         {
             try
@@ -608,7 +611,12 @@ public sealed class ModelAsset
                 if (best.Count == 0) best = VFetch.Guess(stride);
                 dr.Layout = best;
                 int nv = vbSize / stride;
-                DecodeVertices(dr, g, vbGpu.Value.Offset, nv);
+                if (decodedVb.TryGetValue(dr.VbRecord, out var same) && same.Stride == stride && same.Layout.SequenceEqual(best))
+                {
+                    dr.Positions = same.Positions; dr.Normals = same.Normals; dr.UVs = same.UVs; dr.UVs2 = same.UVs2; dr.UVs3 = same.UVs3;
+                    dr.Tangents = same.Tangents; dr.Colors = same.Colors; dr.BlendIndices = same.BlendIndices; dr.BlendWeights = same.BlendWeights;
+                }
+                else { DecodeVertices(dr, g, vbGpu.Value.Offset, nv); decodedVb[dr.VbRecord] = dr; }
                 if (!ibTable.TryGetValue(dr.IbObject, out var ibi)) { Warnings.Add($"draw ib 0x{dr.IbObject:X}: not in table"); continue; }
                 int nIdx = Math.Min(dr.IndexCount, ibi.Size / 2);
                 var idx = new int[nIdx];

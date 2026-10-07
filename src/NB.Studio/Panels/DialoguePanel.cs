@@ -129,5 +129,8 @@ public sealed class DialoguePanel : UserControl
         return $"no line {name}";
     }
     public void ScriptSave() => SaveEdits();
+    /// <summary>Edited lines not saved yet (Ctrl+S saves them with everything else).</summary>
+    public int UnsavedLines => _edited.Count;
+    public void SaveNow() => SaveEdits();
     public void ScriptLanguage(string lang) { int i = _lang.Items.IndexOf(lang); if (i >= 0) _lang.SelectedIndex = i; }
 }

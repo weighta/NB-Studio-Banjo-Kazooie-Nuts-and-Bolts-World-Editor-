@@ -82,9 +82,10 @@ public sealed class WorldScene
     {
         Workspace = ws; Bundle = bundle;
         progress?.Report(("loading bundle", 0));
+        var _total = NB.Core.Diagnostics.Timing.Time("scene: WorldScene total");
         Caff = ws.LoadResident(bundle);
         _caffs[bundle & 0xFFFFFF] = Caff;
-        _relocs = AssetView.BuildRelocIndex(Caff);
+        using (NB.Core.Diagnostics.Timing.Time("scene: reloc index")) _relocs = AssetView.BuildRelocIndex(Caff);
         _relocByCaff[Caff] = _relocs;
         _index = index;
         if (_index == null && File.Exists(AssetIndex.PathFor(ws)))
@@ -92,11 +93,13 @@ public sealed class WorldScene
         int bgSym = Caff.Symbols.IndexOf(backgroundModel) + 1;
         if (bgSym == 0) throw new InvalidDataException($"{backgroundModel} not in bundle {bundle:x6}");
         progress?.Report(("parsing terrain", 0.05));
-        Background = ModelAsset.Parse(Caff, bgSym, _relocs);
+        using (NB.Core.Diagnostics.Timing.Time("scene: terrain model parse")) Background = ModelAsset.Parse(Caff, bgSym, _relocs);
         foreach (var w in Background.Warnings.Take(20)) Log.Add("terrain: " + w);
 
         var acts = (actBundles ?? Enumerable.Empty<uint>()).Select(a => a & 0xFFFFFF).ToList();
-        BuildLoadSet(bundle & 0xFFFFFF, acts);
+        using (NB.Core.Diagnostics.Timing.Time("scene: load set")) BuildLoadSet(bundle & 0xFFFFFF, acts);
+        using (NB.Core.Diagnostics.Timing.Time("scene: models parsed in parallel")) PreparseModels(Background, Caff);
+        var _scen = NB.Core.Diagnostics.Timing.Time("scene: scenery (incl. model parse)");
 
         int id = 0;
         var terrain = new SceneObject { Id = id++, Kind = SceneObjectKind.Terrain, Name = "Terrain (" + backgroundModel + ")", ModelName = backgroundModel, Model = Background, ModelBundle = bundle & 0xFFFFFF };
@@ -135,9 +138,10 @@ public sealed class WorldScene
                 Audit.Note(loc != null ? "scenery models that failed to parse" : "scenery models not found", $"{obj.Name} ({refId:X8})");
                 Log.Add($"{obj.Name}: reference model id {refId:X8} {(loc != null ? "failed to parse" : "not found in the workspace")} (drawn as a marker)");
             }
-            ComputeBounds(obj);
             Objects.Add(obj);
         }
+        _scen.Dispose();
+        var _mk = NB.Core.Diagnostics.Timing.Time("scene: markers (incl. model parse)");
         // markers (actors, props, pickups, spawn points, paths...) from every marker asset in this bundle and the act bundles
         var markerSources = new List<(uint Bundle, CaffFile Caff)> { (bundle, Caff) };
         foreach (var ab in acts)
@@ -147,13 +151,18 @@ public sealed class WorldScene
             for (int s = 1; s <= mc.Symbols.Count; s++)
                 if (AssetIds.IdOf(mc.Symbols[s - 1]) is uint aid) NameById.TryAdd(aid, AssetIds.DisplayName(mc.Symbols[s - 1]));
         progress?.Report(("markers", 0.9));
+        var parsedMarkers = new List<(uint Bundle, CaffFile Caff, int Sym, MarkerAsset? Asset, Exception? Error)>();
         foreach (var (mb, mc) in markerSources)
-        for (int s = 1; s <= mc.Symbols.Count; s++)
+            for (int s = 1; s <= mc.Symbols.Count; s++)
+                if (mc.Symbols[s - 1].StartsWith("aid_marker_"))
+                    try { parsedMarkers.Add((mb, mc, s, MarkerAsset.Parse(mc, s), null)); } catch (Exception e) { parsedMarkers.Add((mb, mc, s, null, e)); }
+        using (NB.Core.Diagnostics.Timing.Time("scene: marker models parsed in parallel"))
+            PreparseModels(parsedMarkers.Where(x => x.Asset != null).SelectMany(x => x.Asset!.Records.SelectMany(r => MarkerModelCandidates(r, x.Caff))).Distinct().ToList(), new());
+        foreach (var (mb, mc, s, parsed, error) in parsedMarkers)
         {
-            if (!mc.Symbols[s - 1].StartsWith("aid_marker_")) continue;
             try
             {
-                var ma = MarkerAsset.Parse(mc, s);
+                var ma = parsed ?? throw error!;
                 ma.Bundle = mb; ma.Caff = mc;
                 Markers.Add(ma);
                 foreach (var r in ma.Records) r.AssetNames = r.AssetIds.Select(x => NameById.GetValueOrDefault(x, "?")).ToList();
@@ -169,7 +178,6 @@ public sealed class WorldScene
                     };
                     Audit.Markers++;
                     AttachMarkerModel(obj, mc);
-                    ComputeBounds(obj);
                     Objects.Add(obj);
                 }
             }
@@ -177,8 +185,17 @@ public sealed class WorldScene
         }
         // grass layers (chunk 17 of the background model, or of a reference model placed in the world such as Spiral
         // Mountain's grassboxes): the game covers each box with grass tiles at run time (see GrassLayer)
-        try { LoadGrass(); }
+        _mk.Dispose();
+        using (NB.Core.Diagnostics.Timing.Time("scene: bounds (parallel)"))
+        {
+            // each model's used vertices once (in parallel), then every object's box (in parallel)
+            var models = Objects.Where(o => o.Kind != SceneObjectKind.Terrain && o.Model != null).SelectMany(o => o.Children.Select(c => c.Model).Prepend(o.Model!)).Distinct().ToList();
+            System.Threading.Tasks.Parallel.ForEach(models, m => UsedPoints.GetValue(m, UsedPointsOf));
+            System.Threading.Tasks.Parallel.ForEach(Objects.Where(o => o.Kind != SceneObjectKind.Terrain), ComputeBounds);
+        }
+        try { using (NB.Core.Diagnostics.Timing.Time("scene: grass")) LoadGrass(); }
         catch (Exception e) { Log.Add("grass layers: " + e.Message); }
+        _total.Dispose();
         Audit.Models = Models.Count;
         Audit.Bundles = _caffs.Where(kv => kv.Value != null).Select(kv => kv.Key).ToList();
         foreach (var (cat, items) in Audit.Notes.OrderBy(kv => kv.Key))
@@ -395,6 +412,23 @@ public sealed class WorldScene
         n = m.ShallowCopy();
         n.Draws = m.Draws.Where(d => !d.Textures.Any(t => t.Texture.Contains("worlddoor_gruntydoor", StringComparison.OrdinalIgnoreCase))).ToList();
         return _noSign[m] = n;
+    }
+
+    /// <summary>The models <see cref="AttachMarkerModel"/> may give a marker (the same lookups, without notes), so they can
+    /// be parsed in parallel beforehand.</summary>
+    IEnumerable<(CaffFile, int)> MarkerModelCandidates(MarkerRecord r, CaffFile markerCaff)
+    {
+        bool IsModel((CaffFile Caff, int Sym, uint Bundle) l) => l.Caff.Symbols[l.Sym - 1].StartsWith("aid_model_");
+        foreach (var a in r.AssetIds)
+        {
+            if (a >> 24 == 0x04) { if (FindAsset(a, markerCaff) is { } l && IsModel(l)) yield return (l.Caff, l.Sym); }
+            else if (a >> 24 == 0x1F && FindAsset(a, markerCaff) is { } op && op.Caff.PartsOf(op.Sym).FirstOrDefault(p => op.Caff.SectionOf(p).Name == ".data")?.Data is { Length: >= 0x80 } d)
+                foreach (int f in ObjModelFields)
+                    if (f + 4 <= d.Length && NB.Core.IO.BE.U32(d, f) is uint mid && mid >> 24 == 0x04 && FindAsset(mid, op.Caff) is { } ml && IsModel(ml)) { yield return (ml.Caff, ml.Sym); break; }
+        }
+        if (CodeSpawned(r) is { } spawned && FindAsset(GameAssetRef(spawned), markerCaff) is { } gop
+            && gop.Caff.PartsOf(gop.Sym).FirstOrDefault(p => gop.Caff.SectionOf(p).Name == ".data")?.Data is { Length: > 0xC4 } gd
+            && NB.Core.IO.BE.U32(gd, 0xC0) is uint gmid && FindAsset(gmid, gop.Caff) is { } gml && IsModel(gml)) yield return (gml.Caff, gml.Sym);
     }
 
     /// <summary>objparams fields that hold the object's own model: +0xC0 for every actor / avatar / prop class (115 props,
@@ -641,14 +675,97 @@ public sealed class WorldScene
         return list;
     }
 
+    /// <summary>
+    /// Parsed models kept between scenes, per loaded bundle (the workspace keeps unmodified bundles loaded): opening a world
+    /// again reuses its models (and so NB Studio's GPU buffers of them) instead of parsing them again. An entry is used
+    /// only while the asset's parts still hold the same bytes (length + checksum of every part, see
+    /// <see cref="PartsSignature"/>), so an import or any edit of a model's data parses it again.
+    /// </summary>
+    static readonly System.Runtime.CompilerServices.ConditionalWeakTable<CaffFile, System.Collections.Concurrent.ConcurrentDictionary<int, (ModelAsset Model, ulong Sig)>> ModelCache = new();
+
+    /// <summary>A checksum of every part of an asset (<see cref="NB.Core.IO.FastHash"/>), to tell an unchanged asset from an edited one.</summary>
+    static ulong PartsSignature(CaffFile caff, int sym)
+    {
+        ulong h = 1469598103934665603UL;
+        foreach (var p in caff.PartsOf(sym)) h = NB.Core.IO.FastHash.Of(p.Data, h);
+        return h;
+    }
+
+    readonly System.Collections.Concurrent.ConcurrentDictionary<(CaffFile, int), ModelAsset?> _preparsed = new();
+
+    /// <summary>
+    /// Parses the scenery's reference models (and the models nested in them, level by level) on all cores before the
+    /// scene is built; <see cref="GetModel"/> then takes them from here (or from <see cref="ModelCache"/>). Lookups and
+    /// bundle loading stay on this thread; only the parsing runs in parallel.
+    /// </summary>
+    void PreparseModels(ModelAsset root, CaffFile rootCaff) => PreparseModels(new List<(CaffFile, int)>(), new List<(ModelAsset, CaffFile)> { (root, rootCaff) });
+
+    readonly HashSet<(CaffFile, int)> _preparseSeen = new();
+
+    /// <summary>Parses <paramref name="first"/> (and the models nested in them and in <paramref name="wave"/>, level by
+    /// level) in parallel.</summary>
+    void PreparseModels(List<(CaffFile Caff, int Sym)> first, List<(ModelAsset M, CaffFile C)> wave)
+    {
+        var seen = _preparseSeen;
+        var start = first.Where(x => seen.Add(x)).ToList();
+        for (int level = 0; level < 7 && (wave.Count > 0 || start.Count > 0); level++)
+        {
+            var todo = new List<(CaffFile Caff, int Sym)>(start); start = new();
+            foreach (var (m, c) in wave)
+                foreach (var inst in m.Instances)
+                {
+                    uint rid = inst.RefModel >= 0 && inst.RefModel < m.ReferenceIds.Count ? (uint)m.ReferenceIds[inst.RefModel] : 0;
+                    if (FindAsset(rid, c) is not { } loc || !loc.Caff.Symbols[loc.Sym - 1].StartsWith("aid_model_")) continue;
+                    if (seen.Add((loc.Caff, loc.Sym))) todo.Add((loc.Caff, loc.Sym));
+                }
+            foreach (var c in todo.Select(t => t.Caff).Distinct())
+                if (!_relocByCaff.ContainsKey(c)) using (NB.Core.Diagnostics.Timing.Time("scene: reloc index")) _relocByCaff[c] = AssetView.BuildRelocIndex(c);
+            var rels = todo.Select(t => _relocByCaff[t.Caff]).ToList();
+            var parsed = new ModelAsset?[todo.Count];
+            System.Threading.Tasks.Parallel.For(0, todo.Count, i => parsed[i] = ParseCached(todo[i].Caff, todo[i].Sym, rels[i]));
+            wave.Clear();
+            for (int i = 0; i < todo.Count; i++)
+            {
+                _preparsed[todo[i]] = parsed[i];
+                if (parsed[i] is { } pm) wave.Add((pm, todo[i].Caff));
+            }
+        }
+    }
+
+    /// <summary>A model from <see cref="ModelCache"/> when its asset is unchanged, else parsed (and cached); null when it
+    /// fails to parse. Thread-safe.</summary>
+    static ModelAsset? ParseCached(CaffFile caff, int sym, Dictionary<int, List<(int, int)>> rel)
+    {
+        var cache = ModelCache.GetValue(caff, _ => new());
+        ulong sig;
+        using (NB.Core.Diagnostics.Timing.Time("model: signature")) sig = PartsSignature(caff, sym);
+        if (cache.TryGetValue(sym, out var hit) && hit.Sig == sig) { NB.Core.Diagnostics.Timing.Add("model: reused (cache)", 0); return hit.Model; }
+        try
+        {
+            ModelAsset m;
+            using (NB.Core.Diagnostics.Timing.Time("model parse")) m = ModelAsset.Parse(caff, sym, rel);
+            cache[sym] = (m, sig);
+            return m;
+        }
+        catch (Exception) { return null; }
+    }
+
     /// <summary>Parses (once) the model at <paramref name="sym"/> of <paramref name="caff"/>; null when it fails to parse.</summary>
     ModelAsset? GetModel(CaffFile caff, int sym)
     {
         var name = caff.Symbols[sym - 1];
         if (Models.TryGetValue(name, out var m)) return m;
         if (_failed.Contains(name)) return null;
-        if (!_relocByCaff.TryGetValue(caff, out var rel)) _relocByCaff[caff] = rel = AssetView.BuildRelocIndex(caff);
-        try { m = ModelAsset.Parse(caff, sym, rel); }
+        if (!_relocByCaff.TryGetValue(caff, out var rel)) using (NB.Core.Diagnostics.Timing.Time("scene: reloc index")) _relocByCaff[caff] = rel = AssetView.BuildRelocIndex(caff);
+        try
+        {
+            if (_preparsed.TryGetValue((caff, sym), out var pre) && pre != null) m = pre;
+            else
+            {
+                m = ParseCached(caff, sym, rel)!;
+                if (m == null) using (NB.Core.Diagnostics.Timing.Time("model parse")) m = ModelAsset.Parse(caff, sym, rel);   // rethrows the parse error below
+            }
+        }
         catch (Exception e)
         {
             _failed.Add(name); Audit.ModelsFailed++;
@@ -663,15 +780,43 @@ public sealed class WorldScene
     }
     readonly HashSet<string> _failed = new();
 
+    /// <summary>The vertices a model draws, each once (imported models keep unused old vertices; indices repeat each vertex
+    /// several times): object bounds come from these.</summary>
+    static readonly System.Runtime.CompilerServices.ConditionalWeakTable<ModelAsset, UsedVertices> UsedPoints = new();
+
+    sealed record UsedVertices(Vector3[] Points, Vector3 Min, Vector3 Max);
+
+    static UsedVertices UsedPointsOf(ModelAsset m)
+    {
+        var res = new List<Vector3>();
+        // draws of one vertex buffer share their arrays (ModelAsset): one "used" mask per buffer
+        var masks = new Dictionary<Vector3[], bool[]>(ReferenceEqualityComparer.Instance as IEqualityComparer<Vector3[]>);
+        foreach (var d in m.Draws)
+        {
+            if (!masks.TryGetValue(d.Positions, out var used)) masks[d.Positions] = used = new bool[d.Positions.Length];
+            foreach (int i in d.Indices) if ((uint)i < (uint)used.Length && !used[i]) { used[i] = true; res.Add(d.Positions[i]); }
+        }
+        var mn = new Vector3(float.MaxValue); var mx = new Vector3(float.MinValue);
+        foreach (var p in res) { mn = Vector3.Min(mn, p); mx = Vector3.Max(mx, p); }
+        return new UsedVertices(res.ToArray(), mn, mx);
+    }
+
     static void ComputeBounds(SceneObject o)
     {
         if (o.Kind == SceneObjectKind.Marker && o.Model == null) return;
         var mn = new Vector3(float.MaxValue); var mx = new Vector3(float.MinValue);
         void Add(ModelAsset m, Matrix4x4 xf)
         {
-            foreach (var d in m.Draws)
-                foreach (int i in d.Indices)   // only vertices that are drawn (imported models keep unused old vertices)
-                    if (i < d.Positions.Length) { var p = Vector3.Transform(d.Positions[i], xf); mn = Vector3.Min(mn, p); mx = Vector3.Max(mx, p); }
+            var used = UsedPoints.GetValue(m, UsedPointsOf);
+            if (used.Points.Length == 0) return;
+            if (xf.M12 == 0 && xf.M13 == 0 && xf.M21 == 0 && xf.M23 == 0 && xf.M31 == 0 && xf.M32 == 0 && xf.M14 == 0 && xf.M24 == 0 && xf.M34 == 0 && xf.M44 == 1)
+            {
+                // scale and translation only (most placements): the box of the moved points is the moved box, exactly
+                var a = Vector3.Transform(used.Min, xf); var b = Vector3.Transform(used.Max, xf);
+                mn = Vector3.Min(mn, Vector3.Min(a, b)); mx = Vector3.Max(mx, Vector3.Max(a, b));
+                return;
+            }
+            foreach (var p0 in used.Points) { var p = Vector3.Transform(p0, xf); mn = Vector3.Min(mn, p); mx = Vector3.Max(mx, p); }
         }
         if (o.Model != null) Add(o.Model, Matrix4x4.Identity);
         foreach (var (cm, cl) in o.Children) Add(cm, cl);

@@ -115,20 +115,21 @@ public sealed class Workspace
         bundle &= 0xFFFFFF;
         if (_residentCache.TryGetValue(bundle, out var c)) return c;
         var path = Game.ResidentPath(bundle);
-        byte[] raw = File.ReadAllBytes(path);
+        byte[] raw;
+        using (NB.Core.Diagnostics.Timing.Time("bundle: read file")) raw = File.ReadAllBytes(path);
         if (XCompressFile.IsCompressed(raw))
         {
             // unmodified compressed file: use/create the decompressed cache
             var cache = Path.Combine(CacheDir, "4f", bundle.ToString("x6"));
-            if (File.Exists(cache) && File.GetLastWriteTimeUtc(cache) >= File.GetLastWriteTimeUtc(path)) raw = File.ReadAllBytes(cache);
+            if (File.Exists(cache) && File.GetLastWriteTimeUtc(cache) >= File.GetLastWriteTimeUtc(path)) using (NB.Core.Diagnostics.Timing.Time("bundle: read decompressed cache")) raw = File.ReadAllBytes(cache);
             else
             {
-                raw = XCompressFile.Decompress(raw);
+                using (NB.Core.Diagnostics.Timing.Time("bundle: xcompress decompress")) raw = XCompressFile.Decompress(raw);
                 Directory.CreateDirectory(Path.GetDirectoryName(cache)!);
                 File.WriteAllBytes(cache, raw);
             }
         }
-        c = CaffFile.Read(raw);
+        using (NB.Core.Diagnostics.Timing.Time("bundle: CAFF parse")) c = CaffFile.Read(raw);
         _residentCache[bundle] = c;
         return c;
     }

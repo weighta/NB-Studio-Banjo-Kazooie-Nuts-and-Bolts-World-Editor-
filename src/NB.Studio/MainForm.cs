@@ -103,6 +103,7 @@ public sealed partial class MainForm : Form
         var cParts = new TabPage("Part Importer"); cParts.Controls.Add(_parts);
         var cVehicles = new TabPage("Vehicle Editor"); cVehicles.Controls.Add(_vehicles);
         _center.TabPages.AddRange(new[] { c3d, cPrev, cAtmos, cText, cAudio, cVideo, cParts, cVehicles });
+        _center.SelectedIndexChanged += (_, _) => { if (_center.SelectedTab == cAtmos) ApplyAtmosphere(); };
 
         var rProps = new TabPage("Properties"); rProps.Controls.Add(_transform);
         var rTags = new TabPage("Tag Editor"); rTags.Controls.Add(_tags);
@@ -122,6 +123,7 @@ public sealed partial class MainForm : Form
 
         var statusStrip = new StatusStrip();
         statusStrip.Items.AddRange(new ToolStripItem[] { _status, _progress });
+        InitSaving(statusStrip);   // "Unsaved: …" (MainForm.Saving.cs)
         Controls.Add(splitMain);
         // start page over the work area until a workspace is open
         _start = new Panels.StartPage(_settings.LastWorkspace, _settings.AutoOpenLast);
@@ -245,11 +247,8 @@ public sealed partial class MainForm : Form
         };
         FormClosing += (_, e) =>
         {
-            if (_scripted) return;   // test runs end without questions
-            if (_scene != null && (_scene.Objects.Any(o => o.Dirty) || CollisionDirty) &&
-                MessageBox.Show(this, "There are unsaved world edits. Quit anyway?", Text, MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) e.Cancel = true;
-            else if (_atmos.HasUnsaved && !e.Cancel &&
-                MessageBox.Show(this, "There are unsaved sky, light and fog changes (Atmosphere tab). Quit anyway?", Text, MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) e.Cancel = true;
+            // Save / Don't save / Cancel for everything unsaved (test runs end without questions unless --prompts on)
+            if (!AskSavePending("quitting")) e.Cancel = true;
         };
     }
 
@@ -319,7 +318,7 @@ public sealed partial class MainForm : Form
                 "• Scale it: press T (with X, Y or Z for one direction), or use the Scale tool (3).\n• Ctrl+click or Shift+click adds objects to the selection; B or Ctrl+drag selects a rectangle. H hides the selection, U shows everything again.\n• Made a mistake? Ctrl+Z undoes it.",
                 () => Scr(_center), () => _center.SelectedIndex = 0));
             steps.Add(new("The toolbar",
-                "Quick buttons for the tools: Select, Move, Rotate and Scale.\n\nUndo / Redo (Ctrl+Z / Ctrl+Y) take back any change. Save World (Ctrl+S) writes your changes into the workspace. Test in Xenia (F5) starts your modded game right in the world you have open, so you can try it at once.",
+                "Quick buttons for the tools: Select, Move, Rotate and Scale.\n\nUndo / Redo (Ctrl+Z / Ctrl+Y) take back any change. Save All (Ctrl+S) writes all your changes into the workspace (the status bar says what is unsaved). Test in Xenia (F5) starts your modded game right in the world you have open, so you can try it at once.",
                 () => Scr(_toolbar)));
             steps.Add(new("Scene",
                 "A list of everything in the open world: buildings, trees, pickups, characters, AI paths and more. Click a name to jump to it in 3D. Untick a box to hide that object while you work. The search box finds things by name.",
@@ -351,7 +350,7 @@ public sealed partial class MainForm : Form
                 "What NB Studio did, and any warnings. If something doesn't work, the reason is usually written here.",
                 () => Scr(_log), () => _right.SelectedIndex = 0));
             steps.Add(new("Your first mod in 5 steps",
-                "1. In Worlds, double-click Showdown Town.\n2. Click any object, for example a lamp post.\n3. Press G, move the mouse, click to drop it.\n4. Save the world: World > Save (Ctrl+S).\n5. Press F5 to play it in Xenia.\n\n" +
+                "1. In Worlds, double-click Showdown Town.\n2. Click any object, for example a lamp post.\n3. Press G, move the mouse, click to drop it.\n4. Save: Ctrl+S (World > Save All Changes).\n5. Press F5 to play it in Xenia.\n\n" +
                 "Happy with it? Build > Create Distributable Patch packs your mod into one small file you can share, or play in NB Multiplayer. Have fun!",
                 () => Scr(_menu), () => { _leftTabs.SelectedIndex = 0; _center.SelectedIndex = 0; }));
         }
@@ -444,7 +443,8 @@ public sealed partial class MainForm : Form
         var world = new ToolStripMenuItem("&World");
         world.DropDownItems.Add(new ToolStripMenuItem("Repair Damaged Collision…", null, async (_, _) => await RepairCollision())
             { ToolTipText = "Repairs collision damaged by a collision save of NB Studio 1.12-1.13.4 (the game hangs loading the world); edits are kept" });
-        world.DropDownItems.Add(new ToolStripMenuItem("&Save World Changes to Workspace", null, (_, _) => SaveWorld(), Keys.Control | Keys.S));
+        world.DropDownItems.Add(new ToolStripMenuItem("&Save All Changes to Workspace", null, (_, _) => SaveAll(), Keys.Control | Keys.S)
+            { ToolTipText = "Saves everything unsaved: world objects, markers and paths, collision, Atmosphere, Tag Editor, Dialogue and Text edits" });
         world.DropDownItems.Add("Texture &Library (all textures of this world)…", null, (_, _) => OpenTextureLibrary(null));
         world.DropDownItems.Add("&Atmosphere: Sky, Light && Fog…", null, (_, _) => ShowAtmosphere(null));
         world.DropDownItems.Add("&Weather (Falling Snow)…", null, (_, _) => ShowAtmosphere("weather"));
@@ -601,7 +601,8 @@ public sealed partial class MainForm : Form
         };
         var help = new ToolStripMenuItem("&Help");
         help.DropDownItems.Add("Controls", null, (_, _) => MessageBox.Show(this,
-            "3D view:\n  Right-drag: look    WASD / Q E or the arrow keys: fly (Shift = fast; S always flies backwards)\n  Wheel: dolly    Middle-drag: pan    Left-click: select    Ctrl / Shift + click: add or remove    B or Ctrl+drag: rectangle    Ctrl+A: all shown    F: focus    Esc: deselect\n  H: hide the selection (this session only)    U or Alt+H: show everything again\n  View modes: the bar in the top-right corner (Wire, Solid, Texture, Render) or Shift+Z. Render uses the level's light setup (click the light line to switch).\n\nTransforms (Blender style), with an object selected:\n  G move on the camera plane, R rotate, T scale; then X / Y / Z constrain to that world axis (drawn as a line in the axis colour;\n  press again for the object's own axis, again for free). Type a value (e.g. G Z 5 Enter); Ctrl snaps.\n  Left click / Enter confirms (one undo step, also for several selected objects), right click / Esc cancels.\n  1 / 2 / 3: move / rotate / scale gizmo; drag the selection with the left button (ground plane), or drag an axis handle\n  (or hold X, Y or Z) to constrain to that axis.\n  Right-click an object for its context menu.\n\nEdits are held in memory until World > Save (Ctrl+S) writes the bundle into the workspace.\nCtrl+Z / Ctrl+Y undo and redo any change, including imports, duplicates, deletes and saved tag or atmosphere edits (File > Settings: number of steps).\nCtrl+C / Ctrl+X copy / cut the selected objects, Ctrl+V pastes copies where the mouse points (keeping their layout), Del deletes them (all undoable).\nEdit Collision (toolbar): click / drag to select collision, G / R / T to move it, Del, Ctrl+C / X / V / D, right-click for boxes, ramps and planes.\nF5 plays the open world in Xenia (no title screen or menus), Shift+F5 starts at the 3D view's camera, Ctrl+F5 starts at the title screen.", "Controls"));
+            "3D view:\n  Right-drag: look    WASD / Q E or the arrow keys: fly (Shift = fast; S always flies backwards)\n  Wheel: dolly    Middle-drag: pan    Left-click: select    Ctrl / Shift + click: add or remove    B or Ctrl+drag: rectangle    Ctrl+A: all shown    F: focus    Esc: deselect\n  H: hide the selection (this session only)    U or Alt+H: show everything again\n  View modes: the bar in the top-right corner (Wire, Solid, Texture, Render) or Shift+Z. Render uses the level's light setup (click the light line to switch).\n\nTransforms (Blender style), with an object selected:\n  G move on the camera plane, R rotate, T scale; then X / Y / Z constrain to that world axis (drawn as a line in the axis colour;\n  press again for the object's own axis, again for free). Type a value (e.g. G Z 5 Enter); Ctrl snaps.\n  Left click / Enter confirms (one undo step, also for several selected objects), right click / Esc cancels.\n  1 / 2 / 3: move / rotate / scale gizmo; drag the selection with the left button (ground plane), or drag an axis handle\n  (or hold X, Y or Z) to constrain to that axis.\n  Right-click an object for its context menu.\n\nEdits are held in memory until you save them: Ctrl+S (World > Save All Changes) saves everything unsaved at once (Help > What Is Saved When).\nCtrl+Z / Ctrl+Y undo and redo any change, including imports, duplicates, deletes and saved tag or atmosphere edits (File > Settings: number of steps).\nCtrl+C / Ctrl+X copy / cut the selected objects, Ctrl+V pastes copies where the mouse points (keeping their layout), Del deletes them (all undoable).\nEdit Collision (toolbar): click / drag to select collision, G / R / T to move it, Del, Ctrl+C / X / V / D, right-click for boxes, ramps and planes.\nF5 plays the open world in Xenia (no title screen or menus), Shift+F5 starts at the 3D view's camera, Ctrl+F5 starts at the title screen.", "Controls"));
+        help.DropDownItems.Add("What Is Saved When", null, (_, _) => MessageBox.Show(this, SavingHelp, "What is saved when"));
         help.DropDownItems.Add("Take the Tour (for beginners)", null, (_, _) => StartTour());
         help.DropDownItems.Add("File Format Notes (docs)", null, (_, _) => OpenDocs());
         ms.Items.AddRange(new ToolStripItem[] { file, edit, world, view, build, tools, mods, help });
@@ -621,7 +622,7 @@ public sealed partial class MainForm : Form
         ts.Items.Add(Mode("Scale (3)", GizmoMode.Scale));
         ts.Items.AddRange(CollisionToolbarItems());
         ts.Items.Add(new ToolStripSeparator());
-        ts.Items.Add(new ToolStripButton("Save World (Ctrl+S)", null, (_, _) => SaveWorld()));
+        ts.Items.Add(new ToolStripButton("Save All (Ctrl+S)", null, (_, _) => SaveAll()) { ToolTipText = "Saves everything unsaved into the workspace (the status bar says what is unsaved)" });
         ts.Items.Add(new ToolStripButton("Test in Xenia (F5)", null, async (_, _) => await QuickTestXenia(false)) { ToolTipText = "Play the open world in Xenia: no title screen, menus or intro (Shift+F5: start at the 3D view's camera; Ctrl+F5: title screen)" });
         return ts;
     }
@@ -794,13 +795,7 @@ public sealed partial class MainForm : Form
         if (_ws == null) { Log("No workspace is open."); return; }
         if (_busy) { Log("Close Workspace: NB Studio is busy, try again in a moment."); return; }
         _view.CancelTransform();
-        if (!_scripted && _scene != null && (_scene.Objects.Any(o => o.Dirty) || CollisionDirty || _atmos.HasUnsaved))
-        {
-            var ans = MessageBox.Show(this, "Save the world changes before closing the workspace?" + (_atmos.HasUnsaved ? "\n\n(Unsaved sky, light and fog changes of the Atmosphere tab are not saved by this.)" : ""),
-                "Close Workspace", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
-            if (ans == DialogResult.Cancel) return;
-            if (ans == DialogResult.Yes) SaveWorld();
-        }
+        if (!AskSavePending("closing the workspace")) return;   // Save / Don't save / Cancel
         if (_qtProcess is { HasExited: false } qt)
         {
             if (_scripted || MessageBox.Show(this, "The test game NB Studio started for this workspace is still running. Close it too?", "Close Workspace", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
@@ -813,6 +808,7 @@ public sealed partial class MainForm : Form
         _scene = null; _sceneEntry = null; _sceneAct = null; _acts = new();
         _tree.Nodes.Clear(); _worlds.Items.Clear();
         _transform.SetObject(null); _dialogue.Show(null, null, null);
+        _atmosPending = null;
         try { _atmos.SetWorkspace(null, null); } catch (Exception) { }
         _texLib?.Close();
         _history.Attach(null);
@@ -1767,8 +1763,7 @@ public sealed partial class MainForm : Form
         // the same world again (after a duplicate, a delete, an import, an undo ...): keep the camera, the selection, the
         // undo history and any unsaved transform edits
         bool reload = _scene != null && _sceneEntry == w && _sceneAct == act;
-        if (!reload && _scene != null && (_scene.Objects.Any(o => o.Dirty) || CollisionDirty) &&
-            MessageBox.Show(this, "Discard unsaved edits in the current world?", Text, MessageBoxButtons.YesNo) != DialogResult.Yes) return;
+        if (!reload && !AskSavePending($"opening {act?.Display ?? w.Display}")) return;   // Save / Don't save / Cancel
         // another world: its collision edits go; the same world reloaded: unsaved collision edits stay (as transforms do)
         if (!reload) { _soups.Clear(); _soupWhy.Clear(); _soupMesh.Clear(); }
         else foreach (var k in _soups.Where(kv => kv.Value?.Dirty != true).Select(kv => kv.Key).ToList()) { _soups.Remove(k); _soupMesh.Remove(k); _soupWhy.Remove(k); }
@@ -1776,14 +1771,18 @@ public sealed partial class MainForm : Form
         var carry = reload ? _scene!.Objects.Where(o => o.Dirty).Select(o => (Key: UndoHistory.KeyOf(o), o.Transform, Link: o.Marker?.Link)).ToList() : null;
         string? selKey = reload && _view.Selected != null ? UndoHistory.KeyOf(_view.Selected) : null;
         _busy = true; SetProgress($"Loading {w.Display}…", 0);
+        var _openClock = System.Diagnostics.Stopwatch.StartNew();
         try
         {
             var ws = _ws;
             var index = _index;
+            var _pw = Viewport.Prof.Time("open: WorldScene (worker)");
             var scene = await Task.Run(() => new WorldScene(ws, w.Bundle, w.BackgroundModel, new Progress<(string S, double P)>(p => BeginInvoke(() => SetProgress(p.S, p.P))),
                 act != null ? new[] { act.ActBundle } : null, index));
             // textures: resolve every diffuse texture up front across the whole workspace (world bundle, shared/common
             // bundles, stream archives) and report what could not be found
+            _pw.Dispose();
+            var _pt = Viewport.Prof.Time("open: textures (worker)");
             scene.Textures = new NB.Core.Textures.TextureResolver(ws, index, scene.Caff, w.Bundle);
             var texNames = scene.DiffuseTextureNames().ToList();
             await Task.Run(() =>
@@ -1794,6 +1793,9 @@ public sealed partial class MainForm : Form
                     if (i % 8 == 0) { int k = i; BeginInvoke(() => SetProgress($"Loading textures {k}/{texNames.Count}…", k / (double)Math.Max(1, texNames.Count))); }
                 }
             });
+            _pt.Dispose();
+            using (Viewport.Prof.Time("open: GPU buffers prepared (worker)")) await _view.PrepareSceneAsync(scene);
+            var _pui = Viewport.Prof.Time("open: UI (history, atmosphere, view, tree, log)");
             _scene = scene; _sceneEntry = w; _sceneAct = act;
             if (reload)
             {
@@ -1805,9 +1807,11 @@ public sealed partial class MainForm : Form
             }
             else _history.DropSceneSteps();
             if (_ws != null) { _settings.LastWorlds[_ws.Root] = WorldKey(w, act); _settings.Save(); }
-            try { _atmos.SetWorld(w.Bundle, act?.Display ?? w.Display, act?.ActBundle ?? 0); } catch (Exception e) { Log("Atmosphere: " + e.Message); }
-            _view.SetScene(scene, keepCamera: reload);
-            FillTree();
+            // the Atmosphere tab reads the world's light setups when it is first shown (1-1.6 s, not needed to show the world)
+            _atmosPending = (w.Bundle, act?.Display ?? w.Display, act?.ActBundle ?? 0);
+            if (_scripted) ApplyAtmosphere(); else if (_center.SelectedTab?.Controls.Contains(_atmos) == true) BeginInvoke(ApplyAtmosphere);
+            using (Viewport.Prof.Time("open:   view SetScene")) _view.SetScene(scene, keepCamera: reload);
+            using (Viewport.Prof.Time("open:   tree")) FillTree();
             if (selKey != null && scene.Objects.FirstOrDefault(o => UndoHistory.KeyOf(o) == selKey) is { } sel) _view.Select(sel);
             Log($"Opened {(act?.Display ?? w.Display)} (world bundle {w.Bundle:x6}{(act != null ? $", act bundle {act.ActBundle:x6} markers" : "")}): {scene.Objects.Count} objects, {scene.Models.Count} reference models.");
             {
@@ -1817,29 +1821,51 @@ public sealed partial class MainForm : Form
                 if (missing.Count > 0) Log($"  Missing textures ({missing.Count}, drawn untextured): " + string.Join(", ", missing.Take(12)) + (missing.Count > 12 ? " …" : ""));
             }
             Log("  Contents: " + scene.Audit.Summary());
-            // collision assets damaged by a 1.12-1.13 collision save (the game hangs on "SAVING CONTENT" loading this world)
-            try
-            {
-                var dmgList = NB.Core.Havok.HkCollisionImport.DamagedAssets(scene.Caff);
-                foreach (var dmg in dmgList)
-                    Log($"WARNING: damaged collision, the game will hang loading this world: {dmg}. Saving this world is refused until it is repaired: World > Repair Damaged Collision (it takes the lost table from the bundle's history in the workspace).");
-                if (dmgList.Count > 0 && !_scripted)
-                    BeginInvoke(async () =>
-                    {
-                        if (MessageBox.Show(this, "This world's collision was damaged by a collision save of NB Studio 1.12-1.13.4: the game hangs loading it (\"SAVING CONTENT\").\n\n" +
-                                "Repair it now? Your edits are kept; the damaged version goes to the workspace history.", "Damaged collision",
-                                MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes) await RepairCollision();
-                    });
-            }
-            catch (Exception x) { Log("  collision check: " + x.Message); }
+            // collision assets damaged by a 1.12-1.13 collision save (the game hangs on "SAVING CONTENT" loading this world):
+            // checked on a worker once the world is shown (~30 ms; it was ~6 s on the UI thread in 1.13-1.15)
+            _ = Task.Run(() => { using (Viewport.Prof.Time("open: damaged-collision check (worker)")) return NB.Core.Havok.HkCollisionImport.DamagedAssets(scene.Caff); })
+                .ContinueWith(t => { if (!IsDisposed && _scene == scene) BeginInvoke(() => ReportDamagedCollision(t.IsFaulted ? new() : t.Result)); });
             foreach (var l in scene.Log.Take(30)) Log("  " + l);
             if (scene.Log.Count > 30) Log($"  … {scene.Log.Count - 30} more notes");
             // a reload (paste, delete, a texture replace …) started from the 3D preview docked in the Atmosphere tab stays there
             if (!(reload && _view.Visible && _center.SelectedIndex != 0)) _center.SelectedIndex = 0;
             UpdateTitle();
+            _pui.Dispose();
+            if (Viewport.Prof.On)
+            {
+                using (Viewport.Prof.Time("open: first frame")) _view.RenderNow();
+                Viewport.Prof.Add("OPEN TOTAL (double-click to first frame)", _openClock.Elapsed.TotalMilliseconds);
+                Viewport.Prof.Flush($"open {act?.Display ?? w.Display}");
+            }
         }
         catch (Exception e) { Error("Loading world failed", e); }
         finally { _busy = false; SetProgress(null, 0); }
+    }
+
+    /// <summary>The damaged-collision warning of a world just opened (see OpenWorld).</summary>
+    void ReportDamagedCollision(List<string> dmgList)
+    {
+        foreach (var dmg in dmgList)
+            Log($"WARNING: damaged collision, the game will hang loading this world: {dmg}. Saving this world is refused until it is repaired: World > Repair Damaged Collision (it takes the lost table from the bundle's history in the workspace).");
+        if (dmgList.Count > 0 && !_scripted)
+            BeginInvoke(async () =>
+            {
+                if (MessageBox.Show(this, "This world's collision was damaged by a collision save of NB Studio 1.12-1.13.4: the game hangs loading it (\"SAVING CONTENT\").\n\n" +
+                        "Repair it now? Your edits are kept; the damaged version goes to the workspace history.", "Damaged collision",
+                        MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes) await RepairCollision();
+            });
+    }
+
+    (uint Bundle, string Display, uint Act)? _atmosPending;
+
+    /// <summary>Gives the Atmosphere tab the open world (deferred from OpenWorld until the tab is shown).</summary>
+    void ApplyAtmosphere()
+    {
+        if (_atmosPending is not { } p) return;
+        _atmosPending = null;
+        _atmosShownFor = p.Display;
+        using (Viewport.Prof.Time("atmosphere SetWorld (when the tab is shown)"))
+            try { _atmos.SetWorld(p.Bundle, p.Display, p.Act); } catch (Exception e) { Log("Atmosphere: " + e.Message); }
     }
 
     void FillTree()
@@ -2035,8 +2061,8 @@ public sealed partial class MainForm : Form
 
     void UpdateTitle()
     {
-        int dirty = (_scene?.Objects.Count(o => o.Dirty) ?? 0) + (CollisionDirty ? 1 : 0);
-        Text = "Nuts & Bolts Mod Tool" + (_ws != null ? $" — {Path.GetFileName(_ws.Root)}" : "") + (_scene != null ? $" — {WorldCatalog.DisplayNames.GetValueOrDefault(_scene.Background.View.Name.Replace("aid_model_banjox_background_", "").Replace("_default", ""), "")} [{_scene.Bundle:x6}]" : "") + (dirty > 0 || _tags.HasUnsaved || _atmos.HasUnsaved ? " *" : "");
+        _unsaved.Text = PendingText();   // the status bar's "Unsaved: …" (MainForm.Saving.cs)
+        Text = "Nuts & Bolts Mod Tool" + (_ws != null ? $" — {Path.GetFileName(_ws.Root)}" : "") + (_scene != null ? $" — {WorldCatalog.DisplayNames.GetValueOrDefault(_scene.Background.View.Name.Replace("aid_model_banjox_background_", "").Replace("_default", ""), "")} [{_scene.Bundle:x6}]" : "") + (_unsaved.Text.Length > 0 ? " *" : "");
     }
 
     // ------------------------------------------------------------------ export
@@ -2275,13 +2301,13 @@ public sealed partial class MainForm : Form
         if (_ws == null) { Log("Test in Xenia: open a workspace first."); return; }
         if (_busy) { Log("Test in Xenia: NB Studio is busy, try again in a moment."); return; }
         var t = QuickTarget();
-        if (_scene != null && _scene.Objects.Any(o => o.Dirty))
+        if (PendingEdits() is { Count: > 0 } pending)
         {
-            var ans = _scripted ? DialogResult.Yes : MessageBox.Show(this, "The open world has unsaved changes. Save them first, so the test shows them?\n\nYes: save and test   No: test the last saved state", "Test in Xenia", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+            var ans = _scripted ? DialogResult.Yes : MessageBox.Show(this, $"There are unsaved changes ({string.Join(", ", pending)}). Save them first, so the test shows them?\n\nYes: save all and test   No: test the last saved state", "Test in Xenia", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
             if (ans == DialogResult.Cancel) return;
-            if (ans == DialogResult.Yes) SaveWorld();
+            if (ans == DialogResult.Yes) SaveAll();
+            if (PendingEdits() is { Count: > 0 } left) Log($"Note: unsaved changes are not in the test: {string.Join(", ", left)}.");
         }
-        if (_atmos.HasUnsaved) Log("Note: unsaved Atmosphere changes are not in the test (Atmosphere > Save to Workspace first).");
         if (_qtProcess is { HasExited: false } old)
         {
             if (!_scripted && MessageBox.Show(this, "The test game NB Studio started is still running. Close it and start the new test?", "Test in Xenia", MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK) return;
@@ -2590,6 +2616,9 @@ public sealed partial class MainForm : Form
                         L($"script: path node #{m.Index} next {before} -> {m.Link}"); break;
                     }
                     case "--save": SaveWorld(); L("script: saved"); break;
+                    case "--save-all": SaveAll(); L($"script: saved all; unsaved now: {(PendingEdits() is { Count: > 0 } pl ? string.Join(", ", pl) : "nothing")}; history {_history.Count} step(s), undo: {_history.UndoLabel ?? "-"}"); break;
+                    case "--pending": UpdatePending(); L($"script: unsaved: {(PendingEdits() is { Count: > 0 } pp ? string.Join(", ", pp) : "nothing")}; status \"{_unsaved.Text}\"; title {Text}"); break;
+                    case "--prompts": _scriptPrompts = Next() == "on"; L($"script: save prompts {(_scriptPrompts ? "on" : "off")}"); break;
                     case "--build-scene": await BuildScene(Next()); L("script: scene built"); break;
                     case "--import-vmf":
                     {

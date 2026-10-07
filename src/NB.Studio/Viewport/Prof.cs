@@ -25,6 +25,12 @@ public static class Prof
 
     public static Scope Time(string name) => new(On ? name : null);
 
+    public static void Add(string name, double ms)
+    {
+        if (!On) return;
+        lock (_s) { var v = _s.GetValueOrDefault(name); _s[name] = (v.N + 1, v.Total + ms, Math.Max(v.Max, ms)); }
+    }
+
     /// <summary>Appends <see cref="Report"/> with a label to the file named by NB_STUDIO_PROFILE_LOG (tests).</summary>
     public static void Flush(string label)
     {
@@ -37,7 +43,9 @@ public static class Prof
     {
         lock (_s)
         {
-            var r = string.Join("; ", _s.OrderByDescending(kv => kv.Value.Total).Select(kv => $"{kv.Key} {kv.Value.N}× avg {kv.Value.Total / Math.Max(1, kv.Value.N):0.00} max {kv.Value.Max:0.0} ms"));
+            // NB.Core's loading stages are timed by NB.Core.Diagnostics.Timing (same switch)
+            foreach (var (n, c, t, m) in NB.Core.Diagnostics.Timing.Take()) { var v = _s.GetValueOrDefault(n); _s[n] = (v.N + c, v.Total + t, Math.Max(v.Max, m)); }
+            var r = string.Join("; ", _s.OrderByDescending(kv => kv.Value.Total).Select(kv => $"{kv.Key} {kv.Value.N}× avg {kv.Value.Total / Math.Max(1, kv.Value.N):0.00} max {kv.Value.Max:0.0} total {kv.Value.Total:0} ms"));
             _s.Clear();
             return r;
         }

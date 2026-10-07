@@ -244,6 +244,12 @@ public sealed partial class Renderer : IDisposable
         if (_textures.TryGetValue(name, out int t)) return t;
         t = 0;
         var img = TextureSource(name);
+        if (_oldTextures.Remove(name, out var old))
+        {
+            if (img is { } same && ReferenceEquals(same.Rgba, old.Pixels)) { _textures[name] = old.Id; _texPixels[name] = old.Pixels; return old.Id; }
+            if (old.Id != 0) { GL.DeleteTexture(old.Id); _hasAlpha.Remove(old.Id); _lum.Remove(old.Id); _midAlpha.Remove(old.Id); }
+        }
+        if (img is { } im0) _texPixels[name] = im0.Rgba;
         if (img is { } im && im.W > 0 && im.H > 0)
         {
             t = GL.GenTexture();
@@ -307,49 +313,97 @@ public sealed partial class Renderer : IDisposable
         public XProg? XProg; public readonly int[] STex = new int[8]; public float[] ConstArray = Array.Empty<float>();
     }
     readonly Dictionary<ModelAsset, Batch[]> _batches = new();
+    /// <summary>The decoded pixels each GL texture was made from, and the textures of the previous scene that the next one
+    /// may take over (same pixel array).</summary>
+    readonly Dictionary<string, byte[]?> _texPixels = new();
+    readonly Dictionary<string, (int Id, byte[]? Pixels, int Gen)> _oldTextures = new();
+    /// <summary>How many scenes back unused GPU buffers and textures are kept (a world opened again within that many opens
+    /// shows at once).</summary>
+    public const int RetainScenes = 3;
+    int _sceneGen;
+    readonly Dictionary<ModelAsset, int> _batchGen = new(ReferenceEqualityComparer.Instance as IEqualityComparer<ModelAsset>);
     /// <summary>Materials for generated geometry (water surfaces) instead of reading the draw's stream state.</summary>
     public readonly Dictionary<MeshDraw, MaterialInfo> MaterialOverrides = new();
     const int Floats = 19;   // pos 3, normal 3, uv 2, uv2 2, tangent 3, colour 4, uv3 2
 
-    Batch[] Batches(ModelAsset model)
+    /// <summary>The vertex / index arrays of a model's batches, worked out without GL (any thread).</summary>
+    sealed record Prepared(List<(MaterialInfo Mat, float[] Verts, uint[] Idx, Vector3 Min, Vector3 Max)> Groups);
+    readonly System.Collections.Concurrent.ConcurrentDictionary<ModelAsset, Prepared> _prepared = new(ReferenceEqualityComparer.Instance);
+
+    /// <summary>
+    /// Works out the GPU buffers of these models on all cores (opening a world: the first frame then only uploads them;
+    /// building them one by one on the UI thread took most of the first frame — about 2 s in Showdown Town). Models that
+    /// already have batches should be left out (<see cref="HasBatches"/>, on the GL thread). Thread-safe.
+    /// </summary>
+    public void Prepare(IEnumerable<ModelAsset> models)
     {
-        if (_batches.TryGetValue(model, out var bs)) return bs;
+        var todo = models.Distinct(ReferenceEqualityComparer.Instance).Cast<ModelAsset>().Where(m => !_prepared.ContainsKey(m)).ToList();
+        System.Threading.Tasks.Parallel.ForEach(todo, m => { try { _prepared[m] = PrepareModel(m, null); } catch (Exception) { } });
+    }
+
+    public bool HasBatches(ModelAsset m) => _batches.ContainsKey(m);
+
+    static Prepared PrepareModel(ModelAsset model, Dictionary<MeshDraw, MaterialInfo>? overrides)
+    {
         var draws = model.Draws.Where(d => d.Positions.Length > 0 && d.Indices.Length > 0).ToList();
         var lod0 = draws.Where(d => !model.LodOnlyNodes.Contains(d.Node)).ToList();
         if (lod0.Count > 0) draws = lod0;
-        var mats = draws.ToDictionary(d => d, d => MaterialOverrides.TryGetValue(d, out var mo) ? mo : MaterialInfo.Of(d));
+        var mats = draws.ToDictionary(d => d, d => overrides != null && overrides.TryGetValue(d, out var mo) ? mo : MaterialInfo.Of(d));
         var mn = new Vector3(float.MaxValue); var mx = new Vector3(float.MinValue);
         foreach (var d in draws) foreach (int i in d.Indices) if (i < d.Positions.Length) { mn = Vector3.Min(mn, d.Positions[i]); mx = Vector3.Max(mx, d.Positions[i]); }
         bool big = mn.X <= mx.X && Vector3.Distance(mn, mx) > 300;
         var groups = big ? draws.Select(d => new List<MeshDraw> { d }).ToList()
             : draws.GroupBy(d => mats[d].Key).Select(g => g.ToList()).ToList();
-        var list = new List<Batch>();
+        var res = new List<(MaterialInfo, float[], uint[], Vector3, Vector3)>();
         foreach (var g in groups)
         {
-            var buf = new List<float>(); var idx = new List<uint>();
+            // arrays sized up front and filled through spans (the List<float>.Add per component of 1.15 was the slow part)
+            // draws of one vertex buffer share their vertex arrays (ModelAsset): each buffer goes in once
+            var bases = new Dictionary<Vector3[], int>(ReferenceEqualityComparer.Instance as IEqualityComparer<Vector3[]>);
+            int nv = 0, ni = 0;
+            foreach (var d in g) if (!bases.ContainsKey(d.Positions)) { bases[d.Positions] = nv; nv += d.Positions.Length; }
+            foreach (var d in g) foreach (int i in d.Indices) if (i < d.Positions.Length) ni++;
+            if (ni == 0) continue;
+            var buf = new float[nv * Floats]; var idx = new uint[ni];
             var bmn = new Vector3(float.MaxValue); var bmx = new Vector3(float.MinValue);
+            int io = 0;
+            var filled = new HashSet<Vector3[]>(ReferenceEqualityComparer.Instance as IEqualityComparer<Vector3[]>);
             foreach (var d in g)
             {
-                uint b = (uint)(buf.Count / Floats); int n = d.Positions.Length;
+                int vo = bases[d.Positions];
+                uint b = (uint)vo; int n = d.Positions.Length;
+                if (filled.Add(d.Positions))
                 for (int i = 0; i < n; i++)
                 {
+                    var o = buf.AsSpan((vo + i) * Floats, Floats);
                     var p = d.Positions[i]; var q = d.Normals != null ? d.Normals[i] : Vector3.Zero;
                     var t = d.UVs != null ? d.UVs[i] : Vector2.Zero; var t2 = d.UVs2 != null ? d.UVs2[i] : t;
                     var tg = d.Tangents != null ? d.Tangents[i] : Vector3.Zero;
                     uint c = d.Colors != null && i < d.Colors.Length ? d.Colors[i] : 0xFFFFFFFF;
-                    buf.Add(p.X); buf.Add(p.Y); buf.Add(p.Z); buf.Add(q.X); buf.Add(q.Y); buf.Add(q.Z); buf.Add(t.X); buf.Add(t.Y); buf.Add(t2.X); buf.Add(t2.Y);
-                    buf.Add(tg.X); buf.Add(tg.Y); buf.Add(tg.Z);
-                    buf.Add(((c >> 16) & 0xFF) / 255f); buf.Add(((c >> 8) & 0xFF) / 255f); buf.Add((c & 0xFF) / 255f); buf.Add((c >> 24) / 255f);   // 0xAARRGGBB
-                    var t3 = d.UVs3 != null ? d.UVs3[i] : t2; buf.Add(t3.X); buf.Add(t3.Y);
+                    var t3 = d.UVs3 != null ? d.UVs3[i] : t2;
+                    p.CopyTo(o); q.CopyTo(o[3..]); t.CopyTo(o[6..]); t2.CopyTo(o[8..]); tg.CopyTo(o[10..]);
+                    o[13] = ((c >> 16) & 0xFF) / 255f; o[14] = ((c >> 8) & 0xFF) / 255f; o[15] = (c & 0xFF) / 255f; o[16] = (c >> 24) / 255f;   // 0xAARRGGBB
+                    t3.CopyTo(o[17..]);
                 }
                 foreach (int i in d.Indices)
-                    if (i < n) { idx.Add(b + (uint)i); bmn = Vector3.Min(bmn, d.Positions[i]); bmx = Vector3.Max(bmx, d.Positions[i]); }
+                    if (i < n) { idx[io++] = b + (uint)i; var p = d.Positions[i]; bmn = Vector3.Min(bmn, p); bmx = Vector3.Max(bmx, p); }
             }
-            if (idx.Count == 0) continue;
-            var bt = new Batch { Mat = mats[g[0]], Center = (bmn + bmx) / 2, Radius = Vector3.Distance(bmn, bmx) / 2, Count = idx.Count };
+            res.Add((mats[g[0]], buf, idx, bmn, bmx));
+        }
+        return new Prepared(res);
+    }
+
+    Batch[] Batches(ModelAsset model)
+    {
+        if (_batches.TryGetValue(model, out var bs)) return bs;
+        // prepared on worker threads when the world opened (no material overrides: water is generated, never prepared)
+        var prep = !MaterialOverrides.Keys.Any(d => model.Draws.Contains(d)) && _prepared.TryRemove(model, out var pp) ? pp : PrepareModel(model, MaterialOverrides);
+        var list = new List<Batch>();
+        foreach (var (mat, fa, ia, bmn, bmx) in prep.Groups)
+        {
+            var bt = new Batch { Mat = mat, Center = (bmn + bmx) / 2, Radius = Vector3.Distance(bmn, bmx) / 2, Count = ia.Length };
             bt.Vao = GL.GenVertexArray(); bt.Vbo = GL.GenBuffer(); bt.Ebo = GL.GenBuffer();
             GL.BindVertexArray(bt.Vao);
-            var fa = buf.ToArray(); var ia = idx.ToArray();
             GL.BindBuffer(BufferTarget.ArrayBuffer, bt.Vbo); GL.BufferData(BufferTarget.ArrayBuffer, fa.Length * 4, fa, BufferUsageHint.StaticDraw);
             GL.BindBuffer(BufferTarget.ElementArrayBuffer, bt.Ebo); GL.BufferData(BufferTarget.ElementArrayBuffer, ia.Length * 4, ia, BufferUsageHint.StaticDraw);
             int st = Floats * 4;
@@ -364,6 +418,7 @@ public sealed partial class Renderer : IDisposable
             list.Add(bt);
         }
         // opaque first, then cut-outs: fewer state changes and early depth for the blended pass
+        _batchGen[model] = _sceneGen;
         return _batches[model] = list.OrderBy(b => b.Mat.Blend).ToArray();
     }
 
@@ -963,13 +1018,47 @@ public sealed partial class Renderer : IDisposable
     }
 
     /// <summary>Frees all batches and textures (call when a new scene is loaded).</summary>
-    public void Clear()
+    public void Clear() => Clear(null);
+
+    /// <summary>Frees every GPU resource; with <paramref name="keepModels"/>, the vertex buffers of these models stay (a
+    /// world opened again with the same, unchanged models: see WorldScene's model cache). Their materials are resolved
+    /// again, since the textures are freed.</summary>
+    public void Clear(ISet<ModelAsset>? keepModels)
     {
-        foreach (var b in _batches.Values.SelectMany(x => x)) { GL.DeleteVertexArray(b.Vao); GL.DeleteBuffer(b.Vbo); GL.DeleteBuffer(b.Ebo); }
-        _batches.Clear();
+        // the buffers of the scenes opened before stay a while (RetainScenes): opening one of those worlds again only
+        // resolves their materials. A full clear (null) frees everything.
+        _sceneGen++;
+        foreach (var (m, bs) in _batches.ToList())
+        {
+            if (keepModels != null)
+            {
+                foreach (var b in bs) { b.Resolved = false; b.XProg = null; }
+                if (keepModels.Contains(m)) _batchGen[m] = _sceneGen;
+                else if (_sceneGen - _batchGen.GetValueOrDefault(m) <= RetainScenes) continue;   // used recently: kept
+                else { foreach (var b in bs) { GL.DeleteVertexArray(b.Vao); GL.DeleteBuffer(b.Vbo); GL.DeleteBuffer(b.Ebo); } _batches.Remove(m); _batchGen.Remove(m); }
+                continue;
+            }
+            foreach (var b in bs) { GL.DeleteVertexArray(b.Vao); GL.DeleteBuffer(b.Vbo); GL.DeleteBuffer(b.Ebo); }
+            _batches.Remove(m); _batchGen.Remove(m);
+        }
+        foreach (var m in _prepared.Keys) if (keepModels == null || !keepModels.Contains(m)) _prepared.TryRemove(m, out _);
         Array.Fill(_bound, -1);
-        foreach (var t in _textures.Values) if (t != 0) GL.DeleteTexture(t);
-        _textures.Clear(); _hasAlpha.Clear(); _lum.Clear(); _midAlpha.Clear();
+        if (keepModels != null)
+        {
+            // another scene of the same workspace: a texture whose decoded pixels are the very same array is taken over by
+            // a later scene instead of uploaded again (see Texture); unused for RetainScenes scenes, it is freed
+            foreach (var (name, t) in _textures) _oldTextures[name] = (t, _texPixels.GetValueOrDefault(name), _sceneGen);
+            foreach (var (name, o) in _oldTextures.ToList())
+                if (_sceneGen - o.Gen > RetainScenes) { if (o.Id != 0) { GL.DeleteTexture(o.Id); _hasAlpha.Remove(o.Id); _lum.Remove(o.Id); _midAlpha.Remove(o.Id); } _oldTextures.Remove(name); }
+        }
+        else
+        {
+            foreach (var t in _textures.Values) if (t != 0) GL.DeleteTexture(t);
+            foreach (var (t, _, _) in _oldTextures.Values) if (t != 0) GL.DeleteTexture(t);
+            _oldTextures.Clear();
+            _hasAlpha.Clear(); _lum.Clear(); _midAlpha.Clear();
+        }
+        _textures.Clear(); _texPixels.Clear();
         _queue.Clear(); _multiply.Clear();
         ClearGrass();
     }

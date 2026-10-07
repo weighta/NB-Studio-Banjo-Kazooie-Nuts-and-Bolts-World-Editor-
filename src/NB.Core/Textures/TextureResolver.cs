@@ -128,7 +128,16 @@ public sealed class TextureResolver
         // most textures keep their pixels in ".texturegpu"; textures stored beside a model (Banjoland N64 exhibits) use ".gpu"
         var gpu = parts.FirstOrDefault(p => caff.SectionOf(p).Name == ".texturegpu") ?? parts.FirstOrDefault(p => caff.SectionOf(p).Name == ".gpu");
         if (cpu == null || gpu == null || !TextureHeader.IsTexture(cpu.Data)) return false;
+        // decoded once per texture data: opening a world again (or another world sharing textures) reuses the pixels, and
+        // NB Studio keeps the GPU texture made from the same array; edited data (a replaced texture) decodes again
+        ulong sig = NB.Core.IO.FastHash.Of(gpu.Data, NB.Core.IO.FastHash.Of(cpu.Data));
+        if (Decoded.TryGetValue(gpu.Data, out var hit) && hit.Sig == sig) { r = hit.Image; return true; }
         r = new TextureAsset(cpu.Data, gpu.Data).Decode(0);
+        Decoded.AddOrUpdate(gpu.Data, new DecodedEntry(sig, r));
         return true;
     }
+
+    sealed record DecodedEntry(ulong Sig, (byte[], int, int) Image);
+    /// <summary>Decoded textures by their pixel data array (kept as long as the bundle holding it is loaded).</summary>
+    static readonly System.Runtime.CompilerServices.ConditionalWeakTable<byte[], DecodedEntry> Decoded = new();
 }

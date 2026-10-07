@@ -95,6 +95,10 @@ public sealed class TextPanel : UserControl
         }
     }
 
+    /// <summary>The open text table has edits not saved yet (Ctrl+S saves them with everything else).</summary>
+    public bool HasUnsaved => _save.Enabled;
+    public void SaveNow() { if (HasUnsaved) Save(); }
+
     void Save()
     {
         if (_ws == null || _text == null || _caff == null || _path == null) return;

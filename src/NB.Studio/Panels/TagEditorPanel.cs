@@ -388,6 +388,19 @@ public sealed class TagEditorPanel : UserControl
         foreach (var (off, label) in v.Labels(id => _names?.GetValueOrDefault(id))) _labels[off] = label;
     }
 
+    /// <summary>Saves pending tag edits (File > Save All, Ctrl+S).</summary>
+    public void SaveNow() { if (HasUnsaved) Save(); }
+
+    /// <summary>Drops pending tag edits ("Don't save"): the edited bundle is read again from the workspace when next used.</summary>
+    public void DiscardNow()
+    {
+        if (!HasUnsaved) return;
+        if (_ws != null) _ws.ForgetCache(_bundle);
+        HasUnsaved = false; _save.Enabled = false;
+        _caff = null; _view = null; _data = null; _grid.Rows.Clear(); _head.Text = "";
+        Changed?.Invoke();
+    }
+
     void Save()
     {
         if (_ws == null || _caff == null) return;

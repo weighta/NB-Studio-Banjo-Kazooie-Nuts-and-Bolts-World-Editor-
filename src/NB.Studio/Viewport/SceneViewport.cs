@@ -365,31 +365,51 @@ public sealed partial class SceneViewport : UserControl
     public string? SkyName { get; private set; }
     bool _skyFollows = true;
 
+    /// <summary>The lighting worked out for a scene on a worker (see <see cref="PrepareSceneAsync"/>).</summary>
+    (WorldScene Scene, List<LevelLighting> Lights, List<WorldLook?> Looks, List<(string Name, ModelAsset? Model)> Skies)? _preparedLighting;
+
     void EnsureLighting()
     {
         if (_lights != null || Scene == null) return;
-        _lights = new(); _looks = new();
+        if (_preparedLighting is { } pl && pl.Scene == Scene)
+        {
+            _lights = pl.Lights; _looks = pl.Looks; _skies.Clear(); _skies.AddRange(pl.Skies);
+            _preparedLighting = null;
+        }
+        else
+        {
+            var (l, k, sk) = FindLighting(Scene);
+            _lights = l; _looks = k; _skies.Clear(); _skies.AddRange(sk);
+        }
+        _lightIndex = 0;
+        ApplyLight();
+    }
+
+    /// <summary>The level scripts' light setups and sky domes of a scene, and those stored in its bundles (no GL: any thread).</summary>
+    static (List<LevelLighting>, List<WorldLook?>, List<(string Name, ModelAsset? Model)>) FindLighting(WorldScene scene)
+    {
+        var lights = new List<LevelLighting>(); var looks = new List<WorldLook?>(); var skies = new List<(string Name, ModelAsset? Model)>();
         // 1. the level scripts: light setup + skydome per act / time of day (domes may live in other bundles or Bundle/50)
         try
         {
-            var idx = NB.Core.Project.AssetIndex.LoadOrBuild(Scene.Workspace);
-            foreach (var look in WorldLooks.Find(Scene.Workspace, idx, Scene, m => Scene.Log.Add(m)))
+            var idx = NB.Core.Project.AssetIndex.LoadOrBuild(scene.Workspace);
+            foreach (var look in WorldLooks.Find(scene.Workspace, idx, scene, m => { lock (scene.Log) scene.Log.Add(m); }))
             {
                 if (look.Light == null && look.Dome == null) continue;
-                _lights.Add(look.Light ?? new LevelLighting { Name = look.Script.Replace("aid_script_banjox_", ""), Ambient = new Vector3(0.35f), Sun = Vector3.One, Elevation = 0.8f, Azimuth = -2f, Intensity = 1.1f });
-                _looks.Add(look);
-                if (look.Dome != null && !_skies.Any(k => k.Model == look.Dome)) _skies.Add((look.DomeName ?? "sky", look.Dome));
+                lights.Add(look.Light ?? new LevelLighting { Name = look.Script.Replace("aid_script_banjox_", ""), Ambient = new Vector3(0.35f), Sun = Vector3.One, Elevation = 0.8f, Azimuth = -2f, Intensity = 1.1f });
+                looks.Add(look);
+                if (look.Dome != null && !skies.Any(k => k.Model == look.Dome)) skies.Add((look.DomeName ?? "sky", look.Dome));
             }
         }
-        catch (Exception e) { Scene.Log.Add("lighting: " + e.Message); }
+        catch (Exception e) { lock (scene.Log) scene.Log.Add("lighting: " + e.Message); }
         // 2. light setups and *skydome* models stored in the world / act bundles (worlds without level scripts)
-        var caffs = new List<NB.Core.Formats.CaffFile> { Scene.Caff };
-        foreach (var b in Scene.MarkerBundles) try { caffs.Add(Scene.Workspace.LoadResident(b)); } catch { }
+        var caffs = new List<NB.Core.Formats.CaffFile> { scene.Caff };
+        foreach (var b in scene.MarkerBundles) try { caffs.Add(scene.Workspace.LoadResident(b)); } catch { }
         foreach (var c in caffs)
         {
             try
             {
-                foreach (var l in LevelLighting.All(c).Where(l => !_lights.Any(x => x.Name == l.Name))) { _lights.Add(l); _looks.Add(null); }
+                foreach (var l in LevelLighting.All(c).Where(l => !lights.Any(x => x.Name == l.Name))) { lights.Add(l); looks.Add(null); }
             }
             catch { }
             for (int s = 1; s <= c.Symbols.Count; s++)
@@ -397,13 +417,13 @@ public sealed partial class SceneViewport : UserControl
                 var n = c.Symbols[s - 1];
                 if (!n.StartsWith("aid_model_") || !n.Contains("skydome")) continue;
                 var dn = NB.Core.Formats.AssetIds.DisplayName(n);
-                if (_skies.Any(k => k.Name == dn)) continue;
-                try { var m = ModelAsset.Parse(c, s); if (m.Draws.Count > 0) _skies.Add((dn, m)); } catch { }
+                if (skies.Any(k => k.Name == dn)) continue;
+                try { var m = ModelAsset.Parse(c, s); if (m.Draws.Count > 0) skies.Add((dn, m)); } catch { }
             }
         }
-        _lightIndex = 0;
-        ApplyLight();
+        return (lights, looks, skies);
     }
+
 
     void ApplyLight()
     {
@@ -488,10 +508,33 @@ public sealed partial class SceneViewport : UserControl
 
     // ------------------------------------------------------------------ scene
 
+    /// <summary>Works out the GPU buffers of a scene's models on worker threads before the scene is shown (models that
+    /// already have buffers are left out; <see cref="SetScene"/> keeps those). Call on the UI thread.</summary>
+    public Task PrepareSceneAsync(WorldScene scene)
+    {
+        var models = SceneModels(scene).Where(m => !_r.HasBatches(m)).ToList();
+        // the lighting (level scripts, light setups, sky domes: 0.15-0.5 s) is found meanwhile on another worker
+        var lighting = Task.Run(() => FindLighting(scene));
+        return Task.Run(() => _r.Prepare(models)).ContinueWith(async _ =>
+        {
+            var (l, k, sk) = await lighting;
+            _preparedLighting = (scene, l, k, sk);
+        }).Unwrap();
+    }
+
+    static IEnumerable<ModelAsset> SceneModels(WorldScene scene) =>
+        scene.Objects.Where(o => o.Model != null).SelectMany(o => o.Children.Select(c => c.Model).Prepend(o.Model!));
+
     public void SetScene(WorldScene? scene, bool keepCamera = false)
     {
         CancelTransform();
-        if (_ready) { _gl.MakeCurrent(); _r.Clear(); foreach (var b in _collision.Values) _r.DeleteLineBatch(b); }
+        if (_ready)
+        {
+            _gl.MakeCurrent();
+            using var _pc = Prof.Time("  SetScene: GPU clear");
+            _r.Clear(scene != null ? SceneModels(scene).ToHashSet(ReferenceEqualityComparer.Instance as IEqualityComparer<ModelAsset>) : null);   // models the new scene shares with the old one keep their buffers
+            foreach (var b in _collision.Values) _r.DeleteLineBatch(b);
+        }
         _collision.Clear(); _collPending.Clear();
         if (_ready && _selCollBatch != null) _r.DeleteLineBatch(_selCollBatch);
         _selCollBatch = null; _selCollFor = null;
@@ -507,7 +550,7 @@ public sealed partial class SceneViewport : UserControl
         if (_showColl && scene != null) StartCollisionDecode();
         _lights = null; _skies.Clear(); _sky = null; _r.Lighting = new SceneLighting();
         _water = null; _r.MaterialOverrides.Clear();
-        ResetGrass();
+        using (Prof.Time("  SetScene: grass reset")) ResetGrass();
         if (scene != null)
         {
             var terrain = scene.Objects.FirstOrDefault(o => o.Kind == SceneObjectKind.Terrain);
@@ -518,10 +561,10 @@ public sealed partial class SceneViewport : UserControl
             var sc = scene.Objects.Where(o => o.Kind == SceneObjectKind.Scenery && !IsHidden(o)).Select(o => o.Transform.Translation).ToList();
             if (sc.Count > 0) c = new Vector3(sc.Average(v => v.X), sc.Average(v => v.Y), sc.Average(v => v.Z));
             if (!keepCamera) { _camPos = c + new Vector3(0, 120, -250); _yaw = 0; _pitch = -0.4f; }
-            EnsureLighting();
-            _water = BuildWater(scene);
+            using (Prof.Time("  SetScene: lighting")) EnsureLighting();
+            using (Prof.Time("  SetScene: water")) _water = BuildWater(scene);
         }
-        SelectionChanged?.Invoke(null);
+        using (Prof.Time("  SetScene: SelectionChanged")) SelectionChanged?.Invoke(null);
         _gl.Invalidate();
     }
 

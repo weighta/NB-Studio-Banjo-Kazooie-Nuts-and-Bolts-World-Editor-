@@ -203,19 +203,22 @@ public static class HkCollisionImport
     /// inside the packfile or the index / vertex / material index buffers (the loader would add the part's address to
     /// those words), and nothing but the type-1 entry may point into them. Empty = fine.
     /// </summary>
-    public static List<string> CheckRelocations(CaffFile caff, int pid)
+    public static List<string> CheckRelocations(CaffFile caff, int pid) =>
+        CheckRelocations(caff, pid, caff.Relocs.Where(x => x.FromPart == pid), caff.Relocs.Where(x => x.ToPart == pid), BufferRanges);
+
+    static List<string> CheckRelocations(CaffFile caff, int pid, IEnumerable<CaffReloc> from, IEnumerable<CaffReloc> to, Func<byte[], int, List<(int Start, int End)>> rangesOf)
     {
         var p = new List<string>();
         var d = caff.Parts[pid - 1].Data;
         int e = TypeOneEntry(d);
         if (e < 0 || e + 0x24 > d.Length) return p;
-        var ranges = BufferRanges(d, e);
+        var ranges = rangesOf(d, e);
         bool In(int v) => ranges.Any(r => v >= r.Start && v < r.End);
         int inside = 0, into = 0, firstIn = -1, firstInto = -1;
-        foreach (var g in caff.Relocs.Where(x => x.FromPart == pid))
+        foreach (var g in from)
             foreach (var q in g.Offsets) if (In(q)) { inside++; if (firstIn < 0) firstIn = q; }
         var entry = new HashSet<int> { e, e + 8, e + 0x10, e + 0x18 };
-        foreach (var g in caff.Relocs.Where(x => x.ToPart == pid))
+        foreach (var g in to)
         {
             var src = caff.Parts[g.FromPart - 1].Data;
             foreach (var q in g.Offsets)
@@ -230,18 +233,40 @@ public static class HkCollisionImport
     }
 
     /// <summary>Mesh collision assets of a bundle that fail <see cref="CheckRelocations"/> ("name: problems").</summary>
+    /// <remarks>Run when a world opens: the relocation groups are indexed once and the buffer ranges come from the type-1
+    /// entry alone (16-bit indices unless more than 65,535 vertices, as every shipped mesh and <see cref="Replace"/> write
+    /// them), so Showdown Town's 594 havok assets take ~30 ms instead of ~6 s (a packfile parse and two scans of every
+    /// relocation group per asset).</remarks>
     public static List<string> DamagedAssets(CaffFile caff)
     {
         var res = new List<string>();
+        var byFrom = caff.Relocs.ToLookup(x => x.FromPart); var byTo = caff.Relocs.ToLookup(x => x.ToPart);
+        var parts = new Dictionary<int, List<int>>();
+        for (int i = 0; i < caff.Parts.Count; i++) { var pt = caff.Parts[i]; if (!parts.TryGetValue(pt.Symbol, out var l)) parts[pt.Symbol] = l = new(); l.Add(i + 1); }
         for (int sym = 1; sym <= caff.Symbols.Count; sym++)
         {
-            if (!caff.Symbols[sym - 1].StartsWith("aid_havok_")) continue;
-            var view = new AssetView(caff, sym);
-            if (!view.Has(".data") || TypeOneEntry(view.Data(".data")) < 0) continue;
-            var p = CheckRelocations(caff, view.PartId(".data"));
+            if (!caff.Symbols[sym - 1].StartsWith("aid_havok_") || !parts.TryGetValue(sym, out var pids)) continue;
+            int pid = pids.FirstOrDefault(i => caff.SectionOf(caff.Parts[i - 1]).Name == ".data");
+            if (pid == 0 || TypeOneEntry(caff.Parts[pid - 1].Data) < 0) continue;
+            var p = CheckRelocations(caff, pid, byFrom[pid], byTo[pid], QuickBufferRanges);
             if (p.Count > 0) res.Add($"{AssetIds.DisplayName(caff.Symbols[sym - 1])}: {string.Join("; ", p)}");
         }
         return res;
+    }
+
+    /// <summary><see cref="BufferRanges"/> without reading the packfile: the index size follows from the vertex count.</summary>
+    static List<(int Start, int End)> QuickBufferRanges(byte[] d, int e)
+    {
+        var r = new List<(int Start, int End)>();
+        int S(int o) => BE.S32(d, e + o);
+        int nIdx = S(0xC), nv = S(0x14);
+        bool i32 = nv > 0xFFFF;
+        if (S(0) > 0 && S(4) > 0) r.Add((S(0), S(0) + S(4)));
+        if (S(8) > 0 && nIdx > 0) r.Add((S(8), S(8) + nIdx * (i32 ? 4 : 2)));
+        if (S(0x10) > 0 && nv > 0) r.Add((S(0x10), S(0x10) + 12 * nv));
+        if (S(0x18) > 0 && S(0x1C) > 0 && nIdx > 0) r.Add((S(0x18), S(0x18) + nIdx / 3));
+        r.RemoveAll(x => x.Start <= e + 0x24 || x.End > d.Length || x.End <= x.Start);
+        return r;
     }
 
     /// <summary>
