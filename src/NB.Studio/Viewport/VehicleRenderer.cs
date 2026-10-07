@@ -20,7 +20,8 @@ public sealed class VehicleRenderer : IDisposable
     {
         public int Vao, Vbo, Ebo, Count;
         public string? Base, Ao, Spec, Edit, Nrm;
-        public bool AoUv2, Cutout, Blend;
+        public bool AoUv2, Cutout, Blend, MaybeBlend, Additive;
+        public float Opacity = 1;
         public Vector3 Tint = Vector3.One, SpecCol = new(0.25f);
         public float SpecPow;
         public int Has; public bool Resolved;
@@ -29,6 +30,8 @@ public sealed class VehicleRenderer : IDisposable
 
     readonly Dictionary<ModelAsset, Batch[]> _batches = new();
     readonly Dictionary<string, int> _textures = new();
+    readonly Dictionary<int, float> _midAlpha = new(), _lowAlpha = new();
+    readonly List<(Batch B, Matrix4x4 World, Vector3? Paint, Vector4 Overlay, float Dist)> _transparent = new();
     int _prog, _lineProg, _lineVao, _lineVbo, _uLineMvp;
     readonly Dictionary<string, int> _u = new();
     Matrix4x4 _vp; Vector3 _eye;
@@ -52,6 +55,7 @@ public sealed class VehicleRenderer : IDisposable
         uniform vec4 uPaint;       // H, S, L, 1 = paint on
         uniform vec4 uOver;        // overlay colour (selection, ghost), amount
         uniform float uAlpha;      // ghost transparency
+        uniform float uOpacity;    // material opacity (glass)
         uniform vec3 uEye; uniform vec3 uSunDir; uniform int uFlat;
         float hue(float p, float q, float t) {
             t = fract(t);
@@ -76,7 +80,9 @@ public sealed class VehicleRenderer : IDisposable
         }
         void main(){
           vec3 n = length(vN) > 0.0 ? normalize(vN) : vec3(0,1,0);
-          if (!gl_FrontFacing) n = -n;
+          // light the side that faces the viewer: some part meshes mix triangle windings (and skinned seat / tyre meshes
+          // are two-sided), so the winding cannot say which way a face looks
+          if (dot(n, normalize(uEye - vW)) < 0.0) n = -n;
           vec3 V = normalize(uEye - vW);
           if (uFlat == 1) { o = vec4(uOver.rgb, uAlpha); return; }
           vec4 base = (uHas & 1) != 0 ? texture(tBase, vUV) : vec4(1.0);
@@ -105,7 +111,7 @@ public sealed class VehicleRenderer : IDisposable
             rgb += uSpecCol * specMask * specTint * s * step(0.0, dot(n, L));
           }
           rgb = mix(rgb, uOver.rgb, uOver.a);
-          o = vec4(rgb, uBlend == 2 ? base.a * uAlpha : uAlpha);
+          o = vec4(rgb, uBlend == 2 ? base.a * uOpacity * uAlpha : uAlpha);
         }
         """;
 
@@ -115,7 +121,7 @@ public sealed class VehicleRenderer : IDisposable
     public void Init()
     {
         _prog = Link(VS, FS);
-        foreach (var n in new[] { "uMvp", "uModel", "uHas", "uBlend", "uTint", "uSpecCol", "uSpecPow", "uPaint", "uOver", "uAlpha", "uEye", "uSunDir", "uFlat" })
+        foreach (var n in new[] { "uMvp", "uModel", "uHas", "uBlend", "uTint", "uSpecCol", "uSpecPow", "uPaint", "uOver", "uAlpha", "uOpacity", "uEye", "uSunDir", "uFlat" })
             _u[n] = GL.GetUniformLocation(_prog, n);
         GL.UseProgram(_prog);
         string[] samplers = { "tBase", "tAo", "tSpec", "tEdit", "tNrm" };
@@ -177,6 +183,13 @@ public sealed class VehicleRenderer : IDisposable
             GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.Repeat);
             GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.Repeat);
         }
+        if (t != 0 && img is { } ia)
+        {
+            int mid = 0, low = 0, n = 0, st = Math.Max(1, ia.Rgba.Length / 4 / 8192);
+            for (int i = 3; i < ia.Rgba.Length; i += 4 * st) { n++; if (ia.Rgba[i] is > 25 and < 230) mid++; if (ia.Rgba[i] < 128) low++; }
+            _midAlpha[t] = n == 0 ? 0 : mid / (float)n;
+            _lowAlpha[t] = n == 0 ? 0 : low / (float)n;
+        }
         _textures[name] = t;
         return t;
     }
@@ -217,7 +230,9 @@ public sealed class VehicleRenderer : IDisposable
             {
                 Base = m.Base, Ao = m.Ao, AoUv2 = m.AoUv2, Spec = m.Spec, Nrm = m.Normal,
                 Edit = d0.Textures.Select(t => t.Texture).FirstOrDefault(IsEditable),
-                Cutout = m.Blend == BlendKind.Cutout, Blend = m.Blend is BlendKind.Blend or BlendKind.Additive or BlendKind.Multiply,
+                // section flags say "blended" for most skinned part meshes (tyres, the seat's Banjo and Kazooie) although they
+                // are opaque in the game: blending (no depth write) is decided when the textures are known (Resolve)
+                Cutout = m.Blend == BlendKind.Cutout, MaybeBlend = m.Blend is BlendKind.Blend, Additive = m.Blend == BlendKind.Additive, Opacity = m.Opacity,
                 // vehicle part shaders use c5 / c6 for the specular map (mad spec, c5, c6), not as a diffuse tint: textured
                 // materials keep their texture colour; untextured metals (no colour map) are the light grey c6 the shaders add
                 Tint = m.Base != null ? Vector3.One : UntexturedColour(d0), SpecCol = new Vector3(0.35f), SpecPow = m.SpecPower > 0 ? m.SpecPower : 24,
@@ -250,7 +265,7 @@ public sealed class VehicleRenderer : IDisposable
             GL.BindVertexArray(0);
             list.Add(bt);
         }
-        return _batches[model] = list.OrderBy(b => b.Blend ? 1 : 0).ToArray();
+        return _batches[model] = list.ToArray();
     }
 
     void Resolve(Batch b)
@@ -263,11 +278,15 @@ public sealed class VehicleRenderer : IDisposable
         if (b.Tex[3] != 0) h |= 16;
         if (b.Tex[4] != 0) h |= 32;
         b.Has = h; b.Resolved = true;
+        // really see-through: a translucent material constant (glass), a colour map with soft alpha (flow arrows), glow
+        b.Blend = b.Additive || (b.MaybeBlend && (b.Opacity < 0.99f || _midAlpha.GetValueOrDefault(b.Tex[0]) > 0.05f));
+        // a colour map with see-through texels (hard-edged flow arrows): alpha-tested
+        if (b.MaybeBlend && !b.Blend && b.Tex[0] != 0 && _lowAlpha.GetValueOrDefault(b.Tex[0]) > 0.01f) { b.Cutout = true; b.Has |= 64; }
     }
 
     public void Begin(Matrix4x4 viewProj, Vector3 eye)
     {
-        _vp = viewProj; _eye = eye;
+        _vp = viewProj; _eye = eye; _transparent.Clear();
         GL.Enable(EnableCap.DepthTest); GL.DepthMask(true); GL.DepthFunc(DepthFunction.Lequal);
         GL.Disable(EnableCap.CullFace); GL.Disable(EnableCap.Blend);
         GL.UseProgram(_prog);
@@ -294,37 +313,72 @@ public sealed class VehicleRenderer : IDisposable
         return new(h, s, l);
     }
 
-    /// <summary>Draws a part model. <paramref name="paint"/>: RGB 0..1 (null = unpainted materials only);
-    /// <paramref name="overlay"/>: rgb + amount (selection highlight); <paramref name="alpha"/> &lt; 1: a see-through ghost.</summary>
+    /// <summary>Draws a part model's opaque and cut-out materials; see-through ones are queued for
+    /// <see cref="FlushTransparent"/> (drawn after every part, farthest first, so a part's glass cannot hide the parts
+    /// behind it). <paramref name="paint"/>: RGB 0..1 (null = unpainted materials only); <paramref name="overlay"/>: rgb +
+    /// amount (selection, attach status); <paramref name="alpha"/> &lt; 1: a see-through ghost (drawn at once, after the
+    /// vehicle).</summary>
     public void DrawModel(ModelAsset model, Matrix4x4 world, Vector3? paint, Vector4 overlay, float alpha = 1, bool flat = false)
     {
         var batches = Batches(model);
         if (batches.Length == 0) return;
+        bool ghost = alpha < 0.999f;
+        SetPart(world, paint, overlay, alpha, flat);
+        if (ghost) { GL.Enable(EnableCap.Blend); GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha); GL.DepthMask(false); }
+        foreach (var b in batches)
+        {
+            if (!b.Resolved) Resolve(b);
+            if (b.Blend && !ghost)
+            {
+                var c = Vector3.Transform(Vector3.Zero, world);
+                _transparent.Add((b, world, paint, overlay, Vector3.DistanceSquared(c, _eye)));
+                continue;
+            }
+            DrawBatch(b, false);
+        }
+        if (ghost) { GL.Disable(EnableCap.Blend); GL.DepthMask(true); }
+        GL.BindVertexArray(0);
+        GL.ActiveTexture(TextureUnit.Texture0);
+    }
+
+    void SetPart(Matrix4x4 world, Vector3? paint, Vector4 overlay, float alpha, bool flat)
+    {
         GL.UseProgram(_prog);
-        var mvp = world * _vp;
-        SetMat("uMvp", mvp); SetMat("uModel", world);
+        SetMat("uMvp", world * _vp); SetMat("uModel", world);
         var hsl = paint is { } p ? Hsl(p) : Vector3.Zero;
         GL.Uniform4(_u["uPaint"], hsl.X, hsl.Y, hsl.Z, paint != null ? 1f : 0f);
         GL.Uniform4(_u["uOver"], overlay.X, overlay.Y, overlay.Z, overlay.W);
         GL.Uniform1(_u["uAlpha"], alpha);
         GL.Uniform1(_u["uFlat"], flat ? 1 : 0);
-        bool ghost = alpha < 0.999f;
-        if (ghost) { GL.Enable(EnableCap.Blend); GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha); GL.DepthMask(false); }
-        foreach (var b in batches)
+    }
+
+    void DrawBatch(Batch b, bool blended)
+    {
+        for (int i = 0; i < 5; i++) { GL.ActiveTexture(TextureUnit.Texture0 + i); GL.BindTexture(TextureTarget.Texture2D, b.Tex[i]); }
+        GL.Uniform1(_u["uHas"], b.Has);
+        GL.Uniform1(_u["uBlend"], blended ? 2 : b.Cutout ? 1 : 0);
+        GL.Uniform1(_u["uOpacity"], blended && !b.Additive ? b.Opacity : 1f);
+        GL.Uniform3(_u["uTint"], b.Tint.X, b.Tint.Y, b.Tint.Z);
+        GL.Uniform3(_u["uSpecCol"], b.SpecCol.X, b.SpecCol.Y, b.SpecCol.Z);
+        GL.Uniform1(_u["uSpecPow"], b.SpecPow);
+        GL.BindVertexArray(b.Vao);
+        GL.DrawElements(PrimitiveType.Triangles, b.Count, DrawElementsType.UnsignedInt, 0);
+    }
+
+    /// <summary>Draws the queued see-through materials of every part, farthest first, depth-tested without depth writes.</summary>
+    public void FlushTransparent()
+    {
+        if (_transparent.Count == 0) return;
+        GL.Enable(EnableCap.Blend); GL.DepthMask(false);
+        foreach (var t in _transparent.OrderByDescending(x => x.Dist))
         {
-            if (!b.Resolved) Resolve(b);
-            for (int i = 0; i < 5; i++) { GL.ActiveTexture(TextureUnit.Texture0 + i); GL.BindTexture(TextureTarget.Texture2D, b.Tex[i]); }
-            GL.Uniform1(_u["uHas"], b.Has);
-            GL.Uniform1(_u["uBlend"], b.Blend ? 2 : b.Cutout ? 1 : 0);
-            GL.Uniform3(_u["uTint"], b.Tint.X, b.Tint.Y, b.Tint.Z);
-            GL.Uniform3(_u["uSpecCol"], b.SpecCol.X, b.SpecCol.Y, b.SpecCol.Z);
-            GL.Uniform1(_u["uSpecPow"], b.SpecPow);
-            if (b.Blend && !ghost) { GL.Enable(EnableCap.Blend); GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha); GL.DepthMask(false); }
-            GL.BindVertexArray(b.Vao);
-            GL.DrawElements(PrimitiveType.Triangles, b.Count, DrawElementsType.UnsignedInt, 0);
-            if (b.Blend && !ghost) { GL.Disable(EnableCap.Blend); GL.DepthMask(true); }
+            SetPart(t.World, t.Paint, t.Overlay, 1, false);
+            if (t.B.Additive) GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.One);
+            else GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+            DrawBatch(t.B, true);
         }
-        if (ghost) { GL.Disable(EnableCap.Blend); GL.DepthMask(true); }
+        _transparent.Clear();
+        GL.Disable(EnableCap.Blend); GL.DepthMask(true);
         GL.BindVertexArray(0);
         GL.ActiveTexture(TextureUnit.Texture0);
     }

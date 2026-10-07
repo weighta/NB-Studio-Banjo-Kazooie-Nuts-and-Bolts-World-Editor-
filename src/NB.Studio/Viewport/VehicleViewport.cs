@@ -33,6 +33,10 @@ public sealed class VehicleViewport : UserControl
     /// <summary>Paint of the Paint tool (RGBA).</summary>
     public uint PaintColour = 0xD10903FF;
     public bool ShowGrid = true;
+    /// <summary>Hazard signs over floating parts.</summary>
+    public bool ShowHazards = true;
+    /// <summary>Status of the Place tool's ghost at its last spot (0 attached, 1 floating, 2 blocked; -1 none).</summary>
+    public int GhostStatus = -1;
 
     /// <summary>A part was clicked with the Paint tool (Alt: pick its colour instead).</summary>
     public event Action<VehicleDocument.Part, bool>? PaintClicked;
@@ -227,6 +231,17 @@ public sealed class VehicleViewport : UserControl
         OnUp(this, new MouseEventArgs(MouseButtons.Left, 1, x, y, 0));
     }
 
+    /// <summary>The Place tool's ghost for the mouse at view coordinates (scripted tests): its cell and attach status.</summary>
+    public ((int X, int Y, int Z)? Cell, int Status) HoverAt(int x, int y)
+    {
+        _hover = PlaceCell(new Point(x, y));
+        _gl.Invalidate();
+        if (_hover is not { } c || PlacePart == null || Document == null) return (null, -1);
+        var probe = new VehicleDocument.Part { X = c.X, Y = c.Y, Z = c.Z, B = new BlueprintBlock { Part = PlacePart.Id } };
+        probe.B.Orientation = PlaceOrientation;
+        return (c, VehicleConnectivity.PlacementStatus(Document, probe, Catalog, Connectivity));
+    }
+
     /// <summary>View size (scripted tests aim at its centre).</summary>
     public Size ViewSize => _gl.ClientSize;
 
@@ -289,7 +304,23 @@ public sealed class VehicleViewport : UserControl
             }
             return;
         }
-        if (Tool == VehicleTool.Place && PlacePart != null) { var c = PlaceCell(e.Location); if (c != _hover) { _hover = c; _gl.Invalidate(); } }
+        if (Tool == VehicleTool.Place && PlacePart != null)
+        {
+            var c = PlaceCell(e.Location);
+            if (c != _hover)
+            {
+                _hover = c; _gl.Invalidate();
+                if (c is { } pc && Document != null)
+                {
+                    var probe = new VehicleDocument.Part { X = pc.X, Y = pc.Y, Z = pc.Z, B = new BlueprintBlock { Part = PlacePart.Id } };
+                    probe.B.Orientation = PlaceOrientation;
+                    int st = VehicleConnectivity.PlacementStatus(Document, probe, Catalog, Connectivity);
+                    Status?.Invoke($"{PlacePart.Name} at ({pc.X}, {pc.Y}, {pc.Z}): " + (st == 0 ? "attaches here (green)" : st == 1
+                        ? "floating here: no attachable face meets the vehicle (orange; the garage shows its hazard sign) — turn it with X / Y / Z"
+                        : "blocked: it would fill a cell another part fills (red)"));
+                }
+            }
+        }
         else if (Tool is VehicleTool.Select or VehicleTool.Paint)
         {
             var h = Pick(e.Location);
@@ -301,7 +332,9 @@ public sealed class VehicleViewport : UserControl
     string Describe(VehicleDocument.Part p)
     {
         var info = Catalog?[p.B.Part];
-        return $"{info?.Name ?? $"unknown part 0x{p.B.Part:X8}"} at ({p.X}, {p.Y}, {p.Z}), orientation {p.Orientation}" +
+        var conn = Connectivity;
+        string att = conn == null ? "" : conn.Overlapping.Contains(p) ? " — BLOCKED (shares cells)" : conn.Floating.Contains(p) ? " — NOT ATTACHED (hazard)" : " — attached";
+        return $"{info?.Name ?? $"unknown part 0x{p.B.Part:X8}"} at ({p.X}, {p.Y}, {p.Z}), orientation {p.Orientation}{att}" +
                (p.B.Painted != 0 ? $", painted #{p.B.Paint >> 8:X6}" : ", default colour") + (p.B.Setting != 0 ? ", " + VehicleSettings.NameOf(p.B.Setting, info?.IsPropeller == true) : "");
     }
 
@@ -313,7 +346,40 @@ public sealed class VehicleViewport : UserControl
 
     // ------------------------------------------------------------------ drawing
 
-    static readonly Vector4 SelOverlay = new(1f, 0.65f, 0.1f, 0.38f);
+    // attachment status like the garage: green attached, orange floating (hazard), red blocked (fills a taken cell)
+    static readonly Vector3 Green = new(0.25f, 0.95f, 0.3f), Orange = new(1f, 0.55f, 0.05f), Red = new(1f, 0.12f, 0.08f);
+    static Vector3 StatusColour(int status) => status == 0 ? Green : status == 1 ? Orange : Red;
+
+    VehicleConnectivity? _conn; string _connSig = "";
+
+    /// <summary>Which parts hold together (recomputed when the parts change).</summary>
+    public VehicleConnectivity? Connectivity
+    {
+        get
+        {
+            if (Document == null) return null;
+            var sb = new System.Text.StringBuilder();
+            foreach (var p in Document.Parts) sb.Append(p.X).Append(',').Append(p.Y).Append(',').Append(p.Z).Append(',').Append(p.B.RotXBits ^ p.B.RotYBits * 3 ^ p.B.RotZBits * 7).Append(',').Append(p.B.Part).Append(';');
+            var sig = sb.ToString();
+            if (_conn == null || sig != _connSig || !ReferenceEquals(_conn.Parts.FirstOrDefault(), Document.Parts.FirstOrDefault()))
+            { _conn = new VehicleConnectivity(Document.Parts, Catalog); _connSig = sig; }
+            return _conn;
+        }
+    }
+
+    int StatusOf(VehicleDocument.Part p, VehicleConnectivity c) => c.Overlapping.Contains(p) ? 2 : c.Floating.Contains(p) ? 1 : 0;
+
+    /// <summary>The garage's hazard sign over a floating part: a triangle with "!" facing the camera, drawn on top.</summary>
+    void Hazard(List<(Vector3, Vector3, Vector3)> l, Vector3 at)
+    {
+        var f = Vector3.Normalize(_target - Eye()); var r = Vector3.Normalize(Vector3.Cross(f, Vector3.UnitY)); var u = Vector3.Cross(r, f);
+        float s = 0.32f;
+        var a = at + u * s; var b = at - u * s * 0.6f - r * s * 0.95f; var c = at - u * s * 0.6f + r * s * 0.95f;
+        var col = new Vector3(1f, 0.85f, 0.1f);
+        l.Add((a, b, col)); l.Add((b, c, col)); l.Add((c, a, col));
+        l.Add((at + u * s * 0.45f, at - u * s * 0.12f, new Vector3(1f, 0.2f, 0.1f)));
+        l.Add((at - u * s * 0.3f, at - u * s * 0.4f, new Vector3(1f, 0.2f, 0.1f)));
+    }
 
     /// <summary>The colour a part shows: its paint when painted, else its default colour (objparams +0x130).</summary>
     Vector3 PaintOf(VehicleDocument.Part p)
@@ -336,44 +402,58 @@ public sealed class VehicleViewport : UserControl
         var vp = View() * Proj();
         _r.Begin(vp, Eye());
         var lines = new List<(Vector3, Vector3, Vector3)>();
+        var top = new List<(Vector3, Vector3, Vector3)>();
         if (Document != null)
         {
+            var conn = Connectivity!;
             foreach (var p in Document.Parts)
             {
                 var info = Catalog?[p.B.Part];
                 var model = info != null ? Catalog!.Model(info) : null;
                 bool sel = Document.Selection.Contains(p);
-                if (model != null) _r.DrawModel(model, PartMatrix(p.Orientation, p.X, p.Y, p.Z), PaintOf(p), sel ? SelOverlay : Vector4.Zero);
+                int st = StatusOf(p, conn);
+                var over = sel ? new Vector4(StatusColour(st), 0.40f) : st == 1 ? new Vector4(Orange, 0.30f) : Vector4.Zero;
+                if (model != null) _r.DrawModel(model, PartMatrix(p.Orientation, p.X, p.Y, p.Z), PaintOf(p), over);
                 else
                 {
                     // unknown part: a red box
                     VehicleRenderer.Box(lines, new Vector3(p.X - 0.45f, p.Y - 0.45f, p.Z - 0.45f), new Vector3(p.X + 0.45f, p.Y + 0.45f, p.Z + 0.45f), new Vector3(1, 0.15f, 0.1f));
                 }
+                if (st == 1 && ShowHazards)
+                {
+                    var (ha, hb) = VehicleDocument.Box(p, info);
+                    Hazard(top, new Vector3((ha.X + hb.X) / 2f, hb.Y + 0.95f, (ha.Z + hb.Z) / 2f));
+                }
                 if (sel)
                 {
                     var (a, b) = VehicleDocument.Box(p, info);
-                    VehicleRenderer.Box(lines, new Vector3(a.X, a.Y, a.Z) - new Vector3(0.5f), new Vector3(b.X, b.Y, b.Z) + new Vector3(0.5f), new Vector3(1f, 0.7f, 0.15f));
+                    VehicleRenderer.Box(lines, new Vector3(a.X, a.Y, a.Z) - new Vector3(0.5f), new Vector3(b.X, b.Y, b.Z) + new Vector3(0.5f), StatusColour(st));
                 }
             }
+            _r.FlushTransparent();
             // ghost of the part being placed
             if (Tool == VehicleTool.Place && PlacePart != null && _hover is { } hc)
             {
                 var model = Catalog?.Model(PlacePart);
                 var probe = new VehicleDocument.Part { X = hc.X, Y = hc.Y, Z = hc.Z, B = new BlueprintBlock { Part = PlacePart.Id } };
                 probe.B.Orientation = PlaceOrientation;
+                int gst = VehicleConnectivity.PlacementStatus(Document, probe, Catalog, conn);
+                GhostStatus = gst;
                 if (model != null)
                 {
                     uint c = PlacePart.DefaultPaint;
-                    _r.DrawModel(model, PartMatrix(PlaceOrientation, hc.X, hc.Y, hc.Z), new Vector3((c >> 24) / 255f, (c >> 16 & 0xFF) / 255f, (c >> 8 & 0xFF) / 255f), new Vector4(0.3f, 0.9f, 0.4f, 0.35f), 0.55f);
+                    _r.DrawModel(model, PartMatrix(PlaceOrientation, hc.X, hc.Y, hc.Z), new Vector3((c >> 24) / 255f, (c >> 16 & 0xFF) / 255f, (c >> 8 & 0xFF) / 255f), new Vector4(StatusColour(gst), 0.45f), 0.55f);
                 }
                 var (a, b) = VehicleDocument.Box(probe, PlacePart);
-                VehicleRenderer.Box(lines, new Vector3(a.X, a.Y, a.Z) - new Vector3(0.5f), new Vector3(b.X, b.Y, b.Z) + new Vector3(0.5f), new Vector3(0.3f, 1f, 0.4f));
+                VehicleRenderer.Box(lines, new Vector3(a.X, a.Y, a.Z) - new Vector3(0.5f), new Vector3(b.X, b.Y, b.Z) + new Vector3(0.5f), StatusColour(gst));
             }
             else if (_hover is { } hv && Tool != VehicleTool.Place)
                 VehicleRenderer.Box(lines, new Vector3(hv.X, hv.Y, hv.Z) - new Vector3(0.5f), new Vector3(hv.X, hv.Y, hv.Z) + new Vector3(0.5f), Tool == VehicleTool.Paint ? new Vector3(0.9f, 0.3f, 0.9f) : new Vector3(0.9f, 0.9f, 0.9f));
             if (ShowGrid) Grid(lines);
         }
+        _r.FlushTransparent();
         _r.Lines(lines);
+        _r.Lines(top, onTop: true, width: 2.5f);
         if (swap) _gl.SwapBuffers();
     }
 

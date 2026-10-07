@@ -8,8 +8,9 @@ namespace NB.Core.Parts;
 /// resident next to the part models and streamed from Bundle/50/685374).
 /// <para>Layout (verified on 63 shipped parts): +0 u32 version (14), +4 u32 cell count, +8..+0x1C s32 cell bounds
 /// xmin, ymin, zmin, xmax, ymax, zmax (cells, inclusive; one cell = one garage grid unit). Then per-cell data and one
-/// 0x28-byte record per outer face of the footprint: f32 x, y, z (face centre, cell units, so one coordinate is ±0.5
-/// off the grid), u32 attachable (1 = another part can attach there), s32, f32 2.0, …, u32 next record index. After
+/// 0x28-byte record per outer face of the footprint: s32 cell x, y, z, u32 direction (0 +Y, 1 +Z, 2 -Y, 3 -Z, 4 -X,
+/// 5 +X), f32 x, y, z (face centre, cell units, so one coordinate is ±0.5 off the grid), u32 attachable (1 = another part
+/// can attach there), s32 neighbour record (-1 none), f32 2.0. After
 /// the records: mass/inertia data.</para>
 /// Examples: a 1×1×1 cube has 6 records, all attachable; Spirit of Pants only its bottom face; the Energy Shield
 /// footprint is 3×1×3 (9 cells).
@@ -31,6 +32,10 @@ public sealed class AttachData
     public readonly List<Point> Points = new();
     public (int X, int Y, int Z) Size => (XMax - XMin + 1, YMax - YMin + 1, ZMax - ZMin + 1);
 
+    /// <summary>Face direction codes of the face records (verified on the L-shaped large engine: the record's cell and code
+    /// give the outward normal; the old guess from the footprint centre gave (0, 0, 0) for its inner corner faces).</summary>
+    static readonly Vector3[] Dirs = { Vector3.UnitY, Vector3.UnitZ, -Vector3.UnitY, -Vector3.UnitZ, -Vector3.UnitX, Vector3.UnitX };
+
     static bool Half(float v) => MathF.Abs(v * 2 - MathF.Round(v * 2)) < 1e-4f && MathF.Abs(v) < 64;
     static bool OffGrid(float v) => MathF.Abs(MathF.Abs(v - MathF.Floor(v)) - 0.5f) < 1e-4f;
 
@@ -51,7 +56,10 @@ public sealed class AttachData
             int off = (OffGrid(x) ? 1 : 0) + (OffGrid(y) ? 1 : 0) + (OffGrid(z) ? 1 : 0);
             if (off != 1) continue;                                                 // a face centre: exactly one half coordinate
             var p = new Vector3(x, y, z);
-            var n = OffGrid(x) ? new Vector3(MathF.Sign(x - (a.XMin + a.XMax) / 2f), 0, 0)
+            // the record starts 0x10 earlier: s32 cell x, y, z and u32 direction (0 +Y, 1 +Z, 2 -Y, 3 -Z, 4 -X, 5 +X)
+            uint dir = o >= 0x50 ? BE.U32(d, o - 4) : 99;
+            var n = dir < 6 ? Dirs[dir]
+                  : OffGrid(x) ? new Vector3(MathF.Sign(x - (a.XMin + a.XMax) / 2f), 0, 0)
                   : OffGrid(y) ? new Vector3(0, MathF.Sign(y - (a.YMin + a.YMax) / 2f), 0)
                   : new Vector3(0, 0, MathF.Sign(z - (a.ZMin + a.ZMax) / 2f));
             a.Points.Add(new Point { Offset = o, Position = p, Attachable = flag == 1, Normal = n });

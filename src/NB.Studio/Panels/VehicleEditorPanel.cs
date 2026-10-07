@@ -113,6 +113,9 @@ public sealed class VehicleEditorPanel : UserControl
         var panels = new ToolStripButton("Panels") { Checked = true, CheckOnClick = true, ToolTipText = "Show the parts library and the properties (off: the 3D view takes the whole tab)" };
         panels.CheckedChanged += (_, _) => _outer.Panel1Collapsed = !panels.Checked;
         _bar.Items.Add(panels);
+        var hz = new ToolStripButton("Hazards") { Checked = true, CheckOnClick = true, ToolTipText = "Mark parts that are not attached to the vehicle (orange, with the garage's hazard sign); selection and the part being placed show green = attached, orange = floating, red = blocked" };
+        hz.CheckedChanged += (_, _) => { _view.ShowHazards = hz.Checked; _view.Redraw(); };
+        _bar.Items.Add(hz);
         var grid = new ToolStripButton("Grid") { Checked = true, CheckOnClick = true };
         grid.CheckedChanged += (_, _) => { _view.ShowGrid = grid.Checked; _view.Redraw(); };
         _bar.Items.Add(grid);
@@ -992,6 +995,24 @@ public sealed class VehicleEditorPanel : UserControl
                 break;
             }
             case "--vehicle-key": { var k = (Keys)Enum.Parse(typeof(Keys), next().Replace("+", ", "), true); bool used = HandleKey(k, false); log($"script: key {k} -> {(used ? "used" : "ignored")}; selection {string.Join(", ", _doc.Selection.Select(p => $"{_cat?[p.B.Part]?.Key}@{p.X},{p.Y},{p.Z} o{p.Orientation}"))}"); break; }
+            case "--vehicle-hover":
+            {
+                float fx = float.Parse(next(), CultureInfo.InvariantCulture), fy = float.Parse(next(), CultureInfo.InvariantCulture);
+                var sz = _view.ViewSize;
+                var (c, st) = _view.HoverAt((int)(sz.Width * fx), (int)(sz.Height * fy));
+                log($"script: ghost {_view.PlacePart?.Key} o{_view.PlaceOrientation} at {c}: {(st == 0 ? "attached (green)" : st == 1 ? "floating (orange)" : st == 2 ? "blocked (red)" : "-")}");
+                break;
+            }
+            case "--vehicle-place-o":
+            {
+                // --vehicle-place-o KEY X Y Z ORIENTATION
+                var k = next(); int x = int.Parse(next()), y = int.Parse(next()), z = int.Parse(next()), o = int.Parse(next());
+                var info = _cat?.Parts.Values.FirstOrDefault(p => p.Key == k);
+                if (info == null) { log("script: no part " + k); break; }
+                _view.PlacePart = info; _view.PlaceOrientation = o; PlaceAt(x, y, z); _view.PlaceOrientation = 0;
+                log($"script: placed {k} at {x},{y},{z} o{o}"); break;
+            }
+            case "--vehicle-name": { _doc.Begin("rename"); _doc.Name = next(); _doc.Commit(); _syncing = true; _name.Text = _doc.Name; _syncing = false; break; }
             case "--vehicle-tool": { SetTool(next() switch { "place" => VehicleTool.Place, "paint" => VehicleTool.Paint, _ => VehicleTool.Select }); break; }
             case "--vehicle-lib": { var key = next(); foreach (ListViewItem it in _lib.Items) if (it.Tag is PartInfo pi && pi.Key == key) { it.Selected = true; it.EnsureVisible(); } log("script: library part " + (_view.PlacePart?.Key ?? "none")); break; }
             case "--vehicle-undo": DoUndo(); log($"script: undo -> {_doc.Parts.Count} parts"); break;
@@ -1000,7 +1021,8 @@ public sealed class VehicleEditorPanel : UserControl
             case "--vehicle-save-package": { var f = next(); log("script: " + SaveQuiet(f)); break; }
             case "--vehicle-save-vault": SaveToVault(); break;
             case "--vehicle-info":
-                log($"script: vehicle \"{_doc.Name}\" {_doc.Parts.Count} parts, source {_source.Text}; checks: {string.Join(" | ", _issues.Items.Cast<object>().Select(o => o.ToString()))}");
+                var cn = _view.Connectivity;
+                log($"script: vehicle \"{_doc.Name}\" {_doc.Parts.Count} parts, source {_source.Text}; pieces {cn?.PieceCount}, floating {cn?.Floating.Count}: {string.Join(", ", cn?.Floating.Select(p => $"{_cat?[p.B.Part]?.Key}@{p.X},{p.Y},{p.Z}") ?? Array.Empty<string>())}; checks: {string.Join(" | ", _issues.Items.Cast<object>().Select(o => o.ToString()))}");
                 break;
             default: return false;
         }

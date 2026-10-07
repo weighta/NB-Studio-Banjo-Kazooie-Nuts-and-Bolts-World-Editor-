@@ -107,19 +107,9 @@ public sealed class VehicleDocument
 
     // ------------------------------------------------------------------ geometry
 
-    /// <summary>Cells a part covers: its footprint (avatarhavokdata bounds) rotated by its orientation, at its cell.</summary>
-    public static IEnumerable<(int X, int Y, int Z)> Cells(Part p, PartInfo? info)
-    {
-        if (info?.Attach is not { } a) { yield return (p.X, p.Y, p.Z); yield break; }
-        int o = p.Orientation;
-        for (int x = a.XMin; x <= a.XMax; x++)
-            for (int y = a.YMin; y <= a.YMax; y++)
-                for (int z = a.ZMin; z <= a.ZMax; z++)
-                {
-                    var (rx, ry, rz) = Orientations.Apply(o, x, y, z);
-                    yield return (p.X + rx, p.Y + ry, p.Z + rz);
-                }
-    }
+    /// <summary>Cells a part fills: the cells behind its footprint faces (attach data; an L-shaped engine fills 3 cells of its
+    /// 2×2 bounds), rotated by its orientation, at its cell; the part's own cell when it has no attach data.</summary>
+    public static IEnumerable<(int X, int Y, int Z)> Cells(Part p, PartInfo? info) => VehicleConnectivity.FaceCells(p, info);
 
     /// <summary>Box (min cell, max cell) of a part's footprint.</summary>
     public static ((int X, int Y, int Z) Min, (int X, int Y, int Z) Max) Box(Part p, PartInfo? info)
@@ -164,10 +154,15 @@ public sealed class VehicleDocument
                 foreach (var g in Parts.Where(p => cat[p.B.Part] is { } i && !cat.HoldersOf(i.Id).Any(set.Contains)).GroupBy(p => p.B.Part))
                     res.Add(new($"{cat[g.Key]} is not loaded in this world (its record is not in the act / world / common bundles).", g.First(), true));
             }
-            // footprints (avatarhavokdata bounds) may share cells in valid vehicles (the trolley's wheels hang into the
-            // corners of its tray), so only two parts on the same cell are reported
-            var dup = Parts.GroupBy(p => (p.X, p.Y, p.Z)).Where(g => g.Count() > 1).ToList();
-            if (dup.Count > 0) res.Add(new($"{dup.Sum(g => g.Count())} parts share a cell with another part (first at {dup[0].Key}).", dup[0].First(), false));
+            // attachment like the garage: parts not joined to the driver's piece get its hazard triangle (they fall off)
+            var conn = new VehicleConnectivity(Parts, cat);
+            if (conn.Floating.Count > 0)
+            {
+                var names = conn.Floating.GroupBy(p => cat[p.B.Part]?.Name ?? $"0x{p.B.Part:X8}").Select(g => g.Count() > 1 ? $"{g.Count()}× {g.Key}" : g.Key);
+                res.Add(new($"Hazard: {conn.Floating.Count} part(s) not attached to the vehicle (they fall off when it is built): {string.Join(", ", names.Take(8))}{(names.Count() > 8 ? " …" : "")}. Turn them so an attachable face meets the vehicle.", conn.Floating.First(), false));
+            }
+            if (conn.Overlapping.Count > 0)
+                res.Add(new($"{conn.Overlapping.Count} parts fill the same cells as another part (blocked in the garage).", conn.Overlapping.First(), false));
         }
         if (Parts.Count > 250) res.Add(new($"{Parts.Count} parts: the stock game stops at 250 (Mods: \"Vehicle part limit 400\"; blueprint previews draw the first 250).", null, false));
         var minX = Parts.Min(p => p.X); var maxX = Parts.Max(p => p.X);

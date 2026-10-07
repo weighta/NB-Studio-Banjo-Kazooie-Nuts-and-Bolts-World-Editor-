@@ -30,6 +30,7 @@ static class VehicleCommands
     /// <summary>vehicle-info &lt;file&gt; [--parts &lt;ws&gt;]: kind, name, header, parts.</summary>
     static int Info(string[] args)
     {
+        if (args.Contains("--connect")) return Connect(args);
         var v = VehicleFile.Open(args[1]);
         PartCatalog? cat = Opt(args, "--parts") is { } ws ? PartCatalog.Load(Workspace.Open(ws)) : null;
         var bp = v.Blueprint;
@@ -66,6 +67,27 @@ static class VehicleCommands
                     Console.WriteLine($"      model {pi.ModelId:X8} -> {m?.View.Name} draws {m?.Draws.Count} lod0 {m?.Draws.Count(d => !m.LodOnlyNodes.Contains(d.Node))}, size {pi.Size}, colour {pi.ColourName} {pi.DefaultPaint:X8}");
                 }
             }
+        return 0;
+    }
+
+    /// <summary>vehicle-info &lt;file|dir&gt; --parts &lt;ws&gt; --connect: pieces (attach faces), floating and overlapping parts of every vehicle.</summary>
+    static int Connect(string[] args)
+    {
+        var cat = PartCatalog.Load(Workspace.Open(Opt(args, "--parts")!));
+        int one = 0, more = 0, ov = 0, total = 0;
+        foreach (var f in Files(args[1]))
+        {
+            VehicleFile v;
+            try { v = VehicleFile.Open(f); } catch { continue; }
+            total++;
+            var doc = VehicleDocument.From(v.Blueprint);
+            var c = new VehicleConnectivity(doc.Parts, cat);
+            if (c.Floating.Count == 0) one++; else more++;
+            if (c.Overlapping.Count > 0) ov++;
+            if (c.Floating.Count > 0 || c.Overlapping.Count > 0 || args.Contains("--all"))
+                Console.WriteLine($"{Path.GetFileName(f)} \"{v.Blueprint.Name}\": {doc.Parts.Count} parts, {c.PieceCount} piece(s), floating {c.Floating.Count}: {string.Join(", ", c.Floating.Take(8).Select(p => $"{cat[p.B.Part]?.Key}@{p.X},{p.Y},{p.Z} o{p.Orientation}"))}; overlapping {c.Overlapping.Count}: {string.Join(", ", c.Overlapping.Take(6).Select(p => $"{cat[p.B.Part]?.Key}@{p.X},{p.Y},{p.Z}"))}; no attach data {c.NoData.Count}");
+        }
+        Console.WriteLine($"{total} vehicles: {one} in one piece, {more} with floating parts, {ov} with overlapping face cells");
         return 0;
     }
 

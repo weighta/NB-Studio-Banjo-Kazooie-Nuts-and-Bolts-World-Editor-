@@ -1273,6 +1273,25 @@ and springs instead of the boxy Parts Store frame, verified in Showdown Town); t
 Footprints (avatarhavokdata bounds) can share cells in valid vehicles (the trolley's wheels, bounds y −1..0, hang into
 the corners of its tray).
 
+Materials: vehicle part sections with blend nibble 2 are mostly opaque in the game (tyres, Banjo's seat, the trolley
+tray mesh are skinned meshes carrying blend mode 2 and render states 0x48=6 / 0x4C=7 like real glass). Treat them as
+blended only when the material opacity is < 1 or the texture has real partial alpha (> 5 % of texels between 8 and 247);
+a texture with hard alpha (> 1 % of texels < 128, e.g. the propeller's flow arrows) is alpha-tested.
+
+### Attach faces and connectivity (garage hazard)
+
+avatarhavokdata face record, 0x28 bytes: s32 cell x, y, z; u32 direction (0 +Y, 1 +Z, 2 −Y, 3 −Z, 4 −X, 5 +X);
+f32 face centre x, y, z (cell units, one coordinate on a half); u32 attachable (1/0); s32 neighbour record (−1 none);
+f32 2.0. The direction code is needed for non-box footprints (the L-shaped large engine's inner corner faces).
+
+Two parts are joined where both have an **attachable** face at the same half-cell position with opposite normals (after
+the part's orientation, `Orientations.All` = yaw·pitch·roll Y, X, Z). Two tow bars facing each other (their ends are
+not attachable) form a hitch. Parts not connected (through other parts) to the piece holding the driver's seat (a
+`seats_*` part, or an AI seat variant `*ai` on the game's racers) fall off when the vehicle is built; the garage shows its
+hazard triangle (verified in Xenia, Mumbo's garage: a propeller turned so its attachable face points away → hazard; the
+same vehicle correct → none; save 0x82 → hazard, 7 parts loose in the editor). With this rule all 274 of the game's
+blueprints are one piece. The trolley tray's top (cargo bed) is not attachable: parts set on it float.
+
 ### The game's own vehicles
 
 AI vehicles are marker records of type 21 (+0x38 blueprint id, +0x3C driver objparams, +0x40 strategy, +0x54 vehicle
