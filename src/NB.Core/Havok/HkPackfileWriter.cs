@@ -90,6 +90,44 @@ public sealed class HkPackfileWriter
 
     public Span<byte> PayloadSpan(int section) => System.Runtime.InteropServices.CollectionsMarshal.AsSpan(Sections[section].Payload);
 
+    /// <summary>
+    /// Drops the payload bytes of a section that lie outside <paramref name="live"/> (whole 16-byte blocks, so every kept
+    /// byte keeps its alignment) and moves every fixup that lives in or points into the section, and the file's contents
+    /// offset. Fixups living in a dropped block are removed; a pointer into a dropped block (an empty array) is moved to
+    /// where that block was. Returns the number of bytes removed; 0 (nothing changed) when the section has exports or
+    /// imports, which are kept as they are.
+    /// </summary>
+    public int Compact(int section, IEnumerable<(int Start, int Length)> live)
+    {
+        var s = Sections[section];
+        if (s.Exports.Length > 0 || s.Imports.Length > 0) return 0;
+        int n = s.Payload.Count, blocks = (n + 15) / 16;
+        var keep = new bool[blocks];
+        foreach (var (a, l) in live)
+        {
+            if (l <= 0) continue;
+            for (int b = Math.Max(0, a / 16); b < Math.Min(blocks, (a + l + 15) / 16); b++) keep[b] = true;
+        }
+        var start = new int[blocks + 1]; int acc = 0;
+        for (int b = 0; b < blocks; b++) { start[b] = acc; if (keep[b]) acc += 16; }
+        start[blocks] = acc;
+        if (keep.All(k => k)) return 0;
+        int Map(int o) { int b = o / 16; return b >= blocks ? acc + (o - blocks * 16) : start[b] + (keep[b] ? o % 16 : 0); }
+        bool Live(int o) { int b = o / 16; return b < blocks && keep[b]; }
+        var np = new List<byte>(acc);
+        for (int b = 0; b < blocks; b++)
+            if (keep[b]) for (int k = 16 * b; k < Math.Min(n, 16 * b + 16); k++) np.Add(s.Payload[k]);
+        s.Local = s.Local.Where(l => Live(l.Src)).Select(l => (Map(l.Src), Map(l.Dst))).ToList();
+        s.Global = s.Global.Where(g => Live(g.Src)).Select(g => (Map(g.Src), g.Section, g.Section == section ? Map(g.Dst) : g.Dst)).ToList();
+        s.Virtual = s.Virtual.Where(v => Live(v.Obj)).Select(v => (Map(v.Obj), v.Section, v.ClassName)).ToList();
+        for (int i = 0; i < Sections.Count; i++)
+            if (i != section) Sections[i].Global = Sections[i].Global.Select(g => (g.Src, g.Section, g.Section == section ? Map(g.Dst) : g.Dst)).ToList();
+        if (BE.S32(FileHeader, 0x18) == section) BE.W32(FileHeader, 0x1C, Map(BE.S32(FileHeader, 0x1C)));
+        int removed = n - np.Count;
+        s.Payload = np;
+        return removed;
+    }
+
     public byte[] Write()
     {
         var ms = new MemoryStream();

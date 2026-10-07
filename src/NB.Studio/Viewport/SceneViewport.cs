@@ -836,10 +836,10 @@ public sealed partial class SceneViewport : UserControl
             }
             else if (_xf == XfKind.Grab && _xfDrag)
             {
-                // free drag: a square grid around the start position in the drag plane (ground, or upright facing the camera)
+                // free drag: a square grid around the start position in the drag plane (XZ ground, or the upright XY / ZY plane)
                 float s = Math.Max(4, GizmoLength());
                 var pn = DragPlaneNormal();
-                var u = pn == Vector3.UnitY ? Vector3.UnitX : Vector3.Normalize(Vector3.Cross(Vector3.UnitY, pn));
+                var u = pn == Vector3.UnitX ? Vector3.UnitZ : Vector3.UnitX;
                 var v = pn == Vector3.UnitY ? Vector3.UnitZ : Vector3.UnitY;
                 for (int i = -2; i <= 2; i++)
                 {
@@ -1209,7 +1209,7 @@ public sealed partial class SceneViewport : UserControl
             {
                 var d = now.Translation - start.Translation;
                 main = _xfAxis >= 0 ? $"Move  {axis}  {Vector3.Dot(d, XfAxisVector()):0.00}{typed}"
-                    : $"Move  {(_xfDrag ? (DragPlaneNormal() == Vector3.UnitY ? "ground plane  " : "upright plane  ") : "")}dx {d.X:0.00}  dy {d.Y:0.00}  dz {d.Z:0.00}";
+                    : $"Move  {(_xfDrag ? DragPlaneName() + "  " : "")}dx {d.X:0.00}  dy {d.Y:0.00}  dz {d.Z:0.00}";
                 break;
             }
             case XfKind.Scale: main = $"Scale  {axis}{(axis.Length > 0 ? "  " : "")}{_xfValue:0.000}{typed}"; break;
@@ -1326,13 +1326,13 @@ public sealed partial class SceneViewport : UserControl
                 }
                 else
                 {
-                    // modal G: the plane through the object facing the camera; drag: the ground plane when the camera looks
-                    // mostly down (or up), else the upright plane facing the camera (from the side: up / down and sideways)
+                    // modal G: the plane through the object facing the camera; drag: the XZ ground plane when the camera looks
+                    // mostly down (or up), else the upright world plane closest to facing the camera (XY or ZY)
                     var n = _xfDrag ? DragPlaneNormal() : Forward();
                     var h0 = RayPlane(_xfMouse0, piv, n); var h1 = RayPlane(_mouse, piv, n);
                     if (h0 == null || h1 == null) return;
                     delta = h1.Value - h0.Value;
-                    if (_xfDrag && n == Vector3.UnitY) delta.Y = 0;
+                    if (_xfDrag) delta -= n * Vector3.Dot(delta, n);   // exactly in the plane
                     if (snap) delta = new Vector3(MathF.Round(delta.X), MathF.Round(delta.Y), MathF.Round(delta.Z));
                 }
                 var m = start; m.Translation = piv + delta; o.Transform = m;
@@ -1426,14 +1426,17 @@ public sealed partial class SceneViewport : UserControl
         return l < 3 ? null : (d / l, l);
     }
 
-    /// <summary>Plane of a free (unconstrained) drag: horizontal when the camera looks more than 45° down or up, else the
-    /// upright plane facing the camera.</summary>
+    /// <summary>Normal of the plane of a free (unconstrained) drag: Y (the XZ ground plane) when the camera looks more than
+    /// 45° down or up, else the upright world plane closest to facing the camera (yaw snapped to 90°): Z (the XY plane)
+    /// when it looks mostly along Z, X (the ZY plane) when it looks mostly along X.</summary>
     Vector3 DragPlaneNormal()
     {
         if (MathF.Abs(_pitch) > MathF.PI / 4) return Vector3.UnitY;
-        var f = Forward(); f.Y = 0;
-        return f.LengthSquared() > 1e-6f ? Vector3.Normalize(f) : Vector3.UnitY;
+        var f = Forward();
+        return MathF.Abs(f.X) > MathF.Abs(f.Z) ? Vector3.UnitX : Vector3.UnitZ;
     }
+
+    string DragPlaneName() { var n = DragPlaneNormal(); return n == Vector3.UnitY ? "XZ plane" : n == Vector3.UnitZ ? "XY plane" : "ZY plane"; }
 
     /// <summary>Position along the line (origin, axis) closest to the mouse ray; when the axis points at the camera, the
     /// mouse movement projected on the axis' screen direction.</summary>

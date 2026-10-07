@@ -381,6 +381,14 @@ public sealed partial class MainForm
     {
         var res = new List<string>();
         if (_scene == null) return res;
+        // every edited asset is checked before any is rebuilt: a refused save leaves the bundle in memory untouched
+        foreach (var (asset, s) in _soups)
+        {
+            if (s == null || !s.Dirty) continue;
+            int sym = _scene.Caff.Symbols.FindIndex(x => AssetIds.DisplayName(x) == asset) + 1;
+            var p = NB.Core.Havok.HkCollisionImport.CheckRelocations(_scene.Caff, new AssetView(_scene.Caff, sym).PartId(".data"));
+            if (p.Count > 0) throw new InvalidDataException($"{asset} is damaged ({string.Join("; ", p)}); nothing was saved. Run NB.Cli collision-repair first (see the log when the world opens).");
+        }
         foreach (var (asset, s) in _soups)
         {
             if (s == null || !s.Dirty) continue;

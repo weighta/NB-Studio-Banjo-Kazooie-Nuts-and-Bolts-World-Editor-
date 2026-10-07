@@ -2038,6 +2038,64 @@ static class Program
                     Console.WriteLine($"{joints.Count} joints");
                     return 0;
                 }
+                case "collision-repair":
+                {
+                    // collision-repair <workspace> <bundle hex> [--from <the bundle saved before the damage>] [--dry]:
+                    // finds mesh collision assets damaged by 1.12-1.13 collision saves (CAFF relocations inside the collision
+                    // buffers, a type-7 instance table overwritten by the packfile: the game hangs on "SAVING CONTENT"),
+                    // repairs them, rebuilds each repaired one compactly and saves the bundle (the previous version goes to the
+                    // history). An overwritten type-7 table is taken from --from, or else from the newest version in the
+                    // workspace history of this bundle that has it intact.
+                    var ws = NB.Core.Project.Workspace.Open(args[1]);
+                    uint b = Convert.ToUInt32(args[2], 16);
+                    string path = ws.Game.ResidentPath(b);
+                    NB.Core.Formats.CaffFile ReadCaff(string f)
+                    {
+                        var raw = File.ReadAllBytes(f);
+                        if (XCompressFile.IsCompressed(raw)) raw = XCompressFile.Decompress(raw);
+                        return NB.Core.Formats.CaffFile.Read(raw);
+                    }
+                    int fi = Array.IndexOf(args, "--from");
+                    var refs = new List<string?> { null };
+                    if (fi > 0) refs = new List<string?> { args[fi + 1] };
+                    else refs.AddRange(ws.History(Path.GetRelativePath(ws.Game.Root, path)));
+                    NB.Core.Formats.CaffFile? done = null; var lines = new List<string>(); int bad = 0; string? lastError = null;
+                    foreach (var rf in refs)
+                    {
+                        var caff = ReadCaff(path);
+                        var reference = rf != null ? ReadCaff(rf) : null;
+                        lines.Clear(); bad = 0;
+                        try
+                        {
+                            for (int sym = 1; sym <= caff.Symbols.Count; sym++)
+                            {
+                                if (!caff.Symbols[sym - 1].StartsWith("aid_havok_")) continue;
+                                var view = new NB.Core.Formats.AssetView(caff, sym);
+                                if (!view.Has(".data") || NB.Core.Havok.HkCollisionImport.TypeOneEntry(view.Data(".data")) < 0) continue;
+                                var probs = NB.Core.Havok.HkCollisionImport.CheckRelocations(caff, view.PartId(".data"));
+                                if (probs.Count == 0) continue;
+                                bad++;
+                                string name = NB.Core.Formats.AssetIds.DisplayName(caff.Symbols[sym - 1]);
+                                lines.Add($"{name}: DAMAGED: {string.Join("; ", probs)}");
+                                foreach (var l in NB.Core.Havok.HkCollisionImport.Repair(caff, sym, reference)) lines.Add("  " + l);
+                                long before = view.Data(".data").Length;
+                                var soup = NB.Core.Havok.CollisionSoup.Load(caff, sym, out var why) ?? throw new InvalidDataException(name + ": " + why);
+                                lines.Add("  rebuilt: " + soup.WriteTo(caff, sym));
+                                lines.Add($"  asset {before:N0} -> {new NB.Core.Formats.AssetView(caff, sym).Data(".data").Length:N0} bytes");
+                            }
+                            if (rf != null) lines.Add("  table taken from " + rf);
+                            done = caff; break;
+                        }
+                        catch (InvalidDataException x) { lastError = x.Message; if (rf != null) Console.WriteLine($"  ({Path.GetFileName(rf)}: {x.Message})"); }
+                    }
+                    if (done == null) { Console.WriteLine("cannot repair: " + lastError + (fi > 0 ? "" : " (no history version had the table intact; give one with --from)")); return 3; }
+                    foreach (var l in lines) Console.WriteLine(l);
+                    if (bad == 0) { Console.WriteLine("no damaged collision found"); return 0; }
+                    if (args.Contains("--dry")) { Console.WriteLine("--dry: nothing written"); return 0; }
+                    ws.SaveResident(b, done, $"collision-repair ({bad} asset(s))");
+                    Console.WriteLine("saved; the previous version is in the workspace history");
+                    return 0;
+                }
                 case "collision":
                 {
                     // collision <workspace> <bundle hex> <havok asset name | --all> [out.obj]: decode Havok collision

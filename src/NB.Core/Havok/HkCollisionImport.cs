@@ -26,8 +26,11 @@ namespace NB.Core.Havok;
 /// <see cref="HkPackfileWriter"/>);</item>
 /// <item>asset .data: new packfile, index buffer (u16, or u32 above 65 535 vertices), float3 vertex buffer and material
 /// index buffer are appended (16-aligned) and E's pointers/counts repointed. These pointers already carry CAFF
-/// relocations to the asset's own part, so no relocation changes; the material table and everything else stays.
-/// A previous import's appended tail is dropped first, so re-importing does not grow the asset.</item>
+/// relocations to the asset's own part; the material table and everything else stays. <see cref="Replace"/> first cuts
+/// the old buffers out of the asset (moving every CAFF pointer and relocation behind them), so re-importing does not
+/// grow the asset and tables placed after the buffers by other edits (the type-7 instance collision table re-created by
+/// a paste) survive; it refuses an asset that <see cref="CheckRelocations"/> finds damaged. Unused bytes of the
+/// packfile (MOPP code that no longer fits, emptied welding info) are dropped (<see cref="HkPackfileWriter.Compact"/>).</item>
 /// </list>
 /// </summary>
 public static class HkCollisionImport
@@ -112,18 +115,257 @@ public static class HkCollisionImport
         if (!view.Has(".data")) throw new InvalidDataException("asset has no .data part");
         int pid = view.PartId(".data");
         var part = view.Part(pid);
-        var (data, res) = ReplaceData(part.Data, positions, triangles, material, allowBreakable, triangleMaterials);
+        var problems = CheckRelocations(caff, pid);
+        if (problems.Count > 0) throw new InvalidDataException("the collision asset is damaged, nothing was written: " + string.Join("; ", problems) + " (NB.Cli collision-repair fixes it)");
+        var b = Build(part.Data, positions, triangles, material, allowBreakable, triangleMaterials);
+        var res = b.R; int e = b.E;
+        // cut the old buffers out of the asset (moving every CAFF pointer and relocation behind them), then append the new
+        // ones: whatever else lives in the asset stays, wherever it is. 1.12-1.13 dropped "the tail" after the old buffers
+        // instead, which also dropped a type-7 collision table re-created there by a paste; the new packfile was then
+        // written over it while its relocations stayed, so the game patched ~1,800 words of the packfile on load and froze
+        // on "SAVING CONTENT" (gm hide, 2026-10-06).
+        int removed = 0;
+        foreach (var (a, z) in b.Old.OrderByDescending(x => x.Start))
+        {
+            var d = part.Data;
+            int start = (a + 15) & ~15, end = Math.Min(d.Length, (z + 15) & ~15);
+            if (end > z && Targets(caff, pid).Any(v => v >= z && v < end)) end = z & ~15;   // something starts in the padding
+            if (end - start < 16) continue;
+            CutPart(caff, pid, start, end - start, keep: new HashSet<int> { e, e + 8, e + 0x10, e + 0x18 });
+            removed += end - start;
+        }
+        if (removed > 0) res.Notes.Add($"old collision buffers removed ({removed:N0} bytes)");
+        int matBase = BE.S32(part.Data, e + 0x1C);
+        var o = new MemoryStream();
+        o.Write(part.Data);
+        int Put(byte[] x) { while (o.Length % 16 != 0) o.WriteByte(0); int at = (int)o.Length; o.Write(x); return at; }
+        int nPf = Put(b.Pf), nIb = Put(b.Ib), nVb = Put(b.Vb), nMb = Put(b.Mb), nMt = matBase > 0 && b.MatBase > 0 ? matBase : Put(b.MatTable);
+        while (o.Length % 16 != 0) o.WriteByte(0);
+        var nd = o.ToArray();
+        WriteEntry(nd, e, b, nPf, nIb, nVb, nMb, nMt);
+        res.SelfPointers.AddRange(new[] { e, e + 8, e + 0x10, e + 0x18, e + 0x1C });
         // pointer fields that were null before (assets whose mesh had only shape subparts) need relocations
         var reloc = caff.Relocs.FirstOrDefault(x => x.FromPart == pid && x.ToPart == pid);
-        var missing = res.SelfPointers.Where(o => !caff.Relocs.Any(x => x.FromPart == pid && x.Offsets.Contains(o))).ToList();
+        var missing = res.SelfPointers.Where(q => !caff.Relocs.Any(x => x.FromPart == pid && x.Offsets.Contains(q))).ToList();
         if (missing.Count > 0)
         {
             if (reloc == null) throw new InvalidDataException("asset has no self relocation group");
             reloc.Offsets = reloc.Offsets.Concat(missing).OrderBy(x => x).ToArray();
             res.Notes.Add($"{missing.Count} relocation(s) added for new buffer pointers");
         }
-        part.Data = data;
+        part.Data = nd;
+        problems = CheckRelocations(caff, pid);
+        if (problems.Count > 0) throw new InvalidDataException("internal error: the rebuilt collision asset fails its checks: " + string.Join("; ", problems));
         return res;
+    }
+
+    /// <summary>Every pointer value into part <paramref name="pid"/> (all CAFF relocations whose target is it).</summary>
+    static IEnumerable<int> Targets(CaffFile caff, int pid)
+    {
+        foreach (var g in caff.Relocs.Where(x => x.ToPart == pid))
+        {
+            var src = caff.Parts[g.FromPart - 1].Data;
+            foreach (var q in g.Offsets) if (q >= 0 && q + 4 <= src.Length) yield return BE.S32(src, q);
+        }
+    }
+
+    /// <summary>
+    /// Removes bytes [<paramref name="at"/>, at + len) from part <paramref name="pid"/>: pointers behind the range move
+    /// down, relocations living in it are dropped (stale), relocations behind it move. A pointer into the range is an
+    /// error, except at the offsets in <paramref name="keep"/> (the type-1 entry's buffer pointers, rewritten afterwards).
+    /// </summary>
+    static void CutPart(CaffFile caff, int pid, int at, int len, HashSet<int> keep)
+    {
+        var part = caff.Parts[pid - 1];
+        int end = at + len;
+        foreach (var g in caff.Relocs.Where(x => x.ToPart == pid))
+        {
+            var src = caff.Parts[g.FromPart - 1].Data;
+            foreach (var q in g.Offsets)
+            {
+                if (g.FromPart == pid && q >= at && q < end) continue;   // lives in the cut range: dropped below
+                int v = BE.S32(src, q);
+                if (v >= end) BE.W32(src, q, v - len);
+                else if (v >= at && !(g.FromPart == pid && keep.Contains(q))) throw new InvalidDataException($"part {pid}: pointer at {q:X} (part {g.FromPart}) points into the removed range {at:X}..{end:X}");
+            }
+        }
+        var d = part.Data;
+        var nd = new byte[d.Length - len];
+        Buffer.BlockCopy(d, 0, nd, 0, at);
+        Buffer.BlockCopy(d, end, nd, at, d.Length - end);
+        part.Data = nd;
+        foreach (var g in caff.Relocs.Where(x => x.FromPart == pid))
+            g.Offsets = g.Offsets.Where(q => q < at || q >= end).Select(q => q >= end ? q - len : q).ToArray();
+    }
+
+    /// <summary>
+    /// Checks the CAFF relocations of a mesh collision asset's .data against its type-1 buffers: no relocation may live
+    /// inside the packfile or the index / vertex / material index buffers (the loader would add the part's address to
+    /// those words), and nothing but the type-1 entry may point into them. Empty = fine.
+    /// </summary>
+    public static List<string> CheckRelocations(CaffFile caff, int pid)
+    {
+        var p = new List<string>();
+        var d = caff.Parts[pid - 1].Data;
+        int e = TypeOneEntry(d);
+        if (e < 0 || e + 0x24 > d.Length) return p;
+        var ranges = BufferRanges(d, e);
+        bool In(int v) => ranges.Any(r => v >= r.Start && v < r.End);
+        int inside = 0, into = 0, firstIn = -1, firstInto = -1;
+        foreach (var g in caff.Relocs.Where(x => x.FromPart == pid))
+            foreach (var q in g.Offsets) if (In(q)) { inside++; if (firstIn < 0) firstIn = q; }
+        var entry = new HashSet<int> { e, e + 8, e + 0x10, e + 0x18 };
+        foreach (var g in caff.Relocs.Where(x => x.ToPart == pid))
+        {
+            var src = caff.Parts[g.FromPart - 1].Data;
+            foreach (var q in g.Offsets)
+            {
+                if (g.FromPart == pid && (entry.Contains(q) || In(q))) continue;
+                if (q + 4 <= src.Length && In(BE.S32(src, q))) { into++; if (firstInto < 0) firstInto = q; }
+            }
+        }
+        if (inside > 0) p.Add($"{inside:N0} relocation(s) inside the collision buffers (first at {firstIn:X})");
+        if (into > 0) p.Add($"{into:N0} pointer(s) into the collision buffers from elsewhere (first at {firstInto:X})");
+        return p;
+    }
+
+    /// <summary>Mesh collision assets of a bundle that fail <see cref="CheckRelocations"/> ("name: problems").</summary>
+    public static List<string> DamagedAssets(CaffFile caff)
+    {
+        var res = new List<string>();
+        for (int sym = 1; sym <= caff.Symbols.Count; sym++)
+        {
+            if (!caff.Symbols[sym - 1].StartsWith("aid_havok_")) continue;
+            var view = new AssetView(caff, sym);
+            if (!view.Has(".data") || TypeOneEntry(view.Data(".data")) < 0) continue;
+            var p = CheckRelocations(caff, view.PartId(".data"));
+            if (p.Count > 0) res.Add($"{AssetIds.DisplayName(caff.Symbols[sym - 1])}: {string.Join("; ", p)}");
+        }
+        return res;
+    }
+
+    /// <summary>
+    /// Repairs a mesh collision asset damaged by 1.12-1.13 collision saves (see <see cref="CheckRelocations"/>):
+    /// relocations left inside the collision buffers are dropped, and a type-7 collision table (one (list, count) pair per
+    /// scenery instance) that was overwritten by the packfile is restored from <paramref name="reference"/> (the same
+    /// bundle saved before the damage, e.g. a workspace history version): its pairs must have the same count and point at
+    /// lists that are still intact. Afterwards the asset is clean. Returns what was done; throws when it cannot repair.
+    /// </summary>
+    public static List<string> Repair(CaffFile caff, int symbol, CaffFile? reference)
+    {
+        var log = new List<string>();
+        var view = new AssetView(caff, symbol);
+        int pid = view.PartId(".data");
+        var part = view.Part(pid);
+        var d = part.Data;
+        int e = TypeOneEntry(d);
+        if (e < 0) throw new InvalidDataException("not a mesh collision asset");
+        var ranges = BufferRanges(d, e);
+        bool In(int x) => ranges.Any(r => x >= r.Start && x < r.End);
+        bool Overlaps(int a, int len) => ranges.Any(r => a < r.End && a + len > r.Start);
+        // the type-7 table (scenery instance collision lists)
+        int t = BE.S32(d, 0), cn = BE.S32(d, 4), e7 = -1;
+        for (int i = 0; i < cn; i++) if (BE.S32(d, t + 8 * i) == 7) e7 = BE.S32(d, t + 8 * i + 4);
+        byte[]? table = null; int count = 0; var slotReloc = new List<int>();
+        if (e7 >= 0)
+        {
+            int at = BE.S32(d, e7); count = BE.S32(d, e7 + 4);
+            if (count > 0 && Overlaps(at, 8 * count))
+            {
+                if (reference == null) throw new InvalidDataException($"the type-7 collision table ({count} instances) was overwritten by the collision data; give a version of the bundle saved before the damage");
+                int rs = reference.Symbols.FindIndex(x => x == caff.Symbols[symbol - 1]) + 1;
+                if (rs == 0) throw new InvalidDataException("the reference bundle has no such asset");
+                var rd = new AssetView(reference, rs).Data(".data");
+                if (CheckRelocations(reference, new AssetView(reference, rs).PartId(".data")).Count > 0) throw new InvalidDataException("the reference is damaged too");
+                int rt = BE.S32(rd, 0), rcn = BE.S32(rd, 4), r7 = -1;
+                for (int i = 0; i < rcn; i++) if (BE.S32(rd, rt + 8 * i) == 7) r7 = BE.S32(rd, rt + 8 * i + 4);
+                if (r7 < 0 || BE.S32(rd, r7 + 4) != count) throw new InvalidDataException($"the reference's type-7 table does not have {count} entries");
+                int rtab = BE.S32(rd, r7);
+                table = rd.AsSpan(rtab, 8 * count).ToArray();
+                int rpid = new AssetView(reference, rs).PartId(".data");
+                var rself = reference.Relocs.Where(x => x.FromPart == rpid && x.ToPart == rpid).SelectMany(x => x.Offsets).ToHashSet();
+                for (int k = 0; k < count; k++) if (rself.Contains(rtab + 8 * k)) slotReloc.Add(k);
+                for (int k = 0; k < count; k++)
+                {
+                    int lp = BE.S32(table, 8 * k), ln = BE.S32(table, 8 * k + 4);
+                    if (ln <= 0) continue;
+                    if (Overlaps(lp, 16 * ln) || lp + 16 * ln > d.Length || lp + 16 * ln > rd.Length || !d.AsSpan(lp, 16 * ln).SequenceEqual(rd.AsSpan(lp, 16 * ln)))
+                        throw new InvalidDataException($"instance {k}: its collision list at {lp:X} is not intact in the damaged asset");
+                }
+                log.Add($"type-7 table ({count} instances) restored from the reference (it lay at {at:X}, inside the collision buffers)");
+            }
+        }
+        // relocations inside the buffers are stale (tables that used to be there)
+        int dropped = 0;
+        foreach (var g in caff.Relocs.Where(x => x.FromPart == pid))
+        {
+            int n0 = g.Offsets.Length;
+            g.Offsets = g.Offsets.Where(q => !In(q)).ToArray();
+            dropped += n0 - g.Offsets.Length;
+        }
+        if (dropped > 0) log.Add($"{dropped:N0} stale relocation(s) inside the collision buffers dropped");
+        if (table != null)
+        {
+            int at = (d.Length + 15) & ~15;
+            var nd = new byte[at + table.Length];
+            Buffer.BlockCopy(d, 0, nd, 0, d.Length);
+            Buffer.BlockCopy(table, 0, nd, at, table.Length);
+            BE.W32(nd, e7, at);
+            var self = caff.Relocs.First(x => x.FromPart == pid && x.ToPart == pid);
+            var offs = new List<int>(self.Offsets);
+            if (!offs.Contains(e7)) offs.Add(e7);
+            foreach (int k in slotReloc) offs.Add(at + 8 * k);   // the same slots as in the reference carry relocations
+            offs.Sort();
+            self.Offsets = offs.Distinct().ToArray();
+            part.Data = nd;
+        }
+        // instances without collision (count 0) whose empty list lay in the overwritten area: one shared empty list
+        if (e7 >= 0)
+        {
+            var dd = part.Data;
+            int at = BE.S32(dd, e7), zero = -1, moved = 0;
+            for (int k = 0; k < count; k++)
+            {
+                int lp = BE.S32(dd, at + 8 * k), ln = BE.S32(dd, at + 8 * k + 4);
+                if (ln != 0 || !In(lp)) continue;
+                if (zero < 0)
+                {
+                    zero = (dd.Length + 15) & ~15;
+                    Array.Resize(ref dd, zero + 16);
+                }
+                BE.W32(dd, at + 8 * k, zero); moved++;
+            }
+            if (moved > 0) { part.Data = dd; log.Add($"{moved} empty collision list(s) of instances without collision repointed (they lay in the collision buffers)"); }
+        }
+        var left = CheckRelocations(caff, pid);
+        if (left.Count > 0) throw new InvalidDataException("still damaged after the repair: " + string.Join("; ", left));
+        return log;
+    }
+
+    /// <summary>The type-1 entry's packfile, index, vertex and material index buffers (start, end) as the entry describes them.</summary>
+    public static List<(int Start, int End)> BufferRanges(byte[] d, int e)
+    {
+        var r = new List<(int Start, int End)>();
+        int S(int o) => BE.S32(d, e + o);
+        int nIdx = S(0xC), nv = S(0x14);
+        bool i32 = false;
+        try
+        {
+            var pf = HkPackfile.FromAsset(d);
+            var ems = pf.ObjectsOf("hkpExtendedMeshShape").FirstOrDefault();
+            if (ems != null)
+            {
+                var (sp, sn) = ems.Array("trianglesSubparts");
+                if (sp != null && sn > 0) i32 = ems.At(sp.Value.Section, sp.Value.Offset, ems.Class!.Find("trianglesSubparts")!.Class!.Name).U8("stridingType") == 2;
+            }
+        }
+        catch { }
+        if (S(0) > 0 && S(4) > 0) r.Add((S(0), S(0) + S(4)));
+        if (S(8) > 0 && nIdx > 0) r.Add((S(8), S(8) + nIdx * (i32 ? 4 : 2)));
+        if (S(0x10) > 0 && nv > 0) r.Add((S(0x10), S(0x10) + 12 * nv));
+        if (S(0x18) > 0 && S(0x1C) > 0 && nIdx > 0) r.Add((S(0x18), S(0x18) + nIdx / 3));
+        r.RemoveAll(x => x.Start <= e + 0x24 || x.End > d.Length || x.End <= x.Start);
+        return r;
     }
 
     /// <summary>Material record used when the asset has no material table (the most common record of the shipped assets).</summary>
@@ -131,6 +373,61 @@ public static class HkCollisionImport
 
     /// <param name="material">12-byte material record for assets without a material table (default <see cref="DefaultMaterial"/>).</param>
     public static (byte[] Data, Result Result) ReplaceData(byte[] asset, IReadOnlyList<Vector3> positions, IReadOnlyList<int> triangles, byte[]? material = null, bool allowBreakable = false, byte[]? triangleMaterials = null)
+    {
+        var b = Build(asset, positions, triangles, material, allowBreakable, triangleMaterials);
+        var r = b.R; int e = b.E, matBase = b.MatBase;
+        // drop the old buffers when they are the end of the asset (a previous import's tail: nothing else lives there and
+        // the wrapper table and its entries lie before it), then append. Something else after them (a type-7 collision
+        // table re-created by a paste, say) keeps the whole asset: without the CAFF relocations of the part nothing can
+        // tell what points there; Replace (with the CaffFile) cuts the old buffers out instead.
+        int keep = asset.Length;
+        int tail = b.Old.Count > 0 ? b.Old.Min(x => x.Start) : asset.Length;
+        if (tail > e + 0x24 && tail < asset.Length && IsFreeTail(asset, e, tail) && CoversTail(b.Old, tail, asset.Length)) keep = tail;
+        bool putTable = !(matBase > 0 && matBase < keep);   // table missing, or it lived in the dropped tail
+        var o = new MemoryStream();
+        o.Write(asset, 0, keep);
+        int Put(byte[] x) { while (o.Length % 16 != 0) o.WriteByte(0); int at = (int)o.Length; o.Write(x); return at; }
+        // the game reads E+0x18 (material index per triangle) only when E+0x1C (material table) is set
+        int nPf = Put(b.Pf), nIb = Put(b.Ib), nVb = Put(b.Vb), nMb = Put(b.Mb), nMt = putTable ? Put(b.MatTable) : matBase;
+        while (o.Length % 16 != 0) o.WriteByte(0);
+        var nd = o.ToArray();
+        WriteEntry(nd, e, b, nPf, nIb, nVb, nMb, nMt);
+        r.SelfPointers.AddRange(new[] { e, e + 8, e + 0x10, e + 0x18, e + 0x1C });
+        return (nd, r);
+    }
+
+    static void WriteEntry(byte[] nd, int e, Built b, int nPf, int nIb, int nVb, int nMb, int nMt)
+    {
+        BE.W32(nd, e, nPf); BE.W32(nd, e + 4, b.Pf.Length);
+        BE.W32(nd, e + 8, nIb); BE.W32(nd, e + 0xC, b.R.Triangles * 3);
+        BE.W32(nd, e + 0x10, nVb); BE.W32(nd, e + 0x14, b.R.Vertices);
+        BE.W32(nd, e + 0x18, nMb); BE.W32(nd, e + 0x1C, nMt); BE.W32(nd, e + 0x20, b.NumMat);
+    }
+
+    /// <summary>True when the ranges (each padded to 16 bytes) cover [<paramref name="tail"/>, <paramref name="end"/>) without a gap.</summary>
+    static bool CoversTail(List<(int Start, int End)> ranges, int tail, int end)
+    {
+        int pos = tail;
+        foreach (var (a, z) in ranges.OrderBy(x => x.Start))
+        {
+            if (z <= pos) continue;
+            if (a > ((pos + 15) & ~15)) return false;
+            pos = z;
+        }
+        return ((pos + 15) & ~15) >= end;
+    }
+
+    /// <summary>The rebuilt collision of an asset, before it is laid out: new packfile and buffers, and where the old ones are.</summary>
+    sealed class Built
+    {
+        public byte[] Pf = Array.Empty<byte>(), Ib = Array.Empty<byte>(), Vb = Array.Empty<byte>(), Mb = Array.Empty<byte>(), MatTable = Array.Empty<byte>();
+        public int E, NumMat, MatBase;
+        public Result R = new();
+        /// <summary>The old packfile, index, vertex and material index buffers in the asset (start, end).</summary>
+        public List<(int Start, int End)> Old = new();
+    }
+
+    static Built Build(byte[] asset, IReadOnlyList<Vector3> positions, IReadOnlyList<int> triangles, byte[]? material, bool allowBreakable, byte[]? triangleMaterials)
     {
         if (IsBreakable(asset) && !allowBreakable)
             throw new InvalidDataException("breakable scenery (the asset carries physics pieces, wrapper entry type 6): replacing its collision froze the game; not supported");
@@ -172,6 +469,16 @@ public static class HkCollisionImport
         if (code.Section != di || ems.Section != di) throw new InvalidDataException("objects outside __data__");
         var (sp, sn) = ems.Array("trianglesSubparts");
         var subCls = ems.Class!.Find("trianglesSubparts")!.Class!;
+        // where the old buffers are (cut out or dropped when the new ones are written)
+        var old = new List<(int Start, int End)> { (pfOff, pfOff + pfSize) };
+        {
+            int oldIdx = BE.S32(asset, e + 0xC), oldVtx = BE.S32(asset, e + 0x14);
+            bool oldI32 = sp != null && sn >= 1 && ems.At(sp.Value.Section, sp.Value.Offset, subCls.Name).U8("stridingType") == 2;
+            if (idxOff > 0 && oldIdx > 0) old.Add((idxOff, idxOff + oldIdx * (oldI32 ? 4 : 2)));
+            if (vtxOff > 0 && oldVtx > 0) old.Add((vtxOff, vtxOff + 12 * oldVtx));
+            if (matIdxOff > 0 && matBase > 0 && oldIdx > 0) old.Add((matIdxOff, matIdxOff + oldIdx / 3));
+            old.RemoveAll(x => x.Start <= e + 0x24 || x.End > asset.Length || x.End <= x.Start);
+        }
         if (sn > 1) r.Notes.Add($"{sn} triangle subparts: the game plugs the buffers into subpart 0 only; the others are emptied");
         HkObject? created = null;
         if (sp == null || sn < 1)
@@ -285,6 +592,7 @@ public static class HkCollisionImport
             built.Code.CopyTo(pay, cp.Value.Offset);
             pay.AsSpan(cp.Value.Offset + built.Code.Length, cn - built.Code.Length).Fill(0xCD);
             BE.W32(pay, dataField + 4, built.Code.Length);
+            BE.W32(pay, dataField + 8, (int)((uint)cap & 0xC0000000u) | built.Code.Length);   // the bytes after it are dropped below
             w.Data.Payload = pay.ToList();
         }
         else
@@ -295,6 +603,32 @@ public static class HkCollisionImport
             int at = w.Append(di, built.Code);
             while (w.Data.Payload.Count % 16 != 0) w.Data.Payload.Add(0xCD);
             w.SetLocalPointer(di, dataField, at);
+        }
+        // keep only what the packfile still uses: its objects, the MOPP code and the triangle subparts (earlier MOPP code
+        // that did not fit was left behind by 1.12-1.13 and grew the packfile by ~1.8 MB per save of a large mesh)
+        {
+            var live = new List<(int, int)>();
+            foreach (var (oo, cls) in pf.Data.Objects) live.Add((oo, pf.Classes.TryGetValue(cls, out var hc) ? hc.Size : 0));
+            if (created != null) live.Add((created.Offset, subCls.Size));
+            var known = new Dictionary<int, int>();
+            var ploc = w.Data.Local.ToDictionary(x => x.Src, x => x.Dst);
+            var cur = w.PayloadSpan(di);
+            known[dataField] = built.Code.Length;
+            known[Off(ems, "trianglesSubparts")] = BE.S32(cur, Off(ems, "trianglesSubparts") + 4) * subCls.Size;
+            if (ems.Has("shapesSubparts")) known[Off(ems, "shapesSubparts")] = BE.S32(cur, Off(ems, "shapesSubparts") + 4) == 0 ? 0 : -1;
+            if (ems.Has("weldingInfo")) known[Off(ems, "weldingInfo")] = BE.S32(cur, Off(ems, "weldingInfo") + 4) * 2;
+            bool ok = live.All(x => x.Item2 > 0);
+            foreach (var (src, dst) in ploc)
+            {
+                if (!known.TryGetValue(src, out int len) || len < 0) { ok = false; break; }
+                live.Add((dst, len));
+            }
+            foreach (var g in w.Data.Global) if (g.Section == di && !pf.Data.Objects.Any(x => x.Offset == g.Dst)) ok = false;
+            if (ok)
+            {
+                int cut = w.Compact(di, live);
+                if (cut > 0) r.Notes.Add($"packfile: {cut:N0} unused bytes (old MOPP code / welding info) removed");
+            }
         }
         var newPf = w.Write();
 
@@ -320,25 +654,7 @@ public static class HkCollisionImport
             r.Notes.Add($"material index {mat} for every triangle ({numMat} material(s))");
         }
 
-        // drop a tail appended by a previous import (nothing else points into it), then append
-        int keep = asset.Length;
-        // (a material table before the rewritten buffers is the asset's own and stays; one after them was appended by us)
-        int tail = new[] { pfOff, idxOff, vtxOff, matBase > 0 ? matIdxOff : 0 }.Where(x => x > 0).Min();
-        if (tail > e + 0x24 && tail < asset.Length && IsFreeTail(asset, e, tail)) keep = tail;
-        bool putTable = !(matBase > 0 && matBase < keep);   // table missing, or it lived in the dropped tail
-        var o = new MemoryStream();
-        o.Write(asset, 0, keep);
-        int Put(byte[] b) { while (o.Length % 16 != 0) o.WriteByte(0); int at = (int)o.Length; o.Write(b); return at; }
-        // the game reads E+0x18 (material index per triangle) only when E+0x1C (material table) is set
-        int nPf = Put(newPf), nIb = Put(ib), nVb = Put(vb), nMb = Put(mb), nMt = putTable ? Put(matTable) : matBase;
-        while (o.Length % 16 != 0) o.WriteByte(0);
-        var nd = o.ToArray();
-        BE.W32(nd, e, nPf); BE.W32(nd, e + 4, newPf.Length);
-        BE.W32(nd, e + 8, nIb); BE.W32(nd, e + 0xC, nTri * 3);
-        BE.W32(nd, e + 0x10, nVb); BE.W32(nd, e + 0x14, nv);
-        BE.W32(nd, e + 0x18, nMb); BE.W32(nd, e + 0x1C, nMt); BE.W32(nd, e + 0x20, numMat);
-        r.SelfPointers.AddRange(new[] { e, e + 8, e + 0x10, e + 0x18, e + 0x1C });
-        return (nd, r);
+        return new Built { Pf = newPf, Ib = ib, Vb = vb, Mb = mb, MatTable = matTable, E = e, NumMat = numMat, MatBase = matBase, R = r, Old = old };
     }
 
     /// <summary>

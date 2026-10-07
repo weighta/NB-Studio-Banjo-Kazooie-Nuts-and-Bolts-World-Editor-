@@ -1114,6 +1114,12 @@ public sealed partial class MainForm : Form
             Log($"{what}: {o.Name} is {(o.Kind == SceneObjectKind.Terrain ? "the terrain" : "a marker (actor, pickup, path node…)")}; only scenery objects can be {(what == "Delete" ? "deleted" : "copied")} so far.");
             return false;
         }
+        var damaged = NB.Core.Havok.HkCollisionImport.DamagedAssets(_scene.Caff);
+        if (damaged.Count > 0)
+        {
+            Log($"{what}: not done, this world's collision is damaged ({string.Join(" | ", damaged)}). Close the workspace and run NB.Cli collision-repair \"{_ws.Root}\" {_scene.Bundle:x6} first.");
+            return false;
+        }
         return true;
     }
 
@@ -1719,6 +1725,13 @@ public sealed partial class MainForm : Form
                 if (missing.Count > 0) Log($"  Missing textures ({missing.Count}, drawn untextured): " + string.Join(", ", missing.Take(12)) + (missing.Count > 12 ? " …" : ""));
             }
             Log("  Contents: " + scene.Audit.Summary());
+            // collision assets damaged by a 1.12-1.13 collision save (the game hangs on "SAVING CONTENT" loading this world)
+            try
+            {
+                foreach (var dmg in NB.Core.Havok.HkCollisionImport.DamagedAssets(scene.Caff))
+                    Log($"WARNING: damaged collision, the game will hang loading this world: {dmg}. Saving this world is refused until it is repaired: close the workspace (File > Close Workspace), run NB.Cli collision-repair \"{_ws?.Root}\" {scene.Bundle:x6} (it takes the lost table from the bundle's history in the workspace), then reopen it.");
+            }
+            catch (Exception x) { Log("  collision check: " + x.Message); }
             foreach (var l in scene.Log.Take(30)) Log("  " + l);
             if (scene.Log.Count > 30) Log($"  … {scene.Log.Count - 30} more notes");
             // a reload (paste, delete, a texture replace …) started from the 3D preview docked in the Atmosphere tab stays there
@@ -1883,6 +1896,16 @@ public sealed partial class MainForm : Form
         if (_scene == null || _ws == null) return;
         try
         {
+            // a world whose collision was damaged by a 1.12-1.13 collision save is not saved on top (a paste would copy the
+            // overwritten instance table, and the repair needs the bundle as it is): repair it first
+            var damaged = NB.Core.Havok.HkCollisionImport.DamagedAssets(_scene.Caff);
+            if (damaged.Count > 0)
+            {
+                Log("Not saved: " + string.Join(" | ", damaged));
+                Log($"  The game hangs loading this world. Close the workspace (File > Close Workspace) and run: NB.Cli collision-repair \"{_ws.Root}\" {_scene.Bundle:x6}  (it takes the lost table from the workspace history), then reopen it. This version saves collision without this damage.");
+                if (!_scripted) MessageBox.Show(this, "This world's collision data is damaged (by a collision save of NB Studio 1.12-1.13), so the game hangs loading it. Nothing was saved.\n\nClose the workspace and run NB.Cli collision-repair (see the log for the exact command), then reopen it.", "Save World", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
             int n; List<string> coll;
             using (_history.Suppress())
             {
