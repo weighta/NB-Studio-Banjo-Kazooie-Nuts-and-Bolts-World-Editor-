@@ -134,15 +134,11 @@ public sealed partial class SceneViewport
                 var list = new List<int>(); int baseTri = 0;
                 foreach (var m in meshes)
                 {
-                    var scr = new Vector2?[m.Positions.Count];
-                    for (int i = 0; i < m.Positions.Count; i++)
-                    {
-                        var c = Vector4.Transform(new Vector4(m.Positions[i], 1), m4);
-                        scr[i] = c.W > 1e-3f ? new Vector2((c.X / c.W * 0.5f + 0.5f) * W, (0.5f - c.Y / c.W * 0.5f) * H) : null;
-                    }
-                    bool In(int i) => scr[i] is { } s && s.X >= r.Left && s.X <= r.Right && s.Y >= r.Top && s.Y <= r.Bottom;
+                    var clip = new Vector4[m.Positions.Count];
+                    for (int i = 0; i < m.Positions.Count; i++) clip[i] = Vector4.Transform(new Vector4(m.Positions[i], 1), m4);
+                    // every triangle whose projected area or edges touch the rectangle (1.12: all three corners inside)
                     for (int k = 0; k + 2 < m.Triangles.Count; k += 3)
-                        if (In(m.Triangles[k]) && In(m.Triangles[k + 1]) && In(m.Triangles[k + 2])) list.Add(baseTri + k / 3);
+                        if (TriInRect(clip[m.Triangles[k]], clip[m.Triangles[k + 1]], clip[m.Triangles[k + 2]], r, W, H)) list.Add(baseTri + k / 3);
                     baseTri += m.Triangles.Count / 3;
                 }
                 if (list.Count > 0) res.Add((o, asset, toWorld, list));

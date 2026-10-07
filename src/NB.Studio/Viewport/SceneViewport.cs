@@ -836,12 +836,15 @@ public sealed partial class SceneViewport : UserControl
             }
             else if (_xf == XfKind.Grab && _xfDrag)
             {
-                // free drag on the ground plane: a square grid around the start position
+                // free drag: a square grid around the start position in the drag plane (ground, or upright facing the camera)
                 float s = Math.Max(4, GizmoLength());
+                var pn = DragPlaneNormal();
+                var u = pn == Vector3.UnitY ? Vector3.UnitX : Vector3.Normalize(Vector3.Cross(Vector3.UnitY, pn));
+                var v = pn == Vector3.UnitY ? Vector3.UnitZ : Vector3.UnitY;
                 for (int i = -2; i <= 2; i++)
                 {
-                    lines.Add((piv + new Vector3(-s, 0, i * s / 2), piv + new Vector3(s, 0, i * s / 2), new Vector3(0.75f, 0.75f, 0.3f)));
-                    lines.Add((piv + new Vector3(i * s / 2, 0, -s), piv + new Vector3(i * s / 2, 0, s), new Vector3(0.75f, 0.75f, 0.3f)));
+                    lines.Add((piv - u * s + v * (i * s / 2), piv + u * s + v * (i * s / 2), new Vector3(0.75f, 0.75f, 0.3f)));
+                    lines.Add((piv + u * (i * s / 2) - v * s, piv + u * (i * s / 2) + v * s, new Vector3(0.75f, 0.75f, 0.3f)));
                 }
             }
             if (_xf == XfKind.Grab) lines.Add((piv, p, new Vector3(1, 1, 1)));
@@ -852,8 +855,10 @@ public sealed partial class SceneViewport : UserControl
         if (Mode == GizmoMode.Select || (Mode == GizmoMode.Scale && ScaleLocked(Selected))) return;
         var ax = GizmoAxes(); float len = GizmoLength();
         var right = Right(); var up = Vector3.Normalize(Vector3.Cross(right, Forward()));
+        bool yawOnly = Mode == GizmoMode.Rotate && SpawnPoints.Is(Selected);   // a player start turns about Y only
         for (int i = 0; i < 3; i++)
         {
+            if (yawOnly && i != 1) continue;
             var g = new List<(Vector3, Vector3, Vector3)>();
             var c = i == _hoverHandle ? new Vector3(1f, 0.95f, 0.3f) : AxisColour[i];
             var tip = p + ax[i] * len;
@@ -877,6 +882,7 @@ public sealed partial class SceneViewport : UserControl
         int best = -1; float bestD = 9;
         for (int i = 0; i < 3; i++)
         {
+            if (Mode == GizmoMode.Rotate && i != 1 && SpawnPoints.Is(Selected)) continue;   // a player start: the Y handle only
             var s1 = ToScreen(p + ax[i] * len); if (s1 == null) continue;
             var a = s0.Value; var b = s1.Value; var ab = b - a; float l2 = ab.LengthSquared(); if (l2 < 4) continue;
             float t = Math.Clamp(Vector2.Dot(new Vector2(m.X, m.Y) - a, ab) / l2, 0.15f, 1f);
@@ -1203,11 +1209,11 @@ public sealed partial class SceneViewport : UserControl
             {
                 var d = now.Translation - start.Translation;
                 main = _xfAxis >= 0 ? $"Move  {axis}  {Vector3.Dot(d, XfAxisVector()):0.00}{typed}"
-                    : $"Move  {(_xfDrag ? "ground plane  " : "")}dx {d.X:0.00}  dy {d.Y:0.00}  dz {d.Z:0.00}";
+                    : $"Move  {(_xfDrag ? (DragPlaneNormal() == Vector3.UnitY ? "ground plane  " : "upright plane  ") : "")}dx {d.X:0.00}  dy {d.Y:0.00}  dz {d.Z:0.00}";
                 break;
             }
             case XfKind.Scale: main = $"Scale  {axis}{(axis.Length > 0 ? "  " : "")}{_xfValue:0.000}{typed}"; break;
-            default: main = $"Rotate  {(axis.Length > 0 ? axis : "view")}  {_xfValue:0.0}°{typed}"; break;
+            default: main = $"Rotate  {(axis.Length > 0 ? axis : _xfDrag ? "Y (drag)" : "view")}  {_xfValue:0.0}°{typed}"; break;
         }
         string hint = _xfDrag
             ? "hold X / Y / Z or drag an axis handle to constrain · Esc cancels"
@@ -1240,7 +1246,8 @@ public sealed partial class SceneViewport : UserControl
     {
         if (Selected == null || Selected.Kind == SceneObjectKind.Terrain) return;
         if (kind == XfKind.Scale && ScaleLocked(Selected)) return;   // markers keep their scale
-        if (_xf != XfKind.None) { if (!drag) { _xf = kind; _xfTyped = ""; UpdateTransform(); } return; }
+        if (kind == XfKind.Rotate && SpawnPoints.Is(Selected)) { axis = 1; space = AxisSpace.World; }   // a player start turns about Y only (its yaw is Banjo's facing)
+        if (_xf != XfKind.None) { if (!drag) { _xf = kind; _xfTyped = ""; if (kind == XfKind.Rotate && SpawnPoints.Is(Selected)) { _xfAxis = 1; _xfSpace = AxisSpace.World; } UpdateTransform(); } return; }
         _xf = kind; _xfDrag = drag; _xfAxis = axis; _xfSpace = space; _xfTyped = ""; _xfDragKeyAxis = false;
         _xfStart = Selected.Transform; _xfMouse0 = _mouse;
         BeginMulti();
@@ -1274,6 +1281,7 @@ public sealed partial class SceneViewport : UserControl
 
     void SetAxis(int axis)
     {
+        if (_xf == XfKind.Rotate && Selected != null && SpawnPoints.Is(Selected)) { _xfAxis = 1; _xfSpace = AxisSpace.World; UpdateTransform(); return; }   // yaw only
         // X / Y / Z: world axis, the same key again: the object's own axis, again: free. Scaling a turned object starts with
         // its own axis (scaling along a world axis would shear it), then the world axis.
         bool aligned = IsAxisAligned(_xfStart);
@@ -1318,12 +1326,13 @@ public sealed partial class SceneViewport : UserControl
                 }
                 else
                 {
-                    // modal G: the plane through the object facing the camera; drag: the ground plane
-                    var n = _xfDrag ? Vector3.UnitY : Forward();
+                    // modal G: the plane through the object facing the camera; drag: the ground plane when the camera looks
+                    // mostly down (or up), else the upright plane facing the camera (from the side: up / down and sideways)
+                    var n = _xfDrag ? DragPlaneNormal() : Forward();
                     var h0 = RayPlane(_xfMouse0, piv, n); var h1 = RayPlane(_mouse, piv, n);
                     if (h0 == null || h1 == null) return;
                     delta = h1.Value - h0.Value;
-                    if (_xfDrag) delta.Y = 0;
+                    if (_xfDrag && n == Vector3.UnitY) delta.Y = 0;
                     if (snap) delta = new Vector3(MathF.Round(delta.X), MathF.Round(delta.Y), MathF.Round(delta.Z));
                 }
                 var m = start; m.Translation = piv + delta; o.Transform = m;
@@ -1333,7 +1342,15 @@ public sealed partial class SceneViewport : UserControl
             {
                 float f;
                 if (TypedValue is { } tv) f = tv;
-                else if (_xfDrag) f = 1 + (_mouse.X - _xfMouse0.X) * 0.01f;
+                else if (_xfAxis >= 0 && AxisOnScreen(piv, a) is { } ax)
+                {
+                    // constrained: the mouse movement along the axis as drawn on screen, so moving towards where the axis
+                    // points always grows it, from any side of the object (1.12: the horizontal mouse movement for drags and
+                    // the distance from the centre for G / T, which inverted from some camera sides)
+                    var mv = new Vector2(_mouse.X - _xfMouse0.X, _mouse.Y - _xfMouse0.Y);
+                    f = 1 + Vector2.Dot(mv, ax.Dir) / MathF.Max(80, ax.Length);
+                }
+                else if (_xfDrag) f = 1 + (_mouse.X - _xfMouse0.X - (_mouse.Y - _xfMouse0.Y)) * 0.01f;   // uniform: right / up grows
                 else
                 {
                     var ps = ToScreen(piv) ?? new Vector2(_gl.Width / 2f, _gl.Height / 2f);
@@ -1361,8 +1378,18 @@ public sealed partial class SceneViewport : UserControl
             case XfKind.Rotate:
             {
                 float deg;
+                // no axis: about the view direction (modal) or Y (drag)
+                var axis = Vector3.Normalize(_xfAxis >= 0 ? a : _xfDrag ? Vector3.UnitY : -Forward());
+                bool flip = Vector3.Dot(axis, Forward()) < 0;
+                // drag: the near side of the object follows the mouse (its screen direction of motion for a positive turn)
+                var fr = Vector3.Cross(axis, -Forward());
+                var fdir = new Vector2(Vector3.Dot(fr, Right()), -Vector3.Dot(fr, Vector3.Cross(Right(), Forward())));
                 if (TypedValue is { } tv) deg = tv;
-                else if (_xfDrag) deg = (_mouse.X - _xfMouse0.X) * 0.6f;
+                else if (_xfDrag && fdir.Length() > 0.3f)
+                {
+                    deg = Vector2.Dot(new Vector2(_mouse.X - _xfMouse0.X, _mouse.Y - _xfMouse0.Y), Vector2.Normalize(fdir)) * 0.6f;
+                    flip = false;
+                }
                 else
                 {
                     var ps = ToScreen(piv) ?? new Vector2(_gl.Width / 2f, _gl.Height / 2f);
@@ -1372,11 +1399,10 @@ public sealed partial class SceneViewport : UserControl
                 }
                 if (snap && TypedValue == null) deg = MathF.Round(deg / 15) * 15;
                 _xfValue = deg;
-                // no axis: about the view direction; modal angles follow the mouse around the object on screen (a clockwise
-                // circle turns the object clockwise as seen from the camera); drags turn by the horizontal mouse movement
-                var axis = Vector3.Normalize(_xfAxis >= 0 ? a : _xfDrag ? Vector3.UnitY : -Forward());
+                // modal angles (and drags about an axis pointing at the camera) follow the mouse around the object on screen
+                // (a clockwise circle turns it clockwise as seen from the camera, from either side)
                 float rad = deg * MathF.PI / 180;
-                if (!_xfDrag && Vector3.Dot(axis, Forward()) < 0) rad = -rad;
+                if (flip) rad = -rad;
                 var m = start * Matrix4x4.CreateTranslation(-piv) * Matrix4x4.CreateFromAxisAngle(axis, rad) * Matrix4x4.CreateTranslation(piv);
                 m.Translation = piv; o.Transform = m;
                 break;
@@ -1387,6 +1413,26 @@ public sealed partial class SceneViewport : UserControl
         UpdateMulti();   // the other selected objects follow
         SelectionChanged?.Invoke(o);
         _gl.Invalidate();
+    }
+
+    /// <summary>The axis as drawn on screen at <paramref name="piv"/>: unit direction (towards +axis) and length in pixels of
+    /// the gizmo's arm; null when the axis points at the camera.</summary>
+    (Vector2 Dir, float Length)? AxisOnScreen(Vector3 piv, Vector3 axis)
+    {
+        float len = GizmoLength();
+        var s0 = ToScreen(piv); var s1 = ToScreen(piv + axis * len);
+        if (s0 == null || s1 == null) return null;
+        var d = s1.Value - s0.Value; float l = d.Length();
+        return l < 3 ? null : (d / l, l);
+    }
+
+    /// <summary>Plane of a free (unconstrained) drag: horizontal when the camera looks more than 45° down or up, else the
+    /// upright plane facing the camera.</summary>
+    Vector3 DragPlaneNormal()
+    {
+        if (MathF.Abs(_pitch) > MathF.PI / 4) return Vector3.UnitY;
+        var f = Forward(); f.Y = 0;
+        return f.LengthSquared() > 1e-6f ? Vector3.Normalize(f) : Vector3.UnitY;
     }
 
     /// <summary>Position along the line (origin, axis) closest to the mouse ray; when the axis points at the camera, the
@@ -1507,6 +1553,15 @@ public sealed partial class SceneViewport : UserControl
                 _dragMoved = false;
                 return;
             }
+            if (Selected != null && kind != XfKind.None && !(Scene?.Objects.Contains(Selected) ?? true) && HitsBox(Selected, e.Location))
+            {
+                // the collision selection: drag inside its box like an object (Move: free move, Scale: uniform, Rotate: about Y)
+                BeginTransform(kind, drag: true);
+                _dragMoved = false;
+                _proxyBoxDown = _collMode;
+                UpdateTransform();
+                return;
+            }
             if (CollisionMouseDown(e)) return;   // Edit Collision: click / rectangle picks collision, not objects
             if (ObjectRectDown(e)) return;       // B or Ctrl: rectangle / Ctrl+click toggles
             var hit = Pick(e.Location);
@@ -1539,8 +1594,13 @@ public sealed partial class SceneViewport : UserControl
         if (e.Button == MouseButtons.Left && _xf != XfKind.None && _xfDrag)
         {
             if (_dragMoved) ConfirmTransform(); else CancelTransform();
+            // a click (no drag) inside the collision selection's box still picks collision (another piece, Shift / Alt)
+            if (!_dragMoved && _proxyBoxDown && _collMode)
+                CollisionPicked?.Invoke(PickCollision(e.Location), (ModifierKeys & Keys.Shift) != 0, (ModifierKeys & Keys.Alt) != 0);
         }
+        _proxyBoxDown = false;
     }
+    bool _proxyBoxDown;
 
     void OnMouseMove(object? s, MouseEventArgs e)
     {
@@ -1666,6 +1726,14 @@ public sealed partial class SceneViewport : UserControl
         if (!float.IsFinite(minY)) minY = 0;
         var r = m; r.Translation = point - new Vector3(0, minY, 0);
         return r;
+    }
+
+    /// <summary>The mouse ray hits the object's box (model space bounds).</summary>
+    bool HitsBox(SceneObject o, Point p)
+    {
+        if (!Matrix4x4.Invert(o.Transform, out var inv)) return false;
+        var (ro, rd) = Ray(p);
+        return RayBox(Vector3.Transform(ro, inv), Vector3.TransformNormal(rd, inv), o.BoundsMin, o.BoundsMax, out _);
     }
 
     static bool RayBox(Vector3 o, Vector3 d, Vector3 mn, Vector3 mx, out float t)

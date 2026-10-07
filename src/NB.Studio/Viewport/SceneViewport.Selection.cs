@@ -149,15 +149,122 @@ public sealed partial class SceneViewport
     {
         var res = new List<SceneObject>();
         if (Scene == null) return res;
+        var vp = View() * Proj(); float W = _gl.Width, H = _gl.Height; var rf = (RectangleF)r;
         foreach (var o in Scene.Objects)
         {
             if (!o.Visible || o.Kind == SceneObjectKind.Terrain) continue;
             if (o.Kind == SceneObjectKind.Scenery && (!ShowScenery || IsHidden(o))) continue;
             if (o.Kind == SceneObjectKind.Marker && !ShowMarkers && (o.Model == null || !_showObjects)) continue;
-            var (c, _) = WorldBounds(o);
-            if (ToScreen(c) is { } s && s.X >= r.Left && s.X <= r.Right && s.Y >= r.Top && s.Y <= r.Bottom && Vector3.Dot(c - _camPos, Forward()) > 0) res.Add(o);
+            bool asModel = o.Model != null && (o.Kind != SceneObjectKind.Marker || _showObjects);
+            // the box first: off the rectangle -> no; entirely inside -> yes; else the drawn triangles (any touching)
+            var m4 = o.Transform * vp;
+            var bb = BoxOnScreen(o.BoundsMin, o.BoundsMax, m4, W, H);
+            if (bb is { } b)
+            {
+                if (!b.IntersectsWith(rf)) continue;
+                if (rf.Contains(b)) { res.Add(o); continue; }
+            }
+            bool hit = asModel ? ModelInRect(o.Model!, m4, rf, W, H) : BoxInRect(o.BoundsMin, o.BoundsMax, m4, rf, W, H);
+            if (!hit && asModel)
+                foreach (var (cm, cl) in o.Children)
+                    if (ModelInRect(cm, cl * m4, rf, W, H)) { hit = true; break; }
+            if (hit) res.Add(o);
         }
         return res;
+    }
+
+    /// <summary>Screen rectangle of a box's corners, or null when part of it is behind the camera.</summary>
+    static RectangleF? BoxOnScreen(Vector3 mn, Vector3 mx, Matrix4x4 m4, float W, float H)
+    {
+        float x0 = float.MaxValue, y0 = float.MaxValue, x1 = float.MinValue, y1 = float.MinValue;
+        for (int i = 0; i < 8; i++)
+        {
+            var c = Vector4.Transform(new Vector4((i & 1) == 0 ? mn.X : mx.X, (i & 2) == 0 ? mn.Y : mx.Y, (i & 4) == 0 ? mn.Z : mx.Z, 1), m4);
+            if (c.W <= 1e-3f) return null;
+            var s = ClipToScreen(c, W, H);
+            x0 = MathF.Min(x0, s.X); y0 = MathF.Min(y0, s.Y); x1 = MathF.Max(x1, s.X); y1 = MathF.Max(y1, s.Y);
+        }
+        return RectangleF.FromLTRB(x0, y0, x1, y1);
+    }
+
+    static bool ModelInRect(NB.Core.Models.ModelAsset model, Matrix4x4 m4, RectangleF r, float W, float H)
+    {
+        foreach (var dr in model.Draws)
+        {
+            var P = dr.Positions; var I = dr.Indices;
+            var clip = new Vector4[P.Length];
+            for (int i = 0; i < P.Length; i++) clip[i] = Vector4.Transform(new Vector4(P[i], 1), m4);
+            for (int k = 0; k + 2 < I.Length; k += 3)
+            {
+                int a = I[k], b = I[k + 1], c = I[k + 2];
+                if (a >= P.Length || b >= P.Length || c >= P.Length) continue;
+                if (TriInRect(clip[a], clip[b], clip[c], r, W, H)) return true;
+            }
+        }
+        return false;
+    }
+
+    static readonly int[] BoxTris = { 0, 1, 3, 0, 3, 2, 4, 6, 7, 4, 7, 5, 0, 4, 5, 0, 5, 1, 2, 3, 7, 2, 7, 6, 0, 2, 6, 0, 6, 4, 1, 5, 7, 1, 7, 3 };
+
+    static bool BoxInRect(Vector3 mn, Vector3 mx, Matrix4x4 m4, RectangleF r, float W, float H)
+    {
+        var c = new Vector4[8];
+        for (int i = 0; i < 8; i++) c[i] = Vector4.Transform(new Vector4((i & 1) == 0 ? mn.X : mx.X, (i & 2) == 0 ? mn.Y : mx.Y, (i & 4) == 0 ? mn.Z : mx.Z, 1), m4);
+        for (int k = 0; k < BoxTris.Length; k += 3) if (TriInRect(c[BoxTris[k]], c[BoxTris[k + 1]], c[BoxTris[k + 2]], r, W, H)) return true;
+        return false;
+    }
+
+    static Vector2 ClipToScreen(Vector4 c, float W, float H) => new((c.X / c.W * 0.5f + 0.5f) * W, (0.5f - c.Y / c.W * 0.5f) * H);
+
+    /// <summary>
+    /// A triangle (clip-space corners) touches the screen rectangle: clipped at the near plane, then any corner inside the
+    /// rectangle, any edge crossing it, or the rectangle lying inside the triangle counts.
+    /// </summary>
+    static bool TriInRect(Vector4 c0, Vector4 c1, Vector4 c2, RectangleF r, float W, float H)
+    {
+        const float E = 1e-3f;
+        if (c0.W <= E && c1.W <= E && c2.W <= E) return false;
+        Span<Vector2> p = stackalloc Vector2[4]; int n = 0;
+        for (int i = 0; i < 3; i++)
+        {
+            var a = i == 0 ? c0 : i == 1 ? c1 : c2; var b = i == 0 ? c1 : i == 1 ? c2 : c0;
+            bool ain = a.W > E, bin = b.W > E;
+            if (ain) p[n++] = ClipToScreen(a, W, H);
+            if (ain != bin) { float t = (E - a.W) / (b.W - a.W); p[n++] = ClipToScreen(a + (b - a) * t, W, H); }
+        }
+        if (n < 2) return false;
+        float x0 = p[0].X, x1 = p[0].X, y0 = p[0].Y, y1 = p[0].Y;
+        for (int i = 1; i < n; i++) { x0 = MathF.Min(x0, p[i].X); x1 = MathF.Max(x1, p[i].X); y0 = MathF.Min(y0, p[i].Y); y1 = MathF.Max(y1, p[i].Y); }
+        if (x1 < r.Left || x0 > r.Right || y1 < r.Top || y0 > r.Bottom) return false;
+        for (int i = 0; i < n; i++) if (p[i].X >= r.Left && p[i].X <= r.Right && p[i].Y >= r.Top && p[i].Y <= r.Bottom) return true;
+        for (int i = 0; i < n; i++) if (SegInRect(p[i], p[(i + 1) % n], r)) return true;
+        if (n < 3) return false;
+        // no corner inside and no edge crossing: overlapping only when the rectangle lies inside the polygon
+        var q = new Vector2(r.Left + r.Width / 2, r.Top + r.Height / 2);
+        int sgn = 0;
+        for (int i = 0; i < n; i++)
+        {
+            var e = p[(i + 1) % n] - p[i]; float cr = e.X * (q.Y - p[i].Y) - e.Y * (q.X - p[i].X);
+            int s = cr > 0 ? 1 : cr < 0 ? -1 : 0;
+            if (s == 0) continue;
+            if (sgn == 0) sgn = s; else if (s != sgn) return false;
+        }
+        return sgn != 0;
+    }
+
+    /// <summary>A screen segment crosses or touches the rectangle (Liang-Barsky).</summary>
+    static bool SegInRect(Vector2 a, Vector2 b, RectangleF r)
+    {
+        float t0 = 0, t1 = 1, dx = b.X - a.X, dy = b.Y - a.Y;
+        bool Clip(float pp, float qq)
+        {
+            if (MathF.Abs(pp) < 1e-9f) return qq >= 0;
+            float t = qq / pp;
+            if (pp < 0) { if (t > t1) return false; if (t > t0) t0 = t; }
+            else { if (t < t0) return false; if (t < t1) t1 = t; }
+            return true;
+        }
+        return Clip(-dx, a.X - r.Left) && Clip(dx, r.Right - a.X) && Clip(-dy, a.Y - r.Top) && Clip(dy, r.Bottom - a.Y);
     }
 
     bool ObjectRectDown(MouseEventArgs e)

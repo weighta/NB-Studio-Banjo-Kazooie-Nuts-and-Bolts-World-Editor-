@@ -150,8 +150,10 @@ public sealed partial class MainForm
     void ClearCollisionSelection()
     {
         _collSel.Clear(); _collAt.Clear();
-        if (_collProxy != null && _view.Selected == _collProxy) { var p = _collProxy; _collProxy = null; _view.Select(null); }
+        // the view may still show the selection's stand-in (also an older one): it is not a scene object, so deselect it
+        var sel = _view.Selected;
         _collProxy = null;
+        if (sel != null && _scene != null && !_scene.Objects.Contains(sel)) _view.Select(null);
         _view.InvalidateCollisionSelection();
     }
 
@@ -175,13 +177,16 @@ public sealed partial class MainForm
         if (SelectionBounds() is not { } b) { ClearCollisionSelection(); UpdateCollisionStatus(); return; }
         var c = (b.Min + b.Max) / 2;
         int n = _collSel.Values.Sum(x => x.Count);
-        _collProxy = new SceneObject
-        {
-            Kind = SceneObjectKind.Scenery, Name = $"Collision: {n:N0} triangle(s)", ModelName = string.Join(", ", _collSel.Keys.Select(Short)),
-            Transform = Matrix4x4.CreateTranslation(c), OriginalTransform = Matrix4x4.CreateTranslation(c), BoundsMin = b.Min - c, BoundsMax = b.Max - c,
-        };
+        // one stand-in for the whole session of a selection, updated in place: after an edit or an undo / redo its box
+        // follows the triangles (1.12 made a new one each time, and the transform that had just ended then reported the old
+        // one as selected, which left an orange box behind at the place of the edit)
+        _collProxy ??= new SceneObject { Kind = SceneObjectKind.Scenery };
+        _collProxy.Name = $"Collision: {n:N0} triangle(s)"; _collProxy.ModelName = string.Join(", ", _collSel.Keys.Select(Short));
+        _collProxy.Transform = _collProxy.OriginalTransform = Matrix4x4.CreateTranslation(c);
+        _collProxy.BoundsMin = b.Min - c; _collProxy.BoundsMax = b.Max - c;
         _collProxyBase = _collProxy.Transform;
         _view.Select(_collProxy);
+        _view.Refresh3D();
         UpdateCollisionStatus();
     }
 

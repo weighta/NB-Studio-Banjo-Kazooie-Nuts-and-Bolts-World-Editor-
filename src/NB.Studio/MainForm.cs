@@ -1246,7 +1246,9 @@ public sealed partial class MainForm : Form
     /// the Scene or Worlds list, the Properties panel or the toolbar (not in the Text, Audio, Tag Editor … pages).</summary>
     bool SceneKeysActive(Control? f)
     {
-        if (_scene == null || _start.Visible || _center.SelectedIndex != 0) return false;
+        if (_scene == null || _start.Visible) return false;
+        // the 3D View tab, or the same view docked in the Atmosphere tab's preview (then not while typing in its panel)
+        if (_center.SelectedIndex != 0 && !_view.Visible) return false;
         if (f == null || f == this) return true;
         for (var c = f; c != null; c = c.Parent)
             if (c == _view || c == _tree || c == _worlds || c == _transform || c == _toolbar || c == _menu) return true;
@@ -1693,7 +1695,8 @@ public sealed partial class MainForm : Form
             Log("  Contents: " + scene.Audit.Summary());
             foreach (var l in scene.Log.Take(30)) Log("  " + l);
             if (scene.Log.Count > 30) Log($"  … {scene.Log.Count - 30} more notes");
-            _center.SelectedIndex = 0;
+            // a reload (paste, delete, a texture replace …) started from the 3D preview docked in the Atmosphere tab stays there
+            if (!(reload && _view.Visible && _center.SelectedIndex != 0)) _center.SelectedIndex = 0;
             UpdateTitle();
         }
         catch (Exception e) { Error("Loading world failed", e); }
