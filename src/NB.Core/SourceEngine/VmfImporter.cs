@@ -72,6 +72,10 @@ public sealed class VmfImportOptions
     /// invisible boundary like in Source. Off (default): the whole brush is removed (no mesh, no collision, no light
     /// blocking), so you can drive out past where the sky walls were.</summary>
     public bool KeepSkyBrushes;
+    /// <summary>Keep the outer sealing hull (see <see cref="VmfImporter.OuterHull"/>) as collision. Off (default): its
+    /// brushes lose their collision (gm_hide's leak-seal box of 6 nodraw slabs was a giant invisible box) but still block
+    /// light, as in vrad.</summary>
+    public bool KeepHull;
     /// <summary>tools/toolsplayerclip collides. Off by default: player clips are gameplay barriers (lobby pens that
     /// triggers and teleports open in Source; gm_hide's spawn pen wedged the vehicle, verified in Xenia), and the
     /// game's vehicles are not Source players. tools/toolsclip (blocks everything) always collides.</summary>
@@ -185,6 +189,8 @@ public sealed class VmfPlan
     /// replica under the map, and the ported terrain's render / collision triangles and luxels.</summary>
     /// <summary>Collision detail: brushes without collision (tiny) and brushes colliding as their box.</summary>
     public int CollisionDropped, CollisionBoxed;
+    public int HullBrushes;             // outer sealing hull brushes removed (or kept with KeepHull)
+    public List<int> HullIds = new();   // their VMF solid ids
     public int SkyShellBrushes, SkyPorted, SkySkippedReplica, SkyTriangles, SkyCollisionTriangles, SkyLuxels;
     public double SkyScale;
     public DVec3 SkyCamera;
@@ -401,6 +407,8 @@ public static class VmfImporter
         // the map first (its bounds decide which skybox brushes are the replica under it), then the skybox
         bool SolidInSky(VmfSolid x) => sky != null && x.Sides.All(sd => InSky(sd.P0) && InSky(sd.P1) && InSky(sd.P2));
         var solids = map.AllSolids.Select(x => (Solid: x, Sky: SolidInSky(x))).OrderBy(x => x.Sky).ToList();
+        var hull = OuterHull(map.AllSolids);
+        plan.HullBrushes = hull.Count; plan.HullIds = hull.Select(h => h.Id).OrderBy(i => i).ToList();
         var faces = new List<VmfFace>();
         var mn = new Vector3(float.MaxValue); var mx = new Vector3(float.MinValue);
         var mainMin = new DVec3(double.MaxValue, double.MaxValue, double.MaxValue); var mainMax = new DVec3(double.MinValue, double.MinValue, double.MinValue);
@@ -411,7 +419,23 @@ public static class VmfImporter
             var use = ClassUse(solid.Owner);
             if (use == null) { plan.SkippedClasses[solid.Owner] = plan.SkippedClasses.GetValueOrDefault(solid.Owner) + 1; continue; }
             // sky shell: a brush with a skybox face is removed entirely (the 3D skybox room's walls always)
-            if (solid.Sides.Any(x => IsSkyMaterial(x.Material)) && (!o.KeepSkyBrushes || inSky)) { plan.SkyShellBrushes++; continue; }
+            if (solid.Sides.Any(x => IsSkyMaterial(x.Material)) && (!o.KeepSkyBrushes || inSky))
+            {
+                plan.SkyShellBrushes++;
+                // its sky faces stay in the light bake as sky (a ray hitting them sees the sky, as in vrad), so an outer
+                // hull, which still blocks light, does not darken what the sky lit
+                if (!inSky && ShadowClasses.Contains(solid.Owner))
+                    foreach (var sf in BrushMesher.Mesh(solid, out _).Where(x => !x.Displacement && IsSkyMaterial(x.Material)))
+                        for (int t3 = 0; t3 + 2 < sf.Triangles.Count; t3 += 3)
+                        {
+                            for (int j = 0; j < 3; j++) { var p = sf.Positions[sf.Triangles[t3 + j]]; plan.OccluderTris.Add(new Vector3((float)p.X, (float)p.Y, (float)p.Z)); }
+                            plan.OccluderSky.Add(true);
+                        }
+                continue;
+            }
+            // outer sealing hull (all-nodraw slabs around the whole map): no collision, but it still blocks light (as in vrad,
+            // where light that leaves the map without hitting a sky face is lost; the baker counts escaping rays as sky)
+            bool hullDrop = hull.Contains(solid) && !o.KeepHull;
             if (inSky && !port) { plan.SkyboxBrushes++; continue; }
             var surfaces = BrushMesher.Mesh(solid, out int bad);
             plan.Degenerate += bad;
@@ -427,7 +451,7 @@ public static class VmfImporter
                 { plan.SkySkippedReplica++; continue; }
                 plan.SkyPorted++;
             }
-            else foreach (var q in surfaces.SelectMany(x => x.Positions)) { mainMin = Min(mainMin, q); mainMax = Max(mainMax, q); }
+            else if (!hull.Contains(solid)) foreach (var q in surfaces.SelectMany(x => x.Positions)) { mainMin = Min(mainMin, q); mainMax = Max(mainMax, q); }   // the hull is not the map (skybox replica rule)
             plan.Brushes++;
             Func<DVec3, Vector3> GX = inSky ? GS : G;
             // a brush with a water material anywhere is a water volume in Source (not solid, not drawn): its top face
@@ -445,7 +469,7 @@ public static class VmfImporter
                         : bsize < o.CollisionMinSize ? -1
                         : btris > 12 && o.CollisionBoxSize >= 0 && (bsize <= o.CollisionBoxSize || PropBrushClasses.Contains(solid.Owner)) ? 1 : 0;
             if (colMode == -1 && use.Value.Collide) plan.CollisionDropped++;
-            if (colMode == 1 && use.Value.Collide && surfaces.Any(x => Use(x.Material).Collide))
+            if (colMode == 1 && use.Value.Collide && !hullDrop && surfaces.Any(x => Use(x.Material).Collide))
             {
                 // the brush's box (12 triangles, facing out)
                 plan.CollisionBoxed++;
@@ -461,14 +485,14 @@ public static class VmfImporter
             foreach (var surf in surfaces)
             {
                 var mu = Use(surf.Material);
-                bool draw = use.Value.Draw && mu.Draw, collide = use.Value.Collide && mu.Collide, water = false, occlude = shadows && mu.Occlude;
+                bool draw = use.Value.Draw && mu.Draw, collide = use.Value.Collide && mu.Collide && !hullDrop, water = false, occlude = shadows && mu.Occlude;
                 bool skyFace = shadows && mu.Why is "sky" or "sky shader";
                 if (skyFace) occlude = true;
                 if (!o.PlayerClipCollision && surf.Material.StartsWith("TOOLS/TOOLSPLAYERCLIP", StringComparison.OrdinalIgnoreCase)) collide = false;
                 if (surf.Displacement)
                 {
                     plan.Displacements++;
-                    draw = use.Value.Draw && (mu.Draw || mu.Water); collide = use.Value.Collide; occlude = shadows;
+                    draw = use.Value.Draw && (mu.Draw || mu.Water); collide = use.Value.Collide && !hullDrop; occlude = shadows;
                     if (draw && !mats.ContainsKey(surf.Material)) mats[surf.Material] = ResolveMaterial(surf.Material, o, content, null);
                 }
                 else if (waterBrush)
@@ -612,6 +636,10 @@ public static class VmfImporter
         float ext = MathF.Max(mx.X - mn.X, mx.Z - mn.Z);
         if (plan.Faces > 0 && MathF.Max(MathF.Max(MathF.Abs(mn.X), MathF.Abs(mx.X)), MathF.Max(MathF.Abs(mn.Z), MathF.Abs(mx.Z))) > 4000)
             plan.Warnings.Add("the map reaches beyond +/-4000 game units: far geometry may be past the game's camera range; lower the scale");
+        string hullIds = string.Join(", ", plan.HullIds.Take(12).Select(i => "#" + i)) + (plan.HullIds.Count > 12 ? ", ..." : "");
+        plan.Notes.Add(plan.HullBrushes == 0 ? "outer hull: none"
+            : o.KeepHull ? $"outer hull: {plan.HullBrushes} brush(es) kept as collision ({hullIds}; KeepHull / --keep-hull)"
+            : $"outer hull: {plan.HullBrushes} brush(es) dropped ({hullIds}: all-nodraw slabs outside the map's bounds, enclosing it: the mapper's leak seal; no collision, still blocking light)");
         if (plan.SkyShellBrushes > 0) plan.Notes.Add($"{plan.SkyShellBrushes} sky brush(es) (tools/toolsskybox) {(o.KeepSkyBrushes ? "of the 3D skybox room " : "")}removed: no mesh, no collision");
         if (plan.Faces > 0 && ext < 20) plan.Warnings.Add($"the map is only {ext:F1} units wide at this scale: raise the scale");
         if (plan.RenderTriangles == 0) plan.Warnings.Add("nothing to draw (no visible brush faces)");
@@ -675,6 +703,56 @@ public static class VmfImporter
 
     /// <summary>tools/toolsskybox and tools/toolsskybox2d (any case).</summary>
     public static bool IsSkyMaterial(string m) => m.StartsWith("TOOLS/TOOLSSKYBOX", StringComparison.OrdinalIgnoreCase);
+
+    static bool IsNodrawMaterial(string m) => m.StartsWith("TOOLS/TOOLSNODRAW", StringComparison.OrdinalIgnoreCase) || m.Equals("TOOLS/TOOLSBLACKNODRAW", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The outer sealing hull: the box mappers build around a whole map so vbsp finds no leak (gm_hide: 6 nodraw slabs
+    /// ~30,700 x 30,700 x 29,000 units, brushes #6-#16). A brush belongs to it when
+    /// (1) every face is tools/toolsnodraw: no visible face, nothing but a seal (brushes with sky faces are the sky
+    ///     shell, removed by their own rule);
+    /// (2) it lies completely outside the bounding box of the real map - every imported brush with at least one non-tools
+    ///     face (triggers, clips and other all-tools brushes do not count) - separated along some axis, so it can not be
+    ///     a floor, wall or clip anybody stands on or drives against inside the map; and
+    /// (3) on the other two axes it spans at least 90 % of the map's extent: it is a wall of a box around the map, not a
+    ///     small nodraw block that happens to sit outside.
+    /// Player clips, invisible floors and nodraw blocks inside the map fail (1) or (2) and stay.
+    /// </summary>
+    public static HashSet<VmfSolid> OuterHull(IEnumerable<VmfSolid> all)
+    {
+        static (DVec3 Min, DVec3 Max) Box(VmfSolid s)
+        {
+            var mn = new DVec3(double.MaxValue, double.MaxValue, double.MaxValue); var mx = new DVec3(double.MinValue, double.MinValue, double.MinValue);
+            foreach (var sd in s.Sides) foreach (var p in new[] { sd.P0, sd.P1, sd.P2 }) { mn = Min(mn, p); mx = Max(mx, p); }
+            return (mn, mx);
+        }
+        static double C(DVec3 v, int k) => k == 0 ? v.X : k == 1 ? v.Y : v.Z;
+        var list = all.Where(s => s.Sides.Count > 0 && ClassUse(s.Owner) != null).ToList();
+        var cand = list.Where(s => s.Sides.All(sd => IsNodrawMaterial(sd.Material))).ToList();
+        var rest = list.Where(s => s.Sides.Any(sd => !sd.Material.StartsWith("TOOLS/", StringComparison.OrdinalIgnoreCase))).Select(Box).ToList();
+        var res = new HashSet<VmfSolid>();
+        if (rest.Count == 0) return res;
+        var rmn = rest.Select(b => b.Min).Aggregate(Min); var rmx = rest.Select(b => b.Max).Aggregate(Max);
+        const double Eps = 1;
+        foreach (var s in cand)
+        {
+            var (bmn, bmx) = Box(s);
+            for (int k = 0; k < 3; k++)
+            {
+                bool outside = C(bmx, k) <= C(rmn, k) + Eps || C(bmn, k) >= C(rmx, k) - Eps;
+                if (!outside) continue;
+                bool covers = true;
+                for (int j = 0; j < 3 && covers; j++)
+                {
+                    if (j == k) continue;
+                    double ext = C(rmx, j) - C(rmn, j), lo = Math.Max(C(bmn, j), C(rmn, j)), hi = Math.Min(C(bmx, j), C(rmx, j));
+                    covers = ext <= 0 || hi - lo >= 0.9 * ext;
+                }
+                if (covers) { res.Add(s); break; }
+            }
+        }
+        return res;
+    }
 
     /// <summary>Entities whose position is irrelevant (never dropped with the 3D skybox).</summary>
     static readonly HashSet<string> GlobalClasses = new(StringComparer.OrdinalIgnoreCase) { "light_environment", "env_fog_controller", "env_sun", "shadow_control", "sky_camera", "worldspawn", "env_tonemap_controller", "water_lod_control" };

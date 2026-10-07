@@ -917,6 +917,7 @@ static class Program
                     //          --keep-garage  --keep-town-objects  --tex-size n  --gen-size n  --chunk n  --assumed-size n
                     //          --game <Source game / Garry's Mod folder>  --skybox port|drop|inplace  --skybox-replica  --sky-luxel x
                     //          --sky-collision-step n  --sky-walls (keep sky shell brushes as invisible walls)
+                    //          --keep-hull (keep the outer all-nodraw sealing hull around the map as collision)
                     //          --no-transparency (translucent / alpha-tested materials not drawn)
                     //          bake: --no-bake --luxel u --exposure x --gamma g --bounce b --sky-samples n --page n --game-ambient a --game-sun s
                     bool import = args[0] == "vmf-import";
@@ -955,6 +956,7 @@ static class Program
                             case "--sky-luxel": o.SkyLuxelScale = Fl(args[++i]); break;
                             case "--sky-collision-step": o.SkyCollisionStep = int.Parse(args[++i]); break;
                             case "--sky-walls": o.KeepSkyBrushes = true; break;
+                            case "--keep-hull": o.KeepHull = true; break;   // keep the outer all-nodraw sealing hull as collision
                             case "--player-clips": o.PlayerClipCollision = true; break;
                             case "--no-transparency": o.TransparentMaterials = false; break;   // translucent / alpha-tested materials not drawn (before round 4)
                             case "--collision-full": o.CollisionTolerance = 0; o.CollisionMinSize = 0; o.CollisionBoxSize = -1; break;   // every brush triangle collides (A/B tests)

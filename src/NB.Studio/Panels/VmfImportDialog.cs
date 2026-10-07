@@ -22,6 +22,7 @@ public sealed class VmfImportDialog : Form
     readonly NumericUpDown _skyStep = new() { DecimalPlaces = 0, Minimum = 1, Maximum = 8, Value = 2, Width = 45 };
     readonly CheckBox _skyCol = new() { Text = "Sky walls (tools/toolsskybox brushes) stay as invisible walls", Checked = false, AutoSize = true };
     readonly CheckBox _playerClip = new() { Text = "Player clips collide", Checked = false, AutoSize = true };
+    readonly CheckBox _keepHull = new() { Text = "Outer nodraw hull (the leak seal around the map) stays as invisible walls", Checked = false, AutoSize = true };
     readonly CheckBox _townObjects = new() { Text = "Move the town's characters and objects out of the way", Checked = true, AutoSize = true };
     readonly CheckBox _garage = new() { Text = "Keep Mumbo's Motors (garage entrance)", Checked = false, AutoSize = true };
     readonly CheckBox _spawnHeight = new() { Text = "Put the player start at ground height", Checked = true, AutoSize = true };
@@ -41,7 +42,7 @@ public sealed class VmfImportDialog : Form
             {
                 Scale = (float)_scale.Value, GameFolder = _game.Text.Length > 0 ? _game.Text : null, MaterialFolder = _mats.Text.Length > 0 ? _mats.Text : null,
                 Skybox = (Skybox3DMode)_sky3d.SelectedIndex, SkipSkyboxInsideMap = _skyReplica.Checked, SkyLuxelScale = (float)_skyLuxel.Value,
-                SkyCollisionStep = (int)_skyStep.Value, KeepSkyBrushes = _skyCol.Checked, PlayerClipCollision = _playerClip.Checked,
+                SkyCollisionStep = (int)_skyStep.Value, KeepSkyBrushes = _skyCol.Checked, KeepHull = _keepHull.Checked, PlayerClipCollision = _playerClip.Checked,
                 RemoveTownObjects = _townObjects.Checked, KeepGarage = _garage.Checked, SpawnAtGroundHeight = _spawnHeight.Checked,
                 IncludeProps = _includeProps.Checked, PropFolder = _props.Text.Length > 0 ? _props.Text : null,
                 MaxTextureSize = int.Parse((string)_texSize.SelectedItem!),
@@ -82,7 +83,7 @@ public sealed class VmfImportDialog : Form
         _sky3d.Items.AddRange(new object[] { "3D skybox: port as full-size terrain", "3D skybox: drop", "3D skybox: keep in place (tiny)" }); _sky3d.SelectedIndex = 0;
         opts.Controls.Add(_sky3d); opts.Controls.Add(_skyReplica); Lbl("Skybox luxel x:"); opts.Controls.Add(_skyLuxel); Lbl("collision every n-th row:"); opts.Controls.Add(_skyStep);
         opts.SetFlowBreak(_skyStep, true);
-        foreach (var c in new Control[] { _skyCol, _playerClip, _spawnHeight, _townObjects, _garage }) opts.Controls.Add(c);
+        foreach (var c in new Control[] { _skyCol, _keepHull, _playerClip, _spawnHeight, _townObjects, _garage }) opts.Controls.Add(c);
         opts.SetFlowBreak(_garage, true);
         opts.Controls.Add(_includeProps); opts.Controls.Add(_props);
         var pb = new Button { Text = "Browse…", AutoSize = true };
