@@ -44,6 +44,56 @@ public sealed partial class SceneViewport
         else { all.Add(o); SelectMany(all, o); }
     }
 
+    // ------------------------------------------------------------------ the box around a multi-selection
+
+    /// <summary>World-space box around every selected object (their own boxes, as placed); null without a selection.</summary>
+    (Vector3 Min, Vector3 Max)? SelectionBox()
+    {
+        if (Selected == null) return null;
+        var mn = new Vector3(float.MaxValue); var mx = new Vector3(float.MinValue);
+        foreach (var o in _extra.Prepend(Selected))
+        {
+            var a = o.BoundsMin; var b = o.BoundsMax;
+            if (!(a.X <= b.X)) { a = b = Vector3.Zero; }
+            for (int i = 0; i < 8; i++)
+            {
+                var p = Vector3.Transform(new Vector3((i & 1) != 0 ? b.X : a.X, (i & 2) != 0 ? b.Y : a.Y, (i & 4) != 0 ? b.Z : a.Z), o.Transform);
+                mn = Vector3.Min(mn, p); mx = Vector3.Max(mx, p);
+            }
+        }
+        return float.IsFinite(mn.X) && float.IsFinite(mx.X) ? (mn, mx) : null;
+    }
+
+    /// <summary>Where the gizmo sits: the primary object's origin, or the centre of the box around several objects.</summary>
+    Vector3 GizmoPoint() => _extra.Count > 0 && SelectionBox() is { } b ? (b.Min + b.Max) / 2 : Selected?.Transform.Translation ?? Vector3.Zero;
+
+    /// <summary>The mouse ray hits the box around the selection (several objects).</summary>
+    bool HitsSelectionBox(Point p)
+    {
+        if (SelectionBox() is not { } b) return false;
+        var (ro, rd) = Ray(p);
+        return RayBox(ro, rd, b.Min, b.Max, out _);
+    }
+
+    static void AddAabb(List<(Vector3, Vector3, Vector3)> l, Vector3 a, Vector3 b, Vector3 c)
+    {
+        var pts = new Vector3[8];
+        for (int i = 0; i < 8; i++) pts[i] = new Vector3((i & 1) != 0 ? b.X : a.X, (i & 2) != 0 ? b.Y : a.Y, (i & 4) != 0 ? b.Z : a.Z);
+        int[] e = { 0, 1, 1, 3, 3, 2, 2, 0, 4, 5, 5, 7, 7, 6, 6, 4, 0, 4, 1, 5, 2, 6, 3, 7 };
+        for (int i = 0; i < e.Length; i += 2) l.Add((pts[e[i]], pts[e[i + 1]], c));
+    }
+
+    /// <summary>A turn or scale of the primary object computed about its own origin (<paramref name="m"/>), made about
+    /// <see cref="_xfPivot"/> instead (the centre of a multi-selection; the same for one object).</summary>
+    Matrix4x4 AboutPivot(Matrix4x4 m, Matrix4x4 start)
+    {
+        var p = start.Translation;
+        if (Vector3.DistanceSquared(p, _xfPivot) < 1e-10f) { m.Translation = p; return m; }
+        if (!Matrix4x4.Invert(start, out var inv)) return m;
+        var d0 = inv * m;   // the world-space change about p
+        return start * Matrix4x4.CreateTranslation(p - _xfPivot) * d0 * Matrix4x4.CreateTranslation(_xfPivot - p);
+    }
+
     // ------------------------------------------------------------------ transforms of the other selected objects
 
     List<(SceneObject O, Matrix4x4 Start)> _xfStarts = new();

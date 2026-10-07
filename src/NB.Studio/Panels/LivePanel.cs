@@ -18,8 +18,13 @@ public sealed class LivePanel : UserControl
     readonly NumericUpDown[] _tp = new NumericUpDown[3];
     readonly CheckBox _foot = new() { Text = "Banjo on foot", AutoSize = true };
     readonly ComboBox _marks = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 220 };
-    readonly TrackBar _grav = new() { Minimum = 0, Maximum = 100, Value = 25, TickFrequency = 5, Width = 240 };
-    readonly Label _gravLbl = new() { AutoSize = true, Padding = new Padding(0, 8, 0, 0) };
+    readonly TrackBar _grav = new() { Minimum = 0, Maximum = 100, Value = 25, TickFrequency = 5, LargeChange = 5, Width = 240 };
+    readonly Label _gravLbl = new() { AutoSize = true, Padding = new Padding(0, 8, 0, 0), Text = "25" };
+    /// <summary>The gravity the game has now (read from its Havok world every 250 ms), or why it can't be changed yet.</summary>
+    readonly Label _gravGame = new() { AutoSize = true, Padding = new Padding(0, 4, 0, 0), Text = "Game gravity: attach to the game first (Attach to Xenia, or start it with F5)" };
+    /// <summary>The gravity set here (kept when the level reloads, e.g. after the garage or another Act), null: the game's own.</summary>
+    float? _wanted;
+    uint _keptFor;
     readonly NumericUpDown _step = new() { Minimum = 1, Maximum = 500, Value = 20, Width = 70 };
     readonly System.Windows.Forms.Timer _timer = new() { Interval = 250 };
     XeniaLive? _x;
@@ -121,15 +126,21 @@ public sealed class LivePanel : UserControl
             b.Click += (_, _) => { if (_x != null) Teleport(CurrentPos() + dir * (float)_step.Value); };
             nudgeRow.Controls.Add(b);
         }
-        var gRow = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 76, WrapContents = true };
+        var gRow = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 104, WrapContents = true };
         var gReset = new Button { Text = "Normal (25)", Width = 90 };
         var gMoon = new Button { Text = "Moon (4)", Width = 80 };
         var gZero = new Button { Text = "Zero-G", Width = 70 };
-        _grav.Scroll += (_, _) => SetGravity(-_grav.Value);
+        var gHigh = new Button { Text = "Heavy (60)", Width = 80 };
+        _grav.Scroll += (_, _) => SetGravity(-_grav.Value);   // drag the slider: the game changes at once
         gReset.Click += (_, _) => { _grav.Value = 25; SetGravity(-25); };
         gMoon.Click += (_, _) => { _grav.Value = 4; SetGravity(-4); };
         gZero.Click += (_, _) => { _grav.Value = 0; SetGravity(0); };
-        gRow.Controls.AddRange(new Control[] { new Label { Text = "Gravity", AutoSize = true, Padding = new Padding(0, 8, 0, 0) }, _grav, _gravLbl, gReset, gMoon, gZero });
+        gHigh.Click += (_, _) => { _grav.Value = 60; SetGravity(-60); };
+        var gTip = new ToolTip();
+        gTip.SetToolTip(_grav, "Downward pull of the game's physics world, 0 (none) to 100; the game's normal is 25. Drag it while you drive.");
+        gRow.Controls.AddRange(new Control[] { new Label { Text = "Gravity (down pull)", AutoSize = true, Padding = new Padding(0, 8, 0, 0) }, _grav, _gravLbl, gReset, gMoon, gZero, gHigh });
+        gRow.SetFlowBreak(gHigh, true);
+        gRow.Controls.Add(_gravGame);
         var camRow = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 36 };
         var camHere = new Button { Text = "Photo camera → 3D-view camera", Width = 210 };
         camHere.Click += (_, _) =>
@@ -145,8 +156,9 @@ public sealed class LivePanel : UserControl
         {
             Dock = DockStyle.Fill, ForeColor = SystemColors.GrayText, Padding = new Padding(6),
             Text = "Runtime tools for the game running in Xenia (NB Studio's Build > Launch). Teleport moves the vehicle's rigid bodies, or " +
-                   "Banjo's character body when 'on foot' is ticked. Gravity changes the Havok world's gravity (normal −25). " +
-                   "The photo camera flies through walls (noclip view). Changes last until the level reloads.\n" +
+                   "Banjo's character body when 'on foot' is ticked. Gravity: drag the slider or click a preset while you are in a level " +
+                   "(25 is the game's normal; 'Game gravity now' shows what the game uses; your setting is applied again after the garage or another Act). " +
+                   "The photo camera flies through walls (noclip view). Teleports last until the level reloads.\n" +
                    "Also on the Mods menu: part limit, build area, draw distance (LOD ×4), world bounds, developer menus.",
         };
         Controls.AddRange(new Control[] { help, camRow, gRow, nudgeRow, bmRow, tpRow, _pos, top });
@@ -174,7 +186,8 @@ public sealed class LivePanel : UserControl
             var probe = _probe() ?? throw new InvalidOperationException("open a workspace first");
             _x = XeniaLive.Attach(probe, PreferPid is int pp && !System.Diagnostics.Process.GetProcesses().All(q => q.Id != pp) ? pp : null);
             _world = _x.FindHavokWorld();
-            if (_world != 0) { int g = (int)MathF.Round(-_x.GetGravity(_world)); _grav.Value = Math.Clamp(g, 0, 100); }
+            _wanted = null;
+            if (_world != 0) ShowGameGravity(true);
             _state.Text = $"attached (pid {_x.Pid}){(_world == 0 ? "; no level loaded yet" : "")}";
             SetTp(_x.PlayerPosition);
             SetEnabled(true); _timer.Start();
@@ -190,7 +203,20 @@ public sealed class LivePanel : UserControl
         {
             var p = _x.PlayerPosition; var c = _x.CameraPosition;
             _pos.Text = $"vehicle / player  X {p.X,9:F2}  Y {p.Y,8:F2}  Z {p.Z,9:F2}\ncamera            X {c.X,9:F2}  Y {c.Y,8:F2}  Z {c.Z,9:F2}";
-            if (_world == 0 && (_world = _x.FindHavokWorld()) != 0) _state.Text = $"attached (pid {_x.Pid})";
+            // the level's physics world: a new one after every level load (the garage, another Act, a reload); 1.16 kept
+            // the first one it found, so gravity written later went to a world no longer used
+            uint lw = _x.LevelHavokWorld();
+            if (lw != 0 && lw != _world) { _world = lw; _state.Text = $"attached (pid {_x.Pid})"; }
+            else if (lw == 0 && _world != 0 && !_x.IsHavokWorld(_world)) _world = 0;
+            // the gravity set here is kept: a level sets its own (25) a moment after it loads, so it is written again
+            // whenever the game's value differs (Normal (25) gives the game its own value back)
+            if (_world != 0 && _wanted is float w && MathF.Abs(_x.GetGravity(_world) - w) > 0.01f)
+            {
+                _x.SetGravity(_world, w);
+                if (_keptFor != _world) Log?.Invoke($"Live: a level loaded and set its own gravity; your gravity {-w:0.#} is set again.");
+                _keptFor = _world;
+            }
+            ShowGameGravity(false);
         }
         catch { _timer.Stop(); _state.Text = "Xenia closed"; _x = null; SetEnabled(false); }
     }
@@ -209,11 +235,31 @@ public sealed class LivePanel : UserControl
 
     void SetGravity(float g)
     {
-        _gravLbl.Text = $"{g:F0}";
-        if (_x == null) return;
-        if (_world == 0) _world = _x.FindHavokWorld();
-        if (_world == 0) { Log?.Invoke("Live: no Havok world (load a level first)."); return; }
+        _gravLbl.Text = $"{-g:0.#}";
+        if (_x == null) { _gravGame.Text = "Game gravity: not attached — click Attach to Xenia (or start the game with F5) first"; return; }
+        if (_world == 0 || !_x.IsHavokWorld(_world)) _world = _x.FindHavokWorld();
+        if (_world == 0)
+        {
+            _gravGame.Text = "Game gravity: the game's physics world (hkpWorld) isn't there yet — load a level (drive in a world), then set it again";
+            Log?.Invoke("Live: gravity not changed: no level is loaded in the game yet (the Havok world was not found).");
+            return;
+        }
         _x.SetGravity(_world, g);
+        _wanted = MathF.Abs(g + 25) < 0.01f ? null : g;   // the normal value: follow the game again
+        _keptFor = _world;
+        ShowGameGravity(false);
+    }
+
+    /// <summary>Shows the gravity the game has now (and moves the slider to it when <paramref name="slider"/>).</summary>
+    void ShowGameGravity(bool slider)
+    {
+        if (_x == null) return;
+        if (_world == 0) { _gravGame.Text = "Game gravity: no level loaded yet (the Havok world appears when you are in a world)"; return; }
+        float g = _x.GetGravity(_world);
+        if (slider || (_wanted == null && !_grav.Focused)) { _grav.Value = Math.Clamp((int)MathF.Round(-g), 0, 100); _gravLbl.Text = $"{-g:0.#}"; }
+        string t = $"Game gravity now: {-g:0.#}" + (MathF.Abs(g + 25) < 0.05f ? " (normal)" : MathF.Abs(g) < 0.05f ? " (zero-G)" : "")
+            + (_wanted != null ? " — set here; kept when a level loads (Normal (25) gives it back to the game)" : "");
+        if (_gravGame.Text != t) _gravGame.Text = t;
     }
 
     // stick nudge (toward the camera) posted to the Xenia window, used to identify Banjo's body
@@ -231,10 +277,66 @@ public sealed class LivePanel : UserControl
     }
 
     // script hooks (NBModStudio --live-attach / --live-tp / --live-gravity), same code paths as the buttons
-    public void ScriptAttach() => Attach();
+    /// <summary>Script runs attach only to the game this NB Studio started (never to another Xenia on the PC).</summary>
+    public void ScriptAttach()
+    {
+        if (PreferPid is not int pid) { _state.Text = "script: no test game started"; return; }
+        try
+        {
+            _x?.Dispose(); _x = null;
+            _x = XeniaLive.AttachPid(pid, _probe() ?? throw new InvalidOperationException("open a workspace first"));
+            _x.Dispose(); _x = null;
+        }
+        catch (Exception e) { _state.Text = e.Message; return; }
+        Attach();
+        if (_x != null && _x.Pid != pid) { _x.Dispose(); _x = null; _state.Text = "script: attached to another game; detached"; }
+    }
     public void ScriptTeleport(Vector3 v) => Teleport(v);
     public void ScriptGravity(float g) { _grav.Value = Math.Clamp((int)-g, 0, 100); SetGravity(g); }
+    public string GravityText => _gravGame.Text;
     public void ScriptShow() { if (_x != null) ShowInView?.Invoke(CurrentPos()); }
+    /// <summary>Script research helper: guest memory at an address expression ("82FACA44", "[82FACA44]+10", nested
+    /// brackets = pointer reads), <paramref name="len"/> bytes as hex lines of 16.</summary>
+    public string ScriptDump(string expr, int len)
+    {
+        if (_x == null) return "not attached";
+        uint Eval(string e)
+        {
+            e = e.Trim();
+            int plus = -1, depth = 0;
+            for (int i = e.Length - 1; i >= 0; i--) { if (e[i] == ']') depth++; else if (e[i] == '[') depth--; else if (e[i] == '+' && depth == 0) { plus = i; break; } }
+            if (plus > 0) return Eval(e[..plus]) + Convert.ToUInt32(e[(plus + 1)..], 16);
+            if (e.StartsWith("[") && e.EndsWith("]")) return _x.U32(Eval(e[1..^1]));
+            return Convert.ToUInt32(e, 16);
+        }
+        uint a = Eval(expr);
+        var d = _x.Read(a, len);
+        var sb = new System.Text.StringBuilder($"{expr} = 0x{a:X8}:");
+        for (int o = 0; o < d.Length; o += 16) sb.Append($"\n  {a + o:X8}: {Convert.ToHexString(d, o, Math.Min(16, d.Length - o))}");
+        return sb.ToString();
+    }
+    public string ScriptProbe() => _x == null ? "not attached" : $"{_x.DescribeHavokWorld()}; FindHavokWorld 0x{_x.FindHavokWorld():X8}" + (_x.FindHavokWorld() is uint w && w != 0 ? $" gravity {_x.GetGravity(w)}" : "");
+    /// <summary>Teleports the vehicle <paramref name="h"/> up and times its fall (Y sampled every 20 ms) until it stops
+    /// falling: the fall time and the gravity it implies.</summary>
+    public async Task<string> ScriptFall(float h)
+    {
+        if (_x == null) return "not attached";
+        var p0 = _x.PlayerPosition;
+        _x.TeleportVehicle(p0 + new Vector3(0, h, 0));
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var ys = new List<(double T, float Y)>();
+        float top = p0.Y + h; double tLand = -1;
+        while (sw.Elapsed.TotalSeconds < 12)
+        {
+            await Task.Delay(20);
+            float y = _x.PlayerPosition.Y; double t = sw.Elapsed.TotalSeconds;
+            ys.Add((t, y));
+            if (y < top - h * 0.9f) { tLand = t; break; }
+        }
+        // free fall: 0.9 h = g t² / 2
+        return tLand > 0.1 ? $"dropped {h} from {top:0.0}: 90% of the drop in {tLand:0.00} s (free fall with gravity {2 * 0.9 * h / (tLand * tLand):0.0})"
+                           : tLand > 0 ? $"dropped {h}: the vehicle was not lifted (no vehicle body under the player?)" : $"dropped {h} from {top:0.0}: did not come down in 12 s";
+    }
     public string StateText => _state.Text;
     public string PositionText { get { Poll(); return _pos.Text.Replace("\n", " | "); } }
 

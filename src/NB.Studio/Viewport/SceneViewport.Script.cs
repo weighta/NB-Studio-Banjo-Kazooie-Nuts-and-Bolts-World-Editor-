@@ -352,8 +352,11 @@ public sealed partial class SceneViewport
                 var t = Selected.Transform;
                 log($"script: {Selected.Name} at {Fmt(t.Translation)} scale ({new Vector3(t.M11, t.M12, t.M13).Length():0.###}, {new Vector3(t.M21, t.M22, t.M23).Length():0.###}, {new Vector3(t.M31, t.M32, t.M33).Length():0.###}) x-axis {Fmt(Vector3.Normalize(new Vector3(t.M11, t.M12, t.M13)))}");
                 var s = ToScreen(t.Translation); if (s != null) log($"script: selection on screen at {s.Value.X:0},{s.Value.Y:0}");
+                var gp = GizmoPoint();
+                if (_extra.Count > 0 && SelectionBox() is { } sb)
+                    log($"script: {_extra.Count + 1} objects, box {Fmt(sb.Min)}..{Fmt(sb.Max)}, gizmo at {Fmt(gp)}" + (ToScreen(gp) is { } gs ? $", on screen at {gs.X:0},{gs.Y:0}" : ""));
                 var ax = GizmoAxes(); float len = GizmoLength();
-                for (int i = 0; i < 3; i++) if (ToScreen(t.Translation + ax[i] * len * 0.7f) is { } h) log($"script: {AxisName[i]} handle on screen at {h.X:0},{h.Y:0}");
+                for (int i = 0; i < 3; i++) if (ToScreen(gp + ax[i] * len * 0.7f) is { } h) log($"script: {AxisName[i]} handle on screen at {h.X:0},{h.Y:0}");
                 return true;
             }
         }

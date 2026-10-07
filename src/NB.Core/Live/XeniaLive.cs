@@ -199,14 +199,37 @@ public sealed class XeniaLive : IDisposable
     uint _footBody;
 
     /// <summary>The hkpWorld: found from the world-box copy in the level object (see docs/FORMATS §13.5); gravity at +0x10.</summary>
-    public uint FindHavokWorld()
+    /// <summary>The hkpWorld class's vtable in the game image (every hkpWorld starts with it).</summary>
+    public const uint HkpWorldVtable = 0x82198D50;
+
+    /// <summary>The level's physics world through the game's pointer chain (cheap: five reads), 0 while no level is
+    /// loaded. W = [[[[0x82FAB0FC]+4]+0x15B0]+0x1D0+0x15B4], hkpWorld = [W+0x6D8] (research 151 §7).</summary>
+    public uint LevelHavokWorld()
     {
-        // the level's physics world: W = [[[[0x82FAB0FC]+4]+0x15B0]+0x1D0+0x15B4], hkpWorld = [W+0x6D8] (research 151 §7)
         uint a = U32(0x82FAB0FC), b = a != 0 ? U32(a + 4) : 0, c = b != 0 ? U32(b + 0x15B0) : 0, w = c != 0 ? U32(c + 0x1D0 + 0x15B4) : 0;
         uint hw = w != 0 ? U32(w + 0x6D8) : 0;
-        if (hw != 0 && V3(hw + 0x2E0).X > V3(hw + 0x2D0).X + 50 && V3(hw + 0x10) is { X: 0, Z: 0 }) return hw;
+        return hw != 0 && IsHavokWorld(hw) ? hw : 0;
+    }
+
+    /// <summary>An hkpWorld: its vtable, gravity (0, g, 0) with -100 &lt; g ≤ 0... or any g the Live tab may have set, and a
+    /// sensible broadphase box at +0x2D0 / +0x2E0.</summary>
+    public bool IsHavokWorld(uint w)
+    {
+        if (w == 0) return false;
+        var d = Read(w, 0x2F0);
+        if (d.Length < 0x2F0 || BE.U32(d, 0) != HkpWorldVtable) return false;
+        if (BE.F32(d, 0x10) != 0 || BE.F32(d, 0x18) != 0 || !(MathF.Abs(BE.F32(d, 0x14)) < 1000)) return false;
+        float x0 = BE.F32(d, 0x2D0), z0 = BE.F32(d, 0x2D8), x1 = BE.F32(d, 0x2E0), z1 = BE.F32(d, 0x2E8);
+        return x1 - x0 > 50 && z1 - z0 > 50 && x1 - x0 < 100000 && z1 - z0 < 100000;
+    }
+
+    public uint FindHavokWorld()
+    {
+        uint hw = LevelHavokWorld();
+        if (hw != 0) return hw;
         // fallback scan
-        // the hkpWorld: vtable in the image at +0, gravity (0, -g, 0) at +0x10, broadphase box at +0x2D0/+0x2E0 (min < max)
+        // the hkpWorld: its vtable at +0, gravity (0, -g, 0) at +0x10, broadphase box at +0x2D0/+0x2E0 (min < max). 1.16 and
+        // older took any vtable in the image here and could pick a wrong object (gravity 0, writes without effect)
         foreach (var (va, size) in Regions())
             for (int off = 0; off < size; off += 1 << 24)
             {
@@ -215,7 +238,7 @@ public sealed class XeniaLive : IDisposable
                 for (int o = 0; o + 0x2F0 <= d.Length; o += 16)
                 {
                     uint vt = BE.U32(d, o);
-                    if (vt < 0x82000000 || vt >= 0x83000000) continue;   // hkpWorld vtable in the image (0x82198D50)
+                    if (vt != HkpWorldVtable) continue;
                     if (BE.F32(d, o + 0x10) != 0 || BE.F32(d, o + 0x18) != 0) continue;
                     float g = BE.F32(d, o + 0x14);
                     if (!(g <= 0 && g > -100)) continue;   // 0 allowed: the Live tab can set zero gravity
@@ -224,6 +247,16 @@ public sealed class XeniaLive : IDisposable
                 }
             }
         return 0;
+    }
+
+    /// <summary>Diagnostics: the pointer chain to the hkpWorld and what the scan finds.</summary>
+    public string DescribeHavokWorld()
+    {
+        uint a = U32(0x82FAB0FC), b = a != 0 ? U32(a + 4) : 0, c = b != 0 ? U32(b + 0x15B0) : 0, w = c != 0 ? U32(c + 0x1D0 + 0x15B4) : 0;
+        uint hw = w != 0 ? U32(w + 0x6D8) : 0;
+        string s = $"chain {a:X8} > {b:X8} > {c:X8} > {w:X8} > hkpWorld {hw:X8}";
+        if (hw != 0) s += $": vtable {U32(hw):X8} gravity {V3(hw + 0x10)} box {V3(hw + 0x2D0)}..{V3(hw + 0x2E0)}";
+        return s;
     }
 
     public float GetGravity(uint world) => V3(world + 0x10).Y;

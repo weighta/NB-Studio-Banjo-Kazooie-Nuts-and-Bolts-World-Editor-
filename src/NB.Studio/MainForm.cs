@@ -2656,7 +2656,12 @@ public sealed partial class MainForm : Form
                         var v = Next().Split(',').Select(x => float.Parse(x, System.Globalization.CultureInfo.InvariantCulture)).ToArray();
                         _live.ScriptTeleport(new Vector3(v[0], v[1], v[2])); await Task.Delay(1200); L("script: live position " + _live.PositionText); break;
                     }
-                    case "--live-gravity": { float g = float.Parse(Next(), System.Globalization.CultureInfo.InvariantCulture); _live.ScriptGravity(g); L($"script: live gravity {g}"); break; }
+                    case "--shot-marker": L("script: shot-marker " + Next()); await Task.Delay(3000); break;   // a test driver captures the game now
+                    case "--live-dump": { var ex = Next(); int n = Convert.ToInt32(Next(), 16); L("script: live dump " + _live.ScriptDump(ex, n)); break; }
+                    case "--live-probe": L("script: live probe " + _live.ScriptProbe()); break;
+                    case "--live-fall": { float h = float.Parse(Next(), System.Globalization.CultureInfo.InvariantCulture); L("script: live fall " + await _live.ScriptFall(h)); break; }
+                    case "--live-gravity": { float g = float.Parse(Next(), System.Globalization.CultureInfo.InvariantCulture); _live.ScriptGravity(g); L($"script: live gravity {g}: {_live.GravityText}"); break; }
+                    case "--live-gravity-state": L($"script: live {_live.GravityText}"); break;
                     case "--wait": await Task.Delay(int.Parse(Next())); break;
                     case "--live-show": _live.ScriptShow(); await Task.Delay(1500); L("script: 3D view at the player " + _view.CameraPosition); break;
                     case "--export-fbx": { var dir = Next(); ExportObject(_view.Selected!, false, fbx: true, folder: dir); L($"script: exported FBX to {dir}"); break; }

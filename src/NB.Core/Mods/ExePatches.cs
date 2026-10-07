@@ -1246,22 +1246,23 @@ public static class ExePatches
 
     public static readonly ExeMod DeveloperAllParts = new(
         "developer-all-parts",
-        "Developer part list: every vehicle part unlocked (garage_allblocks)",
-        "The parts inventory is built at game start by 0x8251CB20 from the unlockable block sets (progress flags). A " +
-        "demo-build branch instead loads one fixed list by name (\"garage_demoblocks\", only registered in demo builds). " +
-        "The retail gameassetref also lists the developer asset \"garage_allblocks\", which no code uses. The mod renames " +
-        "the branch's string to garage_allblocks and always takes that branch, so a new game starts with every part " +
-        "(200 of each). Progress no longer unlocks parts because every part is already there.",
-        "Verified in Xenia: parts inventory [0x82FACA44] has 23 entries at a stock new game and 118 (200 each) with the mod; " +
-        "the Mumbo's Motors parts store shows 12 categories instead of 10 (Accessories, Protection added) and Body offers " +
-        "Light, Heavy and Super at the start of the game (stock: Light only).",
+        "Every vehicle part unlocked (every crate's parts, Parts Store in the game's order)",
+        "The parts inventory [0x82FACA44] is built at game start by 0x8251CB20: every record of unlockable_blocksets " +
+        "(aid_misc_banjox_unlockablelist_componentsets: the start pack, the 50 Showdown Town crates, Stop 'n' Swop, Humba, " +
+        "L.O.G., key and Jinjo bingo crates, 130 records) whose progress flag is set is added with 0x8251CDD8, which appends " +
+        "parts it has not seen and adds to the count of the others. The Parts Store lists its categories in the order they " +
+        "first appear in the inventory (0x8251CDD8 also builds the category list [0x82FACA58]). The mod skips the flag test, " +
+        "so every record is added, as if every crate had been collected: all 118 store parts with the full game's counts, " +
+        "categories in the order a normal game shows them (Seats, Wheels, Power, Fuel, Storage, Ammo, Body, Gadgets, " +
+        "Protection, Fly and Float, Weapons, Accessories). NB Studio 1.16 and older loaded the developers' list " +
+        "garage_allblocks instead (200 of each), whose order put Body first and Storage last.",
+        "Xenia 2026-10-07 (NB Studio round 11): inventory [0x82FACA44] has 118 entries in unlockable_blocksets order with " +
+        "NB Studio's quick-test save and with the all-unlocked save (coop/saves/AllUnlocked.sav); Mumbo's Motors' Workshop lists the categories Seats, Wheels, Power, Fuel, " +
+        "Storage, Ammo, Body, Gadgets, Protection, Fly and Float, Weapons, Accessories. Earlier version (garage_allblocks): " +
+        "23 entries stock, 118 with the mod, 12 store categories instead of 10.",
         new[]
         {
-            new ExeWord(0x8216B7B8, 0x67655F64, 0x67655F61, "\"ge_d\" -> \"ge_a\""),
-            new ExeWord(0x8216B7BC, 0x656D6F62, 0x6C6C626C, "\"emob\" -> \"llbl\""),
-            new ExeWord(0x8216B7C0, 0x6C6F636B, 0x6F636B73, "\"lock\" -> \"ocks\" (string now garage_allblocks)"),
-            new ExeWord(0x8216B7C4, 0x73000000, 0x00000000, "terminator"),
-            new ExeWord(0x8251CC24, 0x419A0028, 0x60000000, "always use the fixed block list (was: only in demo builds)"),
+            new ExeWord(0x8251CC90, 0x41820010, 0x60000000, "add every unlockable block set (was: only those whose progress flag is set)"),
         });
 
     // ---- mods agent 2026-10-05: begin ----
@@ -1549,7 +1550,7 @@ public static class ExePatches
         (TownAiRestartOnChangeVehicle, "Town AI keeps driving", "After Change Vehicle, the town's AI vehicles keep driving."),
         (AiSpringTimer, "Jumping AI vehicles", "AI drivers fire their vehicles' springs now and then."),
         (PhotoCameraUnlimited, "Free photo camera", "The photo-mode camera can fly anywhere."),
-        (DeveloperAllParts, "All parts unlocked", "A new game starts with every vehicle part unlocked (the developers' part list)."),
+        (DeveloperAllParts, "All parts unlocked", "A new game starts with every vehicle part unlocked (as if every crate was collected)."),
         (DeveloperMainMenu, "Developer main menu", "The title screen opens the developers' hidden main menu."),
         (UnlimitedPartQuantity, "Unlimited part quantities", "9999 of every part you own in Mumbo's garage (no more 4-engine limit)."),
         (TownFlightThrust, "Planes fly in town", "Propellers and jets push in Showdown Town like in the other worlds."),

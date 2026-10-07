@@ -98,7 +98,8 @@ public static class ModLibrary
         var xex = Path.Combine(gameDir, "default.xex");
         if (!File.Exists(xex)) return 0;
         var fi = new FileInfo(xex);
-        string stamp = $"2|{fi.Length}|{fi.LastWriteTimeUtc.Ticks}|{string.Join(",", NB.Core.Mods.ExePatches.Tweaks.Select(t => t.Name))}";
+        // the words too: a tweak whose patch changed (e.g. All parts unlocked, NB Studio 1.17) is built again
+        string stamp = $"3|{fi.Length}|{fi.LastWriteTimeUtc.Ticks}|{string.Join(",", NB.Core.Mods.ExePatches.Tweaks.Select(t => t.Name + ":" + string.Join(".", t.Mod.Words.Select(w => $"{w.Address:X8}={w.Patched:X8}"))))}";
         var stampFile = Path.Combine(Dir, "tweaks.txt");
         if (File.Exists(stampFile) && File.ReadAllText(stampFile) == stamp) return 0;
         Directory.CreateDirectory(Dir);

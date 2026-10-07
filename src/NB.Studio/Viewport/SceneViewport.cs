@@ -923,17 +923,18 @@ public sealed partial class SceneViewport : UserControl
         return new[] { x, y, z };
     }
 
-    float GizmoLength() => Selected == null ? 3 : Math.Max(3, WorldBounds(Selected).Radius * 0.8f);
+    float GizmoLength() => Selected == null ? 3 : _extra.Count > 0 && SelectionBox() is { } sb ? Math.Max(3, Vector3.Distance(sb.Min, sb.Max) * 0.4f) : Math.Max(3, WorldBounds(Selected).Radius * 0.8f);
 
     void DrawGizmo(Matrix4x4 vp)
     {
         var lines = new List<(Vector3, Vector3, Vector3)>();
-        AddBox(lines, Selected!, new Vector3(1, 0.6f, 0.1f));
-        foreach (var x in _extra) AddBox(lines, x, new Vector3(1, 0.75f, 0.35f));
-        var p = Selected!.Transform.Translation;
+        // several objects: one box around all of them, as if they were one big object (drag inside it to move them all)
+        if (_extra.Count > 0 && SelectionBox() is { } sb) AddAabb(lines, sb.Min, sb.Max, new Vector3(1, 0.6f, 0.1f));
+        else AddBox(lines, Selected!, new Vector3(1, 0.6f, 0.1f));
+        var p = GizmoPoint();
         if (_xf != XfKind.None)
         {
-            var piv = _xfStart.Translation;
+            var piv = _xfPivot;
             if (_xfAxis >= 0)
             {
                 // the constraint axis, drawn as an infinite line through the start position
@@ -983,7 +984,7 @@ public sealed partial class SceneViewport : UserControl
     int HandleAt(Point m)
     {
         if (Selected == null || Selected.Kind == SceneObjectKind.Terrain || Mode == GizmoMode.Select || (Mode == GizmoMode.Scale && ScaleLocked(Selected))) return -1;
-        var p = Selected.Transform.Translation; var ax = GizmoAxes(); float len = GizmoLength();
+        var p = GizmoPoint(); var ax = GizmoAxes(); float len = GizmoLength();
         var s0 = ToScreen(p); if (s0 == null) return -1;
         int best = -1; float bestD = 9;
         for (int i = 0; i < 3; i++)
@@ -1338,6 +1339,9 @@ public sealed partial class SceneViewport : UserControl
     XfKind _xf;
     int _xfAxis = -1; AxisSpace _xfSpace;
     Matrix4x4 _xfStart; Point _xfMouse0; string _xfTyped = ""; float _xfValue;
+    /// <summary>The point a transform turns and scales about (and whose plane a free move uses): the primary object's
+    /// origin, or the centre of the box around a multi-selection.</summary>
+    Vector3 _xfPivot;
     /// <summary>The transform is a left-button drag (confirmed on release) rather than a modal key transform.</summary>
     bool _xfDrag; bool _xfDragKeyAxis;
 
@@ -1359,6 +1363,7 @@ public sealed partial class SceneViewport : UserControl
         if (_xf != XfKind.None) { if (!drag) { _xf = kind; _xfTyped = ""; if (kind == XfKind.Rotate && SpawnPoints.Is(Selected)) { _xfAxis = 1; _xfSpace = AxisSpace.World; } UpdateTransform(); } return; }
         _xf = kind; _xfDrag = drag; _xfAxis = axis; _xfSpace = space; _xfTyped = ""; _xfDragKeyAxis = false;
         _xfStart = Selected.Transform; _xfMouse0 = _mouse;
+        _xfPivot = GizmoPoint();
         BeginMulti();
         _movingLines.Clear();
         foreach (var m in SelectedObjects) if (m.Kind == SceneObjectKind.Marker) _movingLines.Add(m);
@@ -1419,7 +1424,7 @@ public sealed partial class SceneViewport : UserControl
     {
         if (_xf == XfKind.None || Selected == null) return;
         using var _p = Prof.Time("UpdateTransform (incl. SelectionChanged)");
-        var o = Selected; var start = _xfStart; var piv = start.Translation;
+        var o = Selected; var start = _xfStart; Vector3 piv = _xfPivot, org = start.Translation;   // piv: turn / scale centre on screen; org: the object's origin
         bool snap = _keys.Contains(Keys.ControlKey);
         // a drag constrained by holding X / Y / Z
         if (_xfDrag && (_xfAxis < 0 || _xfDragKeyAxis))
@@ -1450,7 +1455,7 @@ public sealed partial class SceneViewport : UserControl
                     if (_xfDrag) delta -= n * Vector3.Dot(delta, n);   // exactly in the plane
                     if (snap) delta = new Vector3(MathF.Round(delta.X), MathF.Round(delta.Y), MathF.Round(delta.Z));
                 }
-                var m = start; m.Translation = piv + delta; o.Transform = m;
+                var m = start; m.Translation = start.Translation + delta; o.Transform = m;
                 break;
             }
             case XfKind.Scale:
@@ -1485,9 +1490,9 @@ public sealed partial class SceneViewport : UserControl
                     S.M11 += (f - 1) * a.X * a.X; S.M12 += (f - 1) * a.X * a.Y; S.M13 += (f - 1) * a.X * a.Z;
                     S.M21 += (f - 1) * a.Y * a.X; S.M22 += (f - 1) * a.Y * a.Y; S.M23 += (f - 1) * a.Y * a.Z;
                     S.M31 += (f - 1) * a.Z * a.X; S.M32 += (f - 1) * a.Z * a.Y; S.M33 += (f - 1) * a.Z * a.Z;
-                    m = start * Matrix4x4.CreateTranslation(-piv) * S * Matrix4x4.CreateTranslation(piv);
+                    m = start * Matrix4x4.CreateTranslation(-org) * S * Matrix4x4.CreateTranslation(org);
                 }
-                m.Translation = piv; o.Transform = m;
+                o.Transform = AboutPivot(m, start);
                 break;
             }
             case XfKind.Rotate:
@@ -1518,8 +1523,8 @@ public sealed partial class SceneViewport : UserControl
                 // (a clockwise circle turns it clockwise as seen from the camera, from either side)
                 float rad = deg * MathF.PI / 180;
                 if (flip) rad = -rad;
-                var m = start * Matrix4x4.CreateTranslation(-piv) * Matrix4x4.CreateFromAxisAngle(axis, rad) * Matrix4x4.CreateTranslation(piv);
-                m.Translation = piv; o.Transform = m;
+                var m = start * Matrix4x4.CreateTranslation(-org) * Matrix4x4.CreateFromAxisAngle(axis, rad) * Matrix4x4.CreateTranslation(org);
+                o.Transform = AboutPivot(m, start);
                 break;
             }
         }
@@ -1704,6 +1709,16 @@ public sealed partial class SceneViewport : UserControl
             var hit = Pick(e.Location);
             if (DebugClicks) CollisionInfo?.Invoke($"click {e.Location} mods {ModifierKeys} hit {hit.Obj?.Name ?? "-"} selected {SelectedObjects.Count}");
             if ((ModifierKeys & Keys.Shift) != 0 && hit.Obj != null) { ToggleSelect(hit.Obj); return; }
+            if (_extra.Count > 0 && kind != XfKind.None && !(hit.Obj != null && IsSelected(hit.Obj)) && HitsSelectionBox(e.Location))
+            {
+                // several objects selected: a drag anywhere inside the box around them moves (turns, scales) all of them;
+                // a click without dragging picks what is under the mouse as usual (on mouse up)
+                BeginTransform(kind, drag: true);
+                _dragMoved = false;
+                _multiBoxDown = true;
+                UpdateTransform();
+                return;
+            }
             if (hit.Obj != null && IsSelected(hit.Obj) && hit.Obj.Kind != SceneObjectKind.Terrain && kind != XfKind.None)
             {
                 if (hit.Obj != Selected) SelectMany(SelectedObjects, hit.Obj);   // drag a selected object: it leads, the others follow
@@ -1740,10 +1755,11 @@ public sealed partial class SceneViewport : UserControl
             // a click (no drag) inside the collision selection's box still picks collision (another piece, Shift / Alt)
             if (!_dragMoved && _proxyBoxDown && _collMode)
                 CollisionPicked?.Invoke(PickCollision(e.Location), (ModifierKeys & Keys.Shift) != 0, (ModifierKeys & Keys.Alt) != 0);
+            if (!_dragMoved && _multiBoxDown) Select(Pick(e.Location).Obj);   // a click inside the selection's box: select as usual
         }
-        _proxyBoxDown = false;
+        _proxyBoxDown = false; _multiBoxDown = false;
     }
-    bool _proxyBoxDown;
+    bool _proxyBoxDown, _multiBoxDown;
 
     void OnMouseMove(object? s, MouseEventArgs e)
     {
