@@ -36,6 +36,10 @@ public sealed class SceneObject
     /// <summary>View depth / scale beyond which the game draws nothing of this object (its model and nested models all
     /// end their LOD tables with a cull level); infinity when it is always drawn. See <see cref="ModelAsset.CullDistance"/>.</summary>
     public float CullDistance = float.PositiveInfinity;
+    /// <summary>World doors (portal_worlddoor markers): whether the door shows Grunty's challenge sign, and why (see
+    /// WorldScene.GruntyActs); null for every other object.</summary>
+    public bool? GruntySign;
+    public string GruntySignWhy = "";
     public bool Dirty => Transform != OriginalTransform || (Marker is { Type: 22 } m && m.Link != m.SavedLink);
 }
 
@@ -304,6 +308,95 @@ public sealed class WorldScene
         return list.Select(x => (x.Item1, x.Item2 * shift)).ToList();
     }
 
+    /// <summary>
+    /// Objects the game's code spawns at tag markers that name no objparams themselves, by marker type: the six Jinjo
+    /// houses (type 42, objTag_BanjoX_ShowDownTown_JinjoHome1..6) and the Jinjo lock-ups (type 43, ..._Lockup1..6) in
+    /// Showdown Town. The objparams come from the game asset reference table (aid_misc_banjox_gameassetref_default:
+    /// 64-byte name + asset id): "jinjo_house" → props_showdowntown_jinjohouse, "jinjo_lockup" → props_showdowntown_lockup1.
+    /// Verified in Xenia: a house stands at every JinjoHome marker and a lock-up at every Lockup marker of a new game.
+    /// </summary>
+    static string? CodeSpawned(MarkerRecord r) => r.Type switch
+    {
+        42 when r.Strings.Any(s => s.Contains("_JinjoHome", StringComparison.Ordinal)) => "jinjo_house",
+        43 when r.Strings.Any(s => s.Contains("_Lockup", StringComparison.Ordinal)) => "jinjo_lockup",
+        _ => null,
+    };
+
+    Dictionary<string, uint>? _gameAssetRefs;
+
+    /// <summary>The id the game asset reference table (common bundle) gives a name, or 0.</summary>
+    uint GameAssetRef(string name)
+    {
+        if (_gameAssetRefs == null)
+        {
+            _gameAssetRefs = new();
+            try
+            {
+                if (FindAsset(AssetIds.Make(0x0B, "banjox_gameassetref_default")) is { } g
+                    && g.Caff.PartsOf(g.Sym).FirstOrDefault(p => g.Caff.SectionOf(p).Name == ".data")?.Data is { } d)
+                    for (int o = 0; o + 0x44 <= d.Length; o += 0x44)
+                    {
+                        // records of 0x44 bytes: name (64 bytes) + asset id
+                        string n = NB.Core.IO.BE.CStr(d, o, 64);
+                        if (n.Length > 0 && n.All(c => c is >= ' ' and < (char)127)) _gameAssetRefs.TryAdd(n, NB.Core.IO.BE.U32(d, o + 0x40));
+                    }
+            }
+            catch (Exception e) { Log.Add("game asset references: " + e.Message); }
+        }
+        return _gameAssetRefs.GetValueOrDefault(name);
+    }
+
+    /// <summary>objparams of the world doors in Showdown Town (aid_objparams_banjox_portal_worlddoor).</summary>
+    static readonly uint WorldDoorParams = AssetIds.Make(0x1F, "banjox_portal_worlddoor");
+
+    Dictionary<uint, string>? _gruntyActs;
+
+    /// <summary>
+    /// The Acts whose world door shows Grunty's challenge sign, by act script id, with the reason: the Acts that hold a
+    /// challenge Grunty gives (a challenge listed in the act lists aid_misc_banjox_acts_&lt;world&gt; of the common bundle
+    /// whose giver tag at +0x30C is objTag_BanjoX_Actor_Grunty: Nutty Acres 3, CPU 3, Banjoland 4, World of Sport 4 and
+    /// Whirlwind, Terrarium 4). Compared in Xenia on every door of a new game and of the all-unlocked save: exactly these
+    /// doors show the sign. The game does not read the sign from this data (changing the giver, the act script's giver
+    /// tags or the golf-cart unlock list moves no sign; tested), so Studio shows it as information only.
+    /// </summary>
+    Dictionary<uint, string> GruntyActs()
+    {
+        if (_gruntyActs != null) return _gruntyActs;
+        _gruntyActs = new();
+        try
+        {
+            if (LoadBundle(CommonBundle) is not { } c) return _gruntyActs;
+            var ids = IdsOf(c);
+            for (int s = 1; s <= c.Symbols.Count; s++)
+            {
+                if (!AssetIds.DisplayName(c.Symbols[s - 1]).StartsWith("aid_misc_banjox_acts_")) continue;
+                var d = c.PartsOf(s).FirstOrDefault(p => c.SectionOf(p).Name == ".data")?.Data;
+                if (d == null) continue;
+                for (int o = 8; o + 8 <= d.Length; o += 4)
+                {
+                    uint ch = NB.Core.IO.BE.U32(d, o), script = NB.Core.IO.BE.U32(d, o + 4);
+                    if (ch >> 24 != 0x3D || script >> 24 != 0x19 || !ids.TryGetValue(ch, out int cs)) continue;
+                    var cd = c.PartsOf(cs).FirstOrDefault(p => c.SectionOf(p).Name == ".data")?.Data;
+                    if (cd == null || cd.Length < 0x30C + 64 || NB.Core.IO.BE.CStr(cd, 0x30C, 64) != "objTag_BanjoX_Actor_Grunty") continue;
+                    _gruntyActs.TryAdd(script, $"Grunty gives {AssetIds.DisplayName(c.Symbols[cs - 1]).Replace("aid_challenge_banjox_", "")} in this Act");
+                }
+            }
+        }
+        catch (Exception e) { Log.Add("Grunty challenge acts: " + e.Message); }
+        return _gruntyActs;
+    }
+
+    readonly Dictionary<ModelAsset, ModelAsset> _noSign = new();
+
+    /// <summary>The door model without its Grunty challenge sign (the draws textured worlddoor_gruntydoor).</summary>
+    ModelAsset WithoutGruntySign(ModelAsset m)
+    {
+        if (_noSign.TryGetValue(m, out var n)) return n;
+        n = m.ShallowCopy();
+        n.Draws = m.Draws.Where(d => !d.Textures.Any(t => t.Texture.Contains("worlddoor_gruntydoor", StringComparison.OrdinalIgnoreCase))).ToList();
+        return _noSign[m] = n;
+    }
+
     /// <summary>objparams fields that hold the object's own model: +0xC0 for every actor / avatar / prop class (115 props,
     /// 192 characters, all entityAvatar* classes), +0x124 for vehicle blocks lying in the world, +0x248 for the small
     /// dock cranes (entityAvatarShowDownTownCraneSmall). Other model references in objparams are alternates (damaged /
@@ -342,6 +435,18 @@ public sealed class WorldScene
                 }
                 if (loc != null) break;
             }
+        if (loc == null && !sawObj && CodeSpawned(r) is { } spawned)
+        {
+            // objects the game's code puts at tag markers (no objparams in the record): the Jinjo houses and lock-ups
+            if (FindAsset(GameAssetRef(spawned), markerCaff) is { } op && op.Caff.PartsOf(op.Sym).FirstOrDefault(p => op.Caff.SectionOf(p).Name == ".data")?.Data is { Length: > 0xC4 } d
+                && NB.Core.IO.BE.U32(d, 0xC0) is uint mid && mid >> 24 == 0x04 && FindAsset(mid, op.Caff) is { } ml && ml.Caff.Symbols[ml.Sym - 1].StartsWith("aid_model_"))
+            {
+                loc = ml; cls = NB.Core.IO.BE.CStr(d, 0x42, 62);
+                source = $"game code: \"{spawned}\" ({AssetIds.DisplayName(op.Caff.Symbols[op.Sym - 1]).Replace("aid_objparams_banjox_", "objparams ")} +0xC0) at this tag marker";
+                Audit.Count("objects the game places at tag markers", spawned);
+            }
+            else Audit.Note("objects the game places at tag markers (not found)", spawned);
+        }
         if (loc == null)
         {
             var vehicles = r.AssetIds.Where(a => a >> 24 == 0x00).Select(a => FindAsset(a, markerCaff))
@@ -373,6 +478,15 @@ public sealed class WorldScene
         }
         var model = GetModel(loc.Value.Caff, loc.Value.Sym);
         if (model == null) { Audit.MarkerModelsFailed++; return; }
+        if (r.AssetIds.Contains(WorldDoorParams))
+        {
+            // a world door: Grunty's challenge sign (the gruntydoor hologram) only where the game shows it
+            var acts = GruntyActs();
+            uint script = r.AssetIds.FirstOrDefault(a => a >> 24 == 0x19);
+            obj.GruntySign = acts.TryGetValue(script, out var why);
+            obj.GruntySignWhy = obj.GruntySign == true ? why : "this Act has no challenge Grunty gives";
+            if (obj.GruntySign == false) model = WithoutGruntySign(model);
+        }
         obj.Model = model;
         obj.ModelBundle = loc.Value.Bundle;
         obj.ModelSource = source + (loc.Value.Bundle != (Bundle & 0xFFFFFF) ? $" (model in {loc.Value.Bundle:x6})" : "");

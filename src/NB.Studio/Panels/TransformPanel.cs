@@ -93,6 +93,8 @@ public sealed class TransformPanel : UserControl
                   $"References: {string.Join(", ", _obj.Marker.AssetIds.Zip(_obj.Marker.AssetNames).Take(6).Select(p => p.Second == "?" ? p.First.ToString("X8") : p.Second))}\n" +
                   $"Strings: {string.Join(", ", _obj.Marker.Strings.Take(4))}\n" +
                   (_obj.ModelSource != "" ? $"Drawn with: {(_obj.Model?.View != null ? AssetIds.DisplayName(_obj.Model.View.Name) + " from " : "")}{_obj.ModelSource}\n" : "") +
+                  (_obj.GruntySign is bool gs ? $"Grunty challenge sign: {(gs ? "yes" : "no")} ({_obj.GruntySignWhy}). In the game the purple Grunty card on a world door marks an Act in which Grunty challenges Banjo " +
+                      "(a Grunty battle). It is not a door setting, and the game does not read it from data Studio can edit (tested in Xenia), so it is shown for information.\n" : "") +
                   (_obj.Marker.Type == 22 ? $"Path: next node #{_obj.Marker.Link}" + (_obj.Marker.Link == _obj.Marker.Index ? " (end of path)" : "") + "; a node linking to itself ends the path\n" : "") +
                   (_obj.Dirty ? "Modified (not yet saved)" : "Unmodified") + "\nRotation is stored as X/Y/Z angles; the engine's order is assumed X-Y-Z." +
                   $"\nScale is locked for markers (stored value {_obj.Marker.Scale:0.###} is kept)."

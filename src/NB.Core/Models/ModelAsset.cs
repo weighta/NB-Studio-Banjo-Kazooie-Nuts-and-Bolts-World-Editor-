@@ -164,6 +164,9 @@ public sealed class ModelAsset
     /// <summary>Texture-table entries by the index the command stream uses (op 0x43), unnamed entries left out.</summary>
     public Dictionary<int, string> TextureByIndex = new();
     public List<MeshDraw> Draws = new();
+    /// <summary>A copy sharing everything (nodes, draws …) whose lists can then be replaced, e.g. a model drawn without
+    /// some of its draws (WorldScene: a world door without Grunty's sign).</summary>
+    public ModelAsset ShallowCopy() => (ModelAsset)MemberwiseClone();
     public List<string> Warnings = new();
     public int ResourceHeader = -1;
 
