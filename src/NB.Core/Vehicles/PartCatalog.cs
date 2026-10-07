@@ -27,6 +27,17 @@ public sealed class PartInfo
     /// <summary>Model switches the part turns on (see <see cref="PartModelView"/>).</summary>
     public Dictionary<int, int> Switches = new();
 
+    /// <summary>In the game's Parts Store: listed in at least one blockset (the crates, keys, start pack and
+    /// blockset_all that fill the garage inventory). Parts outside every blockset are the game's internal / AI variants.</summary>
+    public bool InStore;
+    /// <summary>Parts Store category (<see cref="PartCatalog.StoreCategories"/>), "Modded / ULTRA" or "Other".</summary>
+    public string StoreCategory = "";
+    /// <summary>Sort position of <see cref="StoreCategory"/>, then of the part inside it.</summary>
+    public int StoreOrder, Tier;
+    /// <summary>A seat the game's AI drivers use (secondaryseats_large / _small: variants passengerlargeai / passengersmallai).</summary>
+    public bool IsAiSeat => Class == "objDefId_vehicleBlockSeat" && Variant.EndsWith("ai");
+    public string SizeText { get { var (x, y, z) = Size; return $"{x}×{y}×{z}"; } }
+
     public bool IsWheel => Class == "objDefId_vehicleBlockWheel";
     public bool IsPropeller => Class == "objDefId_vehicleBlockJetEngine" && Key.Contains("propeller");
     /// <summary>Settings the garage offers (blueprint part +5): wheels and propellers.</summary>
@@ -93,7 +104,120 @@ public sealed class PartCatalog
             p.Switches = PartModelView.SwitchesOf(p, d);
             cat.Parts[p.Id] = p;
         }
+        var store = cat.StoreParts();
+        foreach (var p in cat.Parts.Values)
+        {
+            p.InStore = store.Contains(p.Id);
+            if (DisplayNames.TryGetValue(p.Key, out var dn) && !p.Modded) p.Name = dn;
+            else if (p.IsAiSeat && !p.Name.Contains("(AI")) p.Name += " (AI driver)";
+            p.Tier = TierOf(p.Key + "_" + p.Variant);
+            int i = Array.FindIndex(StoreCategories, c => c.Group == p.Group);
+            // the AI driver seats are not sold, but they are the seats of the game's AI vehicles: listed with the seats
+            (p.StoreCategory, p.StoreOrder) = p.Modded ? (ModdedCategory, StoreCategories.Length)
+                : (p.InStore || p.IsAiSeat) && i >= 0 ? (StoreCategories[i].Name, i) : (OtherCategory, StoreCategories.Length + 1);
+        }
         return cat;
+    }
+
+    /// <summary>The Parts Store categories in the garage's order: name and the objparams group (+0x228) they hold
+    /// (loctext garage__grouping_* / block__group_*).</summary>
+    public static readonly (string Name, string Group)[] StoreCategories =
+    {
+        ("Seats", "seat"), ("Wheels", "wheel"), ("Power", "engine"), ("Fuel", "fuel"), ("Storage", "storage"), ("Ammo", "ammo"),
+        ("Body", "body"), ("Gadgets", "gadget"), ("Protection", "protection"), ("Fly and Float", "flyandfloat"),
+        ("Weapons", "weapon"), ("Accessories", "accessory"),
+    };
+    public const string ModdedCategory = "Modded / ULTRA", OtherCategory = "Other (not in the store)";
+
+    /// <summary>Clear names for the shipped parts whose loctext name is missing or shared with a Parts Store part
+    /// (internal, AI and special variants: they sort into <see cref="OtherCategory"/>).</summary>
+    public static readonly Dictionary<string, string> DisplayNames = new()
+    {
+        ["base_attachpoint"] = "Attach Point (internal)", ["base_gameplaycreatorloactor"] = "Gameplay Creator Actor (internal)",
+        ["base_leakpoint"] = "Leak Point (internal)", ["miscellaneous_logolympictorch"] = "L.O.G.'s Olympic Torch",
+        ["miscellaneous_gameplaycreatorpart"] = "Gameplay Creator Part 1 (Critics Say No)",
+        ["miscellaneous_gameplaycreatorpart2"] = "Gameplay Creator Part 2 (Critics Say No)",
+        ["miscellaneous_gameplaycreatorpart3"] = "Gameplay Creator Part 3 (Critics Say No)",
+        ["miscellaneous_storage_eggnspoontray"] = "Egg 'N' Spoon Tray",
+        ["propulsion_engines_ai_smallpower"] = "Small Engine (AI)", ["propulsion_engines_ai_mediumpower"] = "Medium Engine (AI)",
+        ["propulsion_engines_ai_largepower"] = "Large Engine (AI)", ["propulsion_engines_ai_superpower"] = "Super Engine (AI)",
+        ["propulsion_jets_ai_small"] = "Small Jet (AI)", ["propulsion_jets_ai_large"] = "Large Jet (AI)",
+        ["body_light_poleconnector"] = "Light Pole Connector",
+        ["seats_standardcutscene"] = "Standard Seat (cutscene)",
+        ["secondaryseats_large"] = "Large Taxi Seat (AI driver)", ["secondaryseats_small"] = "Small Taxi Seat (AI driver)",
+        ["secondaryseats_grunty"] = "Grunty's Seat", ["secondaryseats_gruntyairtight"] = "Grunty's Seat (airtight)",
+        ["secondaryseats_pikelet"] = "Pikelet's Seat", ["secondaryseats_pikeletpassenger"] = "Pikelet's Passenger Seat",
+        ["wheels_highgripheavy"] = "High Grip Wheel (heavy)", ["weapon_eggturretfixed"] = "Egg Turret (fixed)",
+        ["gadgets_variants_energyshieldnobghits"] = "Energy Shield (variant)", ["gadgets_variants_spotlightalwayson"] = "Spotlight (always on)",
+        ["gadgets_springai"] = "Spring (AI)", ["gadgets_springtrolley"] = "Spring (trolley)",
+        ["miscellaneous_weights_floatergrunty"] = "Floater (Grunty)",
+    };
+
+    /// <summary>Parts in the Parts Store's order: category (Seats … Accessories, Modded / ULTRA, Other), then the kind
+    /// (standard / light first, then strong / heavy / high grip, super, special; trays before boxes; engines, jets, sail),
+    /// size (small, medium, large, super) and shape (cube, wedge, corner, panels, poles), then name.</summary>
+    public static IEnumerable<PartInfo> StoreSorted(IEnumerable<PartInfo> parts) =>
+        parts.OrderBy(p => p.StoreOrder).ThenBy(p => p.StoreCategory == OtherCategory ? p.Name : "").ThenBy(p => KindRank.GetValueOrDefault(p.Variant, 10)).ThenBy(p => KindRank.ContainsKey(p.Variant) ? "" : p.Name)
+             .ThenBy(p => p.Tier).ThenBy(p => ShapeRank(p.Key)).ThenBy(p => p.Name).ThenBy(p => p.Key);
+
+    static readonly Dictionary<string, int> KindRank = new()
+    {
+        ["standard"] = 0, ["light"] = 0, ["engines"] = 0, ["small"] = 0, ["lowloader"] = 0,
+        ["strong"] = 1, ["heavy"] = 1, ["medium"] = 1, ["highgrip"] = 1, ["jets"] = 1, ["largelowloader"] = 1,
+        ["large"] = 2, ["box"] = 2, ["super"] = 3, ["largebox"] = 3, ["airtight"] = 4, ["monster"] = 4, ["fuelfree"] = 5,
+        ["passenger"] = 6, ["passengersmallai"] = 7, ["passengerlargeai"] = 7, ["passengerlarge"] = 8,
+    };
+
+    static int ShapeRank(string key)
+    {
+        foreach (var (k, r) in new[] { ("90degreepanel", 4), ("tpanel", 5), ("panel", 3), ("90degreepole", 7), ("tpole", 8), ("poleconnector", 9), ("pole", 6), ("cube", 0), ("wedge", 1), ("corner", 2) })
+            if (key.EndsWith(k)) return r;
+        return 0;
+    }
+
+    /// <summary>Order inside a category, like the store: small / standard / light first, then medium / heavy, large, super.</summary>
+    static int TierOf(string k) =>
+        k.Contains("super") ? 3 : k.Contains("large") ? 2 : k.Contains("medium") || k.Contains("heavy") || k.Contains("strong") ? 1 : 0;
+
+    /// <summary>Parts listed in any blockset (aid_misc_banjox_blockset_*: big-endian u32 pairs count, part objparams id).</summary>
+    HashSet<uint> StoreParts()
+    {
+        var res = new HashSet<uint>();
+        foreach (var g in Index.Entries.Where(e => !e.Streamed && e.Symbol > 0 && e.Name.StartsWith("aid_misc_banjox_blockset_")).GroupBy(e => e.Name))
+        {
+            byte[]? d = null;
+            foreach (var e in g) if ((d = Data(e)) != null) break;
+            if (d == null) continue;
+            for (int o = 0; o + 8 <= d.Length; o += 8) res.Add(BE.U32(d, o + 4));
+        }
+        return res;
+    }
+
+    /// <summary>English game text by key prefix (loctext of Debug/11; first language found wins, as for part names).</summary>
+    public static Dictionary<string, string> LoadText(Workspace ws, params string[] prefixes)
+    {
+        var res = new Dictionary<string, string>();
+        try
+        {
+            var dir = Path.Combine(ws.Game.Root, "Debug", "11");
+            if (!Directory.Exists(dir)) return res;
+            foreach (var f in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
+            {
+                try
+                {
+                    var c = CaffFile.Read(File.ReadAllBytes(f));
+                    var part = c.Parts.FirstOrDefault(p => c.SectionOf(p).Name == ".data");
+                    if (part == null || !LocText.Is(part.Data)) continue;
+                    var t = LocText.Parse(part.Data);
+                    foreach (var (k, s) in t.Strings)
+                        if (t.Names.TryGetValue(k, out var key) && prefixes.Any(key.StartsWith) && s.Length > 0)
+                            res.TryAdd(key, s.Replace("{PAGEBREAK}", " ").Trim());
+                }
+                catch { }
+            }
+        }
+        catch { }
+        return res;
     }
 
     static string Pretty(string key) =>
@@ -139,31 +263,7 @@ public sealed class PartCatalog
     }
 
     /// <summary>English part names and descriptions (loctext "block__&lt;tag&gt;", "dialog__desc_block_&lt;tag&gt;").</summary>
-    Dictionary<string, string> LoadNames()
-    {
-        var res = new Dictionary<string, string>();
-        try
-        {
-            var dir = Path.Combine(Workspace.Game.Root, "Debug", "11");
-            if (!Directory.Exists(dir)) return res;
-            foreach (var f in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
-            {
-                try
-                {
-                    var c = CaffFile.Read(File.ReadAllBytes(f));
-                    var part = c.Parts.FirstOrDefault(p => c.SectionOf(p).Name == ".data");
-                    if (part == null || !LocText.Is(part.Data)) continue;
-                    var t = LocText.Parse(part.Data);
-                    foreach (var (k, s) in t.Strings)
-                        if (t.Names.TryGetValue(k, out var key) && (key.StartsWith("block__") || key.StartsWith("dialog__desc_block_")) && s.Length > 0)
-                            res.TryAdd(key, s.Replace("{PAGEBREAK}", " ").Trim());
-                }
-                catch { }
-            }
-        }
-        catch { }
-        return res;
-    }
+    Dictionary<string, string> LoadNames() => LoadText(Workspace, "block__", "dialog__desc_block_");
 
     CaffFile? Caff(uint bundle)
     {

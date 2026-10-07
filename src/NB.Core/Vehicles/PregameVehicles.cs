@@ -18,9 +18,32 @@ public sealed class PregameVehicle
     public string Owner = "";
     public int Parts;
 
+    /// <summary>Where the game uses it: world, Act and challenge (from the markers that place it, else the bundles that
+    /// hold it, else its name); several when more than one Act uses it.</summary>
+    public List<VehiclePlace> Places = new();
+    /// <summary>For vehicles outside the worlds: "Shop blueprints", "Demo vehicles", "Test vehicles", …</summary>
+    public string Section = "";
+
     public string Short => Asset.Replace("aid_vehicle_banjox_", "");
     public string Label => Owner.Length > 0 ? $"{Owner}'s vehicle ({Short})" : Short;
+    /// <summary>"Mr. Fit's vehicle" for an AI vehicle, else the asset's short name.</summary>
+    public string Title => Owner.Length > 0 ? $"{Owner}{(Owner.EndsWith('s') ? "'" : "'s")} vehicle" : Short;
+    /// <summary>"World of Sports › Act 2 Burnin' Rubber" (the first place), or the section.</summary>
+    public string Where => Places.Count > 0 ? Places[0].ToString() : Section;
+    /// <summary>"World of Sports › Act 2 Burnin' Rubber › Mr. Fit's vehicle".</summary>
+    public string Path => Where.Length > 0 ? $"{Where} › {Title}" : Title;
     public override string ToString() => Label;
+}
+
+/// <summary>A world / Act / challenge a game vehicle belongs to.</summary>
+public sealed record VehiclePlace(string World, string Act, string Challenge)
+{
+    public string WorldName => WorldCatalog.DisplayNames.GetValueOrDefault(World, World);
+    /// <summary>"Act 2", "Act WW", "" (world only), "Live".</summary>
+    public string ActName => Act.Length == 0 ? "" : Act == "actww" ? "Act WW" : Act == "live" ? "Live" : Act.StartsWith("act") ? "Act " + Act[3..] : Act;
+    /// <summary>"Act 2 Burnin' Rubber".</summary>
+    public string ActLabel => (ActName + " " + Challenge).Trim();
+    public override string ToString() => ActLabel.Length > 0 ? $"{WorldName} › {ActLabel}" : WorldName;
 }
 
 /// <summary>
@@ -46,11 +69,25 @@ public static class PregameVehicles
     public static List<PregameVehicle> ForBundles(Workspace ws, AssetIndex idx, IEnumerable<uint> bundles)
     {
         var all = All(idx).ToDictionary(v => v.Id);
+        var res = new Dictionary<uint, PregameVehicle>();
+        ScanMarkers(ws, bundles, all, Names(idx), res);
+        foreach (var v in res.Values)
+            try { v.Parts = Load(ws, v).Blocks.Count; } catch { }
+        return res.Values.OrderBy(v => v.Owner.Length > 0 ? 0 : 1).ThenBy(v => v.Owner).ThenBy(v => v.Asset).ToList();
+    }
+
+    static Dictionary<uint, string> Names(AssetIndex idx)
+    {
         var names = new Dictionary<uint, string>();
         foreach (var e in idx.Entries) if (e.Id != 0) names.TryAdd(e.Id, e.Name);
-        var res = new Dictionary<uint, PregameVehicle>();
-        var list = bundles.Select(b => b & 0xFFFFFF).Distinct().ToList();
-        foreach (var b in list)
+        return names;
+    }
+
+    /// <summary>The vehicles resident in <paramref name="bundles"/> and those their markers (type 21) place, with drivers
+    /// and the world / Act of the marker asset (aid_marker_banjox_&lt;world&gt;_&lt;act&gt;_…).</summary>
+    static void ScanMarkers(Workspace ws, IEnumerable<uint> bundles, Dictionary<uint, PregameVehicle> all, Dictionary<uint, string> names, Dictionary<uint, PregameVehicle> res)
+    {
+        foreach (var b in bundles.Select(b => b & 0xFFFFFF).Distinct())
         {
             foreach (var v in all.Values.Where(v => v.Bundles.Contains(b))) res.TryAdd(v.Id, v);
             CaffFile caff;
@@ -61,6 +98,8 @@ public static class PregameVehicles
                 MarkerAsset ma;
                 try { ma = MarkerAsset.Parse(caff, s); } catch { continue; }
                 var d = caff.PartsOf(s).First(p => caff.SectionOf(p).Name == ".data").Data;
+                string marker = AssetIds.DisplayName(ma.Name).Replace("aid_marker_banjox_", "");
+                var mp = marker.Split('_');
                 foreach (var r in ma.Records.Where(r => r.Type == 21 && r.Size >= 0x44))
                 {
                     uint bp = BE.U32(d, r.Offset + 0x38), driver = BE.U32(d, r.Offset + 0x3C);
@@ -68,13 +107,102 @@ public static class PregameVehicles
                     res.TryAdd(bp, v);
                     string who = driver != 0 && names.TryGetValue(driver, out var dn) ? DriverName(dn) : "";
                     if (who.Length > 0 && v.Owner.Length == 0) v.Owner = who;
-                    v.Users.Add($"{(who.Length > 0 ? who + ", AI driver" : "placed")} — marker #{r.Index} of {AssetIds.DisplayName(ma.Name).Replace("aid_marker_banjox_", "")}");
+                    v.Users.Add($"{(who.Length > 0 ? who + ", AI driver" : "placed")} — marker #{r.Index} of {marker}");
+                    if (WorldCatalog.DisplayNames.ContainsKey(mp[0]))
+                        AddPlace(v, mp[0], mp.Length > 1 && mp[1].StartsWith("act") ? mp[1] : "");
                 }
             }
         }
-        foreach (var v in res.Values)
+    }
+
+    static void AddPlace(PregameVehicle v, string world, string act)
+    {
+        if (v.Places.Any(p => p.World == world && p.Act == act)) return;
+        if (act.Length > 0) v.Places.RemoveAll(p => p.World == world && p.Act.Length == 0);
+        else if (v.Places.Any(p => p.World == world)) return;
+        v.Places.Add(new VehiclePlace(world, act, ""));
+    }
+
+    /// <summary>
+    /// Every game vehicle with where it belongs: the Acts whose markers place it (with its AI driver), else the Act or
+    /// world bundle holding it, else the world its name starts with; the challenge from the game's text
+    /// (challenge__&lt;world&gt;&lt;act&gt;game&lt;n&gt;, matched to the asset name: worldofsport_burninrubber_racer1 →
+    /// "Burnin' Rubber"). Vehicles outside the worlds get a <see cref="PregameVehicle.Section"/> (shop blueprints, demo, …).
+    /// Parts are counted for the vehicles the Acts use.
+    /// </summary>
+    public static List<PregameVehicle> Catalog(Workspace ws, AssetIndex idx)
+    {
+        var list = All(idx);
+        var all = list.ToDictionary(v => v.Id);
+        List<ActEntry> acts;
+        try { acts = ActCatalog.Build(ws, idx); } catch { acts = new(); }
+        var used = new Dictionary<uint, PregameVehicle>();
+        ScanMarkers(ws, acts.Select(a => a.ActBundle).Concat(acts.Select(a => a.WorldBundle)).Where(b => b != 0), all, Names(idx), used);
+        var actOf = acts.GroupBy(a => a.ActBundle & 0xFFFFFF).ToDictionary(g => g.Key, g => g.First());
+        var worldOf = WorldCatalog.FromIndex(idx).GroupBy(w => w.Bundle & 0xFFFFFF).ToDictionary(g => g.Key, g => g.First().World);
+        var challenges = Challenges(PartCatalog.LoadText(ws, "challenge__"));
+        foreach (var v in list)
+        {
+            if (v.Places.Count == 0) foreach (var b in v.Bundles) if (actOf.TryGetValue(b, out var a)) AddPlace(v, a.World, a.Act);
+            string first = v.Short.Split('_')[0];
+            if (v.Places.Count == 0 && WorldCatalog.DisplayNames.ContainsKey(first)) AddPlace(v, first, "");
+            // a world bundle holding it (not the garage / front-end "car park" bundles; not shop, demo, … vehicles)
+            if (v.Places.Count == 0 && first is "general" or "test" or "battlefield" or "tt" or "artisttestvehicle")
+                foreach (var b in v.Bundles) if (worldOf.TryGetValue(b, out var w) && w != "carpark" && WorldCatalog.DisplayNames.ContainsKey(w)) AddPlace(v, w, "");
+            for (int i = 0; i < v.Places.Count; i++)
+                if (FindChallenge(challenges, v.Short, v.Places[i].World, v.Places[i].Act) is { } c)
+                    v.Places[i] = v.Places[i] with { Act = v.Places[i].Act.Length > 0 ? v.Places[i].Act : c.Act, Challenge = c.Name };
+            if (v.Places.Count == 0)
+            {
+                v.Section = SectionOf(first);
+                if (first == "live" && FindChallenge(challenges, v.Short, null, "live") is { } lc)
+                    v.Places.Add(new VehiclePlace(lc.World, "live", lc.Name));
+            }
+        }
+        foreach (var v in used.Values)
             try { v.Parts = Load(ws, v).Blocks.Count; } catch { }
-        return res.Values.OrderBy(v => v.Owner.Length > 0 ? 0 : 1).ThenBy(v => v.Owner).ThenBy(v => v.Asset).ToList();
+        return list;
+    }
+
+    static string SectionOf(string prefix) => prefix switch
+    {
+        "shop" => "Shop blueprints", "demo" => "Demo vehicles", "test" or "artisttestvehicle" => "Test vehicles",
+        "credits" => "Credits vehicles", "live" => "Live challenges", "general" => "General vehicles",
+        "custom" => "Reserved slots", _ => "Other vehicles",
+    };
+
+    sealed record Challenge(string World, string Act, string Name, string Norm);
+
+    /// <summary>The game's challenges: challenge__&lt;world&gt;act&lt;n|ww&gt;game&lt;m&gt; and challenge__&lt;world&gt;live&lt;name&gt;.</summary>
+    static List<Challenge> Challenges(Dictionary<string, string> text)
+    {
+        var res = new List<Challenge>();
+        var worlds = WorldCatalog.DisplayNames.Keys.OrderByDescending(k => k.Length).ToList();
+        var rx = new System.Text.RegularExpressions.Regex("^(act[0-9]+|actww)game[0-9]+$");
+        foreach (var (key, name) in text)
+        {
+            var k = key["challenge__".Length..].ToLowerInvariant();
+            var w = worlds.FirstOrDefault(k.StartsWith);
+            if (w == null) continue;
+            var rest = k[w.Length..];
+            if (rx.IsMatch(rest)) res.Add(new Challenge(w, rest[..rest.IndexOf("game", StringComparison.Ordinal)], name, Norm(name)));
+            else if (rest.StartsWith("live") && rest.Length > 4) res.Add(new Challenge(w, "live", name, Norm(name)));
+        }
+        return res.OrderBy(c => c.World).ThenBy(c => c.Act).ToList();
+    }
+
+    static string Norm(string s) => new string(s.ToLowerInvariant().Where(char.IsAsciiLetterLower).ToArray());
+
+    /// <summary>The challenge a vehicle asset belongs to: a word of its name (digits dropped) inside the challenge's name
+    /// (or the other way round), or sharing its first 7 letters (cpu_redbearracer → "Red Bear Racing").</summary>
+    static Challenge? FindChallenge(List<Challenge> all, string shortName, string? world, string act)
+    {
+        var tokens = shortName.Split('_').Skip(1).Select(t => Norm(t)).Where(t => t.Length >= 5).ToList();
+        if (tokens.Count == 0) return null;
+        static int Common(string a, string b) { int i = 0; while (i < a.Length && i < b.Length && a[i] == b[i]) i++; return i; }
+        bool Match(Challenge c) => tokens.Any(t => c.Norm.Contains(t) || (c.Norm.Length >= 6 && t.Contains(c.Norm)) || Common(t, c.Norm) >= 7);
+        var pool = all.Where(c => (world == null || c.World == world) && (act == "live" ? c.Act == "live" : c.Act != "live")).ToList();
+        return pool.FirstOrDefault(c => act.Length > 0 && c.Act == act && Match(c)) ?? pool.FirstOrDefault(c => Match(c) && (act.Length == 0 || act == "live"));
     }
 
     /// <summary>A display name for a driver objparams (actor_npc_worldofsport_mrfit → "Mr. Fit").</summary>
@@ -84,6 +212,9 @@ public static class PregameVehicles
         if (key == null) return AssetIds.DisplayName(objparams).Replace("aid_objparams_banjox_", "");
         var c = NB.Core.Mods.Characters.All.FirstOrDefault(c => c.Key == key);
         if (c != null) return c.Key == "thomas" ? "Thomas" : c.Key == "blubber" ? "Blubber" : c.Name;
+        if (key.EndsWith("standing") && key.Length > 8) key = key[..^8];       // pikeletstanding: Pikelet
+        var k = NB.Core.Mods.Characters.All.FirstOrDefault(c => c.Key == key);
+        if (k != null) return k.Name;
         return char.ToUpperInvariant(key[0]) + key[1..];
     }
 

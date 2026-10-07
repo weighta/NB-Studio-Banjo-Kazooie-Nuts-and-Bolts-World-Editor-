@@ -14,14 +14,18 @@ public enum VehicleTool { Select, Place, Paint }
 /// 3D build view of the Vehicle Editor: the parts of a <see cref="VehicleDocument"/> on the garage grid (one cell = one
 /// unit; a part's model is drawn at its cell, rotated by its orientation), an orbit camera (right-drag orbits,
 /// middle-drag pans, wheel zooms, F frames the vehicle), a ghost of the part being placed and the selection.
-/// Select: click (Ctrl/Shift adds), drag a selected part to move it on the ground plane (Shift: up/down).
-/// Place: the ghost follows the face under the mouse; click places it. Paint: click paints a part (Alt+click picks its
-/// colour). Keys: X / Y / Z (or R) rotate 90° (Shift: the other way), arrows / PgUp / PgDn move, Del deletes.
+/// Select: click (Ctrl/Shift adds), drag a selected part to move it in the plane facing the camera, snapped to cells (the
+/// 3D View's rule: looking down / up more than 45° the ground plane XZ, else the upright plane XY or ZY closest to facing
+/// the camera; Shift: up/down only). Place: the ghost follows the face under the mouse; click places it. Paint: click
+/// paints a part (Alt+click picks its colour). Keys: R rotates 90° about the world axis closest to the view direction
+/// (clockwise as seen; Shift: the other way), X / Y / Z about that axis, arrows / PgUp / PgDn move, Del deletes.
 /// </summary>
 public sealed class VehicleViewport : UserControl
 {
     readonly GLControl _gl;
     readonly VehicleRenderer _r = new();
+    readonly ToolTip _tip = new() { InitialDelay = 400, ReshowDelay = 100, AutoPopDelay = 15000 };
+    VehicleDocument.Part? _tipPart;
     bool _ready;
 
     public VehicleDocument? Document;
@@ -209,18 +213,107 @@ public sealed class VehicleViewport : UserControl
     // ------------------------------------------------------------------ mouse
 
     Point _last, _downAt; MouseButtons _btn; bool _dragging; (int X, int Y, int Z)? _hover;
-    (int X, int Y, int Z) _dragCell; bool _dragBegun;
+    bool _dragBegun;
+    // drag of the selection: the plane (through the clicked point) and the cells moved so far
+    Vector3 _dragOrigin, _dragNormal; (int X, int Y, int Z) _dragApplied;
+
+    Vector3 Forward() => Vector3.Normalize(_target - Eye());
+    /// <summary>Screen position of a world point (null behind the camera).</summary>
+    public Point? ToScreen(Vector3 w)
+    {
+        var c = Vector4.Transform(new Vector4(w, 1), View() * Proj());
+        if (c.W <= 1e-4f) return null;
+        return new Point((int)((c.X / c.W * 0.5f + 0.5f) * _gl.Width), (int)((0.5f - c.Y / c.W * 0.5f) * _gl.Height));
+    }
+
+    /// <summary>Normal of the drag plane, as in the 3D View: Y (the XZ ground plane) when the camera looks more than 45°
+    /// down or up, else the upright world plane closest to facing the camera (yaw snapped to 90°): Z (the XY plane) when
+    /// it looks mostly along Z, X (the ZY plane) when it looks mostly along X.</summary>
+    public Vector3 DragPlaneNormal()
+    {
+        if (MathF.Abs(_pitch) > MathF.PI / 4) return Vector3.UnitY;
+        var f = Forward();
+        return MathF.Abs(f.X) > MathF.Abs(f.Z) ? Vector3.UnitX : Vector3.UnitZ;
+    }
+
+    public string DragPlaneName() { var n = DragPlaneNormal(); return n == Vector3.UnitY ? "XZ plane" : n == Vector3.UnitZ ? "XY plane" : "ZY plane"; }
+
+    /// <summary>The world axis closest to the view direction (same 45° rule as the drag plane) and the quarter-turn sign
+    /// that turns a part clockwise as the camera sees it (+90° about an axis pointing away from the viewer).</summary>
+    public (int Axis, int Clockwise) ViewAxis()
+    {
+        var f = Forward();
+        if (MathF.Abs(_pitch) > MathF.PI / 4) return (1, f.Y < 0 ? -1 : 1);
+        return MathF.Abs(f.X) > MathF.Abs(f.Z) ? (0, f.X < 0 ? -1 : 1) : (2, f.Z < 0 ? -1 : 1);
+    }
+
+    /// <summary>Intersects the mouse ray with the plane through <paramref name="through"/> with normal <paramref name="n"/>.</summary>
+    Vector3? RayPlane(Point p, Vector3 through, Vector3 n)
+    {
+        var (o, d) = Ray(p);
+        float dn = Vector3.Dot(d, n);
+        if (MathF.Abs(dn) < 1e-5f) return null;
+        float t = Vector3.Dot(through - o, n) / dn;
+        return t < 0 ? null : o + d * t;
+    }
 
     void OnDown(object? s, MouseEventArgs e)
     {
         _gl.Focus();
         _last = _downAt = e.Location; _btn = e.Button; _dragging = false; _dragBegun = false;
         if (e.Button != MouseButtons.Left || Document == null) return;
-        if (Tool == VehicleTool.Select && Pick(e.Location) is { } h && Document.Selection.Contains(h.Part))
+        if (Tool == VehicleTool.Select && Pick(e.Location) is { } h && Document.Selection.Contains(h.Part)) BeginDrag(e.Location, h.T);
+    }
+
+    void BeginDrag(Point at, float t)
+    {
+        var (o, d) = Ray(at);
+        _dragOrigin = o + d * t; _dragNormal = DragPlaneNormal(); _dragApplied = (0, 0, 0);
+        _dragging = true; _dragBegun = false;
+    }
+
+    /// <summary>Moves the selection for the mouse at <paramref name="at"/> (cells from the drag start, in the drag plane;
+    /// <paramref name="vertical"/>: up / down only). Returns the total cell offset.</summary>
+    (int X, int Y, int Z) DragTo(Point at, bool vertical)
+    {
+        if (Document == null) return _dragApplied;
+        Vector3 delta;
+        if (vertical)
         {
-            _dragCell = GroundCell(e.Location, h.Part.Y) is { } g ? g : (h.Part.X, h.Part.Y, h.Part.Z);
-            _dragging = true;
+            // an upright plane facing the camera; only its height counts
+            var f = Forward(); var hn = new Vector3(f.X, 0, f.Z);
+            var n = hn.LengthSquared() < 1e-6f ? Vector3.UnitZ : Vector3.Normalize(hn);
+            if (RayPlane(at, _dragOrigin, n) is not { } h) return _dragApplied;
+            delta = new Vector3(0, h.Y - _dragOrigin.Y, 0);
         }
+        else
+        {
+            if (RayPlane(at, _dragOrigin, _dragNormal) is not { } h) return _dragApplied;
+            delta = h - _dragOrigin;
+            delta -= _dragNormal * Vector3.Dot(delta, _dragNormal);   // exactly in the plane
+        }
+        var now = ((int)MathF.Round(delta.X), (int)MathF.Round(delta.Y), (int)MathF.Round(delta.Z));
+        int mx = now.Item1 - _dragApplied.X, my = now.Item2 - _dragApplied.Y, mz = now.Item3 - _dragApplied.Z;
+        if (mx != 0 || my != 0 || mz != 0)
+        {
+            if (!_dragBegun) { Document.Begin("move parts"); _dragBegun = true; }
+            foreach (var p in Document.Selection) { p.X += mx; p.Y += my; p.Z += mz; }
+            _dragApplied = now;
+            Document.Commit();
+            Edited?.Invoke("move");
+        }
+        return _dragApplied;
+    }
+
+    /// <summary>A drag of the selected part under view point <paramref name="from"/> to <paramref name="to"/> (scripted
+    /// tests: the same code as a mouse drag). Returns the cells moved, or null when no selected part is under the start.</summary>
+    public (int X, int Y, int Z)? DragSelection(Point from, Point to, bool vertical = false)
+    {
+        if (Document == null || Pick(from) is not { } h || !Document.Selection.Contains(h.Part)) return null;
+        BeginDrag(from, h.T);
+        var r = DragTo(to, vertical);
+        _dragging = false;
+        return r;
     }
 
     /// <summary>A left click at view coordinates (scripted tests): what the mouse would do with the current tool.</summary>
@@ -240,6 +333,52 @@ public sealed class VehicleViewport : UserControl
         var probe = new VehicleDocument.Part { X = c.X, Y = c.Y, Z = c.Z, B = new BlueprintBlock { Part = PlacePart.Id } };
         probe.B.Orientation = PlaceOrientation;
         return (c, VehicleConnectivity.PlacementStatus(Document, probe, Catalog, Connectivity));
+    }
+
+    /// <summary>The GL context exists (part thumbnails can be rendered).</summary>
+    public bool GlReady => _ready && _gl.IsHandleCreated;
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")] static extern bool PostMessage(IntPtr h, int msg, IntPtr w, IntPtr l);
+    static IntPtr XY(Point p) => (IntPtr)((p.Y & 0xFFFF) << 16 | (p.X & 0xFFFF));
+
+    /// <summary>Scripted tests with real window messages to the view (no global input): a left-button drag from
+    /// <paramref name="a"/> to <paramref name="b"/> in <paramref name="steps"/> moves, through the view's own mouse handlers.</summary>
+    public void PostDrag(Point a, Point b, int steps = 8)
+    {
+        const int WM_MOUSEMOVE = 0x200, WM_LBUTTONDOWN = 0x201, WM_LBUTTONUP = 0x202, MK_LBUTTON = 1;
+        var h = _gl.Handle;
+        PostMessage(h, WM_MOUSEMOVE, IntPtr.Zero, XY(a)); Application.DoEvents();
+        PostMessage(h, WM_LBUTTONDOWN, (IntPtr)MK_LBUTTON, XY(a)); Application.DoEvents();
+        for (int i = 1; i <= steps; i++)
+        {
+            var q = new Point(a.X + (b.X - a.X) * i / steps, a.Y + (b.Y - a.Y) * i / steps);
+            PostMessage(h, WM_MOUSEMOVE, (IntPtr)MK_LBUTTON, XY(q)); Application.DoEvents();
+        }
+        PostMessage(h, WM_LBUTTONUP, IntPtr.Zero, XY(b)); Application.DoEvents();
+    }
+
+    /// <summary>A mouse move (no button) by window messages to view point <paramref name="a"/>.</summary>
+    public void PostMove(Point a)
+    {
+        PostMessage(_gl.Handle, 0x200, IntPtr.Zero, XY(new Point(a.X + 1, a.Y))); Application.DoEvents();
+        PostMessage(_gl.Handle, 0x200, IntPtr.Zero, XY(a)); Application.DoEvents();
+    }
+
+    /// <summary>A left click by window messages at view point <paramref name="a"/>.</summary>
+    public void PostClick(Point a)
+    {
+        var h = _gl.Handle;
+        PostMessage(h, 0x200, IntPtr.Zero, XY(a)); Application.DoEvents();
+        PostMessage(h, 0x201, (IntPtr)1, XY(a)); Application.DoEvents();
+        PostMessage(h, 0x202, IntPtr.Zero, XY(a)); Application.DoEvents();
+    }
+
+    /// <summary>A key press by window messages to the focused view (WM_KEYDOWN / WM_KEYUP through the message loop).</summary>
+    public void PostKey(Keys k)
+    {
+        _gl.Focus();
+        PostMessage(_gl.Handle, 0x100, (IntPtr)(int)k, (IntPtr)1); Application.DoEvents();
+        PostMessage(_gl.Handle, 0x101, (IntPtr)(int)k, unchecked((IntPtr)(int)0xC0000001)); Application.DoEvents();
     }
 
     /// <summary>View size (scripted tests aim at its centre).</summary>
@@ -284,24 +423,9 @@ public sealed class VehicleViewport : UserControl
         }
         if (_btn == MouseButtons.Left && _dragging && Document != null && Document.Selection.Count > 0)
         {
-            var any = Document.Selection.First();
-            (int X, int Y, int Z) now;
-            if ((ModifierKeys & Keys.Shift) != 0)
-            {
-                // vertical: one cell per 20 pixels
-                int steps = -(e.Y - _downAt.Y) / 20;
-                now = (_dragCell.X, _dragCell.Y + steps, _dragCell.Z);
-            }
-            else if (GroundCell(e.Location, any.Y) is { } g) now = g; else return;
-            int mx = now.X - _dragCell.X, my = now.Y - _dragCell.Y, mz = now.Z - _dragCell.Z;
-            if (mx != 0 || my != 0 || mz != 0)
-            {
-                if (!_dragBegun) { Document.Begin("move parts"); _dragBegun = true; }
-                foreach (var p in Document.Selection) { p.X += mx; p.Y += my; p.Z += mz; }
-                _dragCell = now;
-                Document.Commit();
-                Edited?.Invoke("move");
-            }
+            bool vertical = (ModifierKeys & Keys.Shift) != 0;
+            var d = DragTo(e.Location, vertical);
+            Status?.Invoke($"Move {(vertical ? "up / down" : "in the " + DragPlaneName())}: {d.X:+0;-0;0}, {d.Y:+0;-0;0}, {d.Z:+0;-0;0} cells (Shift: up / down only; Ctrl+Z undoes)");
             return;
         }
         if (Tool == VehicleTool.Place && PlacePart != null)
@@ -326,14 +450,28 @@ public sealed class VehicleViewport : UserControl
             var h = Pick(e.Location);
             var c = h?.Cell;
             if (c != _hover) { _hover = c; _gl.Invalidate(); if (h != null) Status?.Invoke(Describe(h.Value.Part)); }
+            var hp = h?.Part;
+            if (hp != _tipPart) { _tipPart = hp; _tip.SetToolTip(_gl, hp == null ? "" : TipText(hp)); }
         }
     }
 
-    string Describe(VehicleDocument.Part p)
+    /// <summary>The tooltip of a part under the mouse: name, attachment, and whether it is the AI driver's seat.</summary>
+    public string TipText(VehicleDocument.Part p)
+    {
+        var info = Catalog?[p.B.Part];
+        var conn = Connectivity;
+        string att = conn == null ? "" : conn.Overlapping.Contains(p) ? "Blocked: shares cells with another part" : conn.Floating.Contains(p) ? "Not attached: falls off (hazard)" : "Attached";
+        return $"{info?.Name ?? $"unknown part 0x{p.B.Part:X8}"}{(info != null ? $"  ({info.StoreCategory})" : "")}\n{att}" +
+               (info?.IsAiSeat == true ? "\nAI DRIVER SEAT: the game's AI racers drive from it (a player's vehicle needs a driver seat)" : "");
+    }
+
+    /// <summary>The hover text of a part: name, cell, orientation, attachment, AI seat, paint, setting.</summary>
+    public string Describe(VehicleDocument.Part p)
     {
         var info = Catalog?[p.B.Part];
         var conn = Connectivity;
         string att = conn == null ? "" : conn.Overlapping.Contains(p) ? " — BLOCKED (shares cells)" : conn.Floating.Contains(p) ? " — NOT ATTACHED (hazard)" : " — attached";
+        if (info?.IsAiSeat == true) att += " — AI DRIVER SEAT (the game's AI racers drive from it; a player's vehicle needs a driver seat)";
         return $"{info?.Name ?? $"unknown part 0x{p.B.Part:X8}"} at ({p.X}, {p.Y}, {p.Z}), orientation {p.Orientation}{att}" +
                (p.B.Painted != 0 ? $", painted #{p.B.Paint >> 8:X6}" : ", default colour") + (p.B.Setting != 0 ? ", " + VehicleSettings.NameOf(p.B.Setting, info?.IsPropeller == true) : "");
     }
@@ -476,6 +614,69 @@ public sealed class VehicleViewport : UserControl
         l.Add((new Vector3(x1 - 0.5f, y, 0), new Vector3(x1 + 1.5f, y, 0), new Vector3(1f, 0.3f, 0.3f)));
     }
 
+    int _fbo, _fboCol, _fboDepth, _fboSize;
+
+    /// <summary>A picture of one part as the Parts Store shows it (its default colour, from the front right, above), for
+    /// the parts library. Null until the view's GL context exists or when the part has no model.</summary>
+    public Bitmap? PartThumbnail(PartInfo p, int size)
+    {
+        if (!_ready || Catalog == null || !IsHandleCreated) return null;
+        var model = Catalog.Model(p);
+        if (model == null) return null;
+        _gl.MakeCurrent();
+        int S = size * 2;
+        if (_fboSize != S)
+        {
+            if (_fbo != 0) { GL.DeleteFramebuffer(_fbo); GL.DeleteRenderbuffer(_fboCol); GL.DeleteRenderbuffer(_fboDepth); }
+            _fbo = GL.GenFramebuffer(); _fboCol = GL.GenRenderbuffer(); _fboDepth = GL.GenRenderbuffer();
+            GL.BindRenderbuffer(RenderbufferTarget.Renderbuffer, _fboCol);
+            GL.RenderbufferStorage(RenderbufferTarget.Renderbuffer, RenderbufferStorage.Rgba8, S, S);
+            GL.BindRenderbuffer(RenderbufferTarget.Renderbuffer, _fboDepth);
+            GL.RenderbufferStorage(RenderbufferTarget.Renderbuffer, RenderbufferStorage.DepthComponent24, S, S);
+            GL.BindFramebuffer(FramebufferTarget.Framebuffer, _fbo);
+            GL.FramebufferRenderbuffer(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0, RenderbufferTarget.Renderbuffer, _fboCol);
+            GL.FramebufferRenderbuffer(FramebufferTarget.Framebuffer, FramebufferAttachment.DepthAttachment, RenderbufferTarget.Renderbuffer, _fboDepth);
+            _fboSize = S;
+        }
+        GL.BindFramebuffer(FramebufferTarget.Framebuffer, _fbo);
+        try
+        {
+            GL.Viewport(0, 0, S, S);
+            GL.ClearColor(0.86f, 0.88f, 0.91f, 1);
+            GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
+            var probe = new VehicleDocument.Part { B = new BlueprintBlock { Part = p.Id } };
+            var (a, b) = VehicleDocument.Box(probe, p);
+            var mn = new Vector3(a.X, a.Y, a.Z) - new Vector3(0.5f); var mx = new Vector3(b.X, b.Y, b.Z) + new Vector3(0.5f);
+            var c = (mn + mx) / 2; float r = Math.Max(0.5f, (mx - mn).Length() / 2);
+            float fov = 30 * MathF.PI / 180;
+            var eye = c + Vector3.Normalize(new Vector3(0.8f, 0.6f, 1f)) * (r / MathF.Sin(fov / 2) * 0.95f);
+            var vp = Matrix4x4.CreateLookAt(eye, c, Vector3.UnitY) * Matrix4x4.CreatePerspectiveFieldOfView(fov, 1, 0.05f, 500f);
+            _r.Begin(vp, eye);
+            uint col = p.DefaultPaint;
+            _r.DrawModel(model, PartMatrix(0, 0, 0, 0), new Vector3((col >> 24) / 255f, (col >> 16 & 0xFF) / 255f, (col >> 8 & 0xFF) / 255f), Vector4.Zero);
+            _r.FlushTransparent();
+            var px = new byte[S * S * 4];
+            GL.ReadPixels(0, 0, S, S, PixelFormat.Bgra, PixelType.UnsignedByte, px);
+            using var big = new Bitmap(S, S, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            var bd = big.LockBits(new Rectangle(0, 0, S, S), System.Drawing.Imaging.ImageLockMode.WriteOnly, big.PixelFormat);
+            for (int i = 3; i < px.Length; i += 4) px[i] = 255;
+            for (int y = 0; y < S; y++) System.Runtime.InteropServices.Marshal.Copy(px, (S - 1 - y) * S * 4, bd.Scan0 + y * bd.Stride, S * 4);
+            big.UnlockBits(bd);
+            var small = new Bitmap(size, size, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            using (var g = Graphics.FromImage(small))
+            {
+                g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                g.DrawImage(big, new Rectangle(0, 0, size, size));
+            }
+            return small;
+        }
+        finally
+        {
+            GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+            _gl.Invalidate();
+        }
+    }
+
     /// <summary>Renders a frame and reads it back (screenshots, package thumbnails).</summary>
     public Bitmap Capture()
     {
@@ -519,7 +720,12 @@ public sealed class VehicleViewport : UserControl
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing && _ready) { _gl.MakeCurrent(); _r.Dispose(); }
+        if (disposing) _tip.Dispose();
+        if (disposing && _ready)
+        {
+            _gl.MakeCurrent(); _r.Dispose();
+            if (_fbo != 0) { GL.DeleteFramebuffer(_fbo); GL.DeleteRenderbuffer(_fboCol); GL.DeleteRenderbuffer(_fboDepth); }
+        }
         base.Dispose(disposing);
     }
 }

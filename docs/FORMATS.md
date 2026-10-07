@@ -1302,3 +1302,17 @@ must be written. **AI drivers sit in AI seats**: the racers carry `secondaryseat
 AI seat instead of its driver seat (moved up out of other parts: with the large AI seat sunk into the vehicle, Mr. Fit's
 car stayed on the start line in Xenia); then the race runs with all three replaced vehicles driving (verified: live
 positions of all three blueprints change during the race; one loose part fell off Mr. Fit's car).
+
+### Parts Store and game vehicle places
+
+* Parts Store contents = the parts listed in any `aid_misc_banjox_blockset_*` (big-endian u32 pairs count, part objparams
+  id; crates, Humba / log crates, keys, Jinjo bingo, start pack, demo pack, backup, blockset_all; resident in 20abf9 / 4bf033).
+  118 of the 153 shipped parts are listed. The other 35 are AI / internal variants: `*_ai_*` engines and jets, the AI taxi
+  seats (variants passengerlargeai / passengersmallai), cutscene seat, Grunty / Pikelet seats, gameplay-creator parts,
+  attach / leak points, autopilot, blower, sucker, remote control, piddles turret, fixed egg turret, heavy high-grip wheel,
+  spring ai / trolley, spotlight always-on, shield variant, Grunty floater, egg-'n'-spoon tray, light pole connector.
+* Store categories = objparams +0x228 group: seat, wheel, engine (Power), fuel, storage, ammo, body, gadget, protection,
+  flyandfloat, weapon, accessory; names in loctext `garage__grouping_*` / `block__group_*`.
+* Challenge names: loctext `challenge__<world><act>game<n>` (e.g. challenge__worldofsportact2game1 = "Burnin' Rubber"),
+  live challenges `challenge__<world>live<name>`. Vehicle assets carry the challenge in their name
+  (worldofsport_burninrubber_racer1); the markers (type 21) of `aid_marker_banjox_<world>_<act>_main` place them.
