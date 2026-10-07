@@ -16,7 +16,7 @@
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>NBModStudio</AssemblyName>
-    <Version>1.13.7</Version>
+    <Version>1.13.8</Version>
     <NoWarn>$(NoWarn);WFO1000</NoWarn>
     <ApplicationIcon>Assets\studio.ico</ApplicationIcon>
   </PropertyGroup>
@@ -26,4 +26,8 @@
     <None Update="Assets\Backgrounds\*.jpg" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- vgmstream r2117 (ISC license, thirdparty/vgmstream/COPYING; its FFmpeg DLLs are LGPL): decodes the game's XMA2 audio for the Audio tab -->
+    <None Include="thirdparty/vgmstream/**/*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

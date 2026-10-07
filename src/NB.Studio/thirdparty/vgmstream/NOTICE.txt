@@ -1,0 +1,8 @@
+vgmstream r2117 (https://github.com/vgmstream/vgmstream, release r2117, vgmstream-win64.zip), redistributed unchanged.
+NB Studio runs vgmstream-cli.exe to decode the game's XMA2 sounds for the Audio tab.
+
+License: vgmstream is under the ISC-style license in COPYING (this folder).
+The avcodec / avformat / avutil / swresample DLLs are FFmpeg libraries built by the vgmstream project, licensed under the
+GNU LGPL 2.1 or later; their source is available from https://ffmpeg.org and the vgmstream build scripts at
+https://github.com/vgmstream/vgmstream. The other DLLs (mpg123, vorbis, speex, celt, atrac9, g719) are under their own
+open-source licenses as documented by vgmstream. You may replace any of these DLLs with your own builds.

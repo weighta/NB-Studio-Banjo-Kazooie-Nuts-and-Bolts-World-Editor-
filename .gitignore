@@ -5,3 +5,7 @@ obj/
 __pycache__/
 *.pyc
 out/
+
+# vgmstream binaries ship in the release zip; builders: unzip vgmstream-win64.zip r2117 into src/NB.Studio/thirdparty/vgmstream
+src/NB.Studio/thirdparty/vgmstream/*.exe
+src/NB.Studio/thirdparty/vgmstream/*.dll
