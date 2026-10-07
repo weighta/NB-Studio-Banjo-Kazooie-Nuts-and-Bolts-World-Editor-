@@ -114,6 +114,9 @@ public sealed class PhotoViewerForm : Form
     public void AddFiles(IEnumerable<string> paths, bool dropped = false)
     {
         var files = paths.SelectMany(p => Directory.Exists(p) ? Directory.EnumerateFiles(p, "*", SearchOption.AllDirectories) : new[] { p }).ToList();
+        // vehicle saves go to the Vehicle Editor
+        var vehicles = files.Where(VehicleRouting.IsVehicleFile).ToList();
+        if (vehicles.Count > 0) { VehicleRouting.Open(vehicles); files = files.Except(vehicles).ToList(); if (files.Count == 0) return; }
         var errors = new List<string>();
         var extracted = new List<string>();
         Item? first = null;

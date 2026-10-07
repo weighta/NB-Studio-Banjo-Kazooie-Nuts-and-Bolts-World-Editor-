@@ -10,6 +10,13 @@ static class Program
         Application.ThreadException += (_, e) => MessageBox.Show(e.Exception.ToString(), "Unexpected error", MessageBoxButtons.OK, MessageBoxIcon.Error);
         // "--photos [files]", or console photo packages dropped on NBStudio.exe: only the Xbox 360 Photo Viewer
         var files = args.Where(a => a != "--photos").ToList();
+        // vehicle saves (packages "VEHICLE: …", their content files, blueprints): the Vehicle Editor
+        if (!args.Contains("--photos") && files.Count > 0 && files.All(VehicleRouting.IsVehicleFile))
+        {
+            MainForm.VehicleFilesAtStart = files;
+            Application.Run(new MainForm());
+            return;
+        }
         if (args.Contains("--photos") || (files.Count > 0 && files.All(IsPackage)))
         {
             Application.Run(new Panels.PhotoViewerForm(files));

@@ -2022,6 +2022,9 @@ static class Program
                 case "anim-import":
                     // anim-import <workspace> <anim> <file.fbx> [--model <model>] [--take <name>] [--dry]: FBX take -> anim keys
                     return AnimCommands.Import(args);
+                case "vehicle-info": case "vehicle-roundtrip": case "vehicle-export": case "vehicle-xenia-install": case "pregame-vehicles": case "vehicle-to-game":
+                    // Xbox 360 vehicle saves / blueprints / the game's own vehicles (VehicleCommands.cs)
+                    return VehicleCommands.Run(args);
                 case "skeleton":
                 {
                     // skeleton <caff> <model or anim name>: print the joint hierarchy ("pose" object)

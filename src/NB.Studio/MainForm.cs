@@ -31,6 +31,7 @@ public sealed partial class MainForm : Form
     readonly VideoPanel _video = new() { Dock = DockStyle.Fill };
     readonly TagEditorPanel _tags = new() { Dock = DockStyle.Fill };
     readonly PartImporterPanel _parts = new() { Dock = DockStyle.Fill };
+    readonly VehicleEditorPanel _vehicles = new() { Dock = DockStyle.Fill };
     readonly LivePanel _live;
     readonly AtmospherePanel _atmos;
     readonly TextBox _log = new() { Dock = DockStyle.Fill, Multiline = true, ScrollBars = ScrollBars.Both, ReadOnly = true, WordWrap = false, Font = new Font("Consolas", 9) };
@@ -100,7 +101,8 @@ public sealed partial class MainForm : Form
         var cAudio = new TabPage("Audio"); cAudio.Controls.Add(_audio);
         var cVideo = new TabPage("Video"); cVideo.Controls.Add(_video);
         var cParts = new TabPage("Part Importer"); cParts.Controls.Add(_parts);
-        _center.TabPages.AddRange(new[] { c3d, cPrev, cAtmos, cText, cAudio, cVideo, cParts });
+        var cVehicles = new TabPage("Vehicle Editor"); cVehicles.Controls.Add(_vehicles);
+        _center.TabPages.AddRange(new[] { c3d, cPrev, cAtmos, cText, cAudio, cVideo, cParts, cVehicles });
 
         var rProps = new TabPage("Properties"); rProps.Controls.Add(_transform);
         var rTags = new TabPage("Tag Editor"); rTags.Controls.Add(_tags);
@@ -193,11 +195,20 @@ public sealed partial class MainForm : Form
         _tree.AfterCheck += (_, e) => { if (e.Node?.Tag is SceneObject o) { o.Visible = e.Node.Checked; _view.Refresh3D(); } else if (e.Action != TreeViewAction.Unknown && e.Node != null) foreach (TreeNode c in e.Node.Nodes) c.Checked = e.Node.Checked; };
         _tree.NodeMouseClick += (_, e) => { if (e.Button == MouseButtons.Right && e.Node.Tag is SceneObject o) { _menuPoint = null; _tree.SelectedNode = e.Node; BuildObjectMenu(o); _objMenu.Show(_tree, e.Location); } };
         _treeSearch.TextChanged += (_, _) => FillTree();
-        _assets.AssetActivated += e => { _center.SelectedIndex = 1; _preview.Show(_ws!, e, Log); _tags.ShowAsset(_ws!, e); };
+        _assets.AssetActivated += e =>
+        {
+            // a game vehicle opens in the Vehicle Editor (its blueprint data stays in the Tag Editor on the right)
+            if (e.Type == "vehicle" && !e.Streamed && _vehicles.OpenPregameAsset(e.Name)) { SelectCenter("Vehicle Editor"); _tags.ShowAsset(_ws!, e); return; }
+            _center.SelectedIndex = 1; _preview.Show(_ws!, e, Log); _tags.ShowAsset(_ws!, e);
+        };
         _preview.Log = Log;
         _tags.Log = Log;
         _dialogue.Log = Log;
         _text.Log = Log; _audio.Log = Log; _video.Log = Log; _parts.Log = Log;
+        _vehicles.Log = Log;
+        _vehicles.WorldBundles = () => _scene?.LoadSet;
+        _vehicles.WorldLabel = () => _sceneAct?.Display ?? _sceneEntry?.Display;
+        _vehicles.VehicleSavesDir = () => TestSaves.VaultDir(_settings);
         _audio.VgmstreamPath = FindUp(Path.Combine("thirdparty", "vgmstream", "vgmstream-cli.exe"));
         _tags.Changed += () => UpdateTitle();
         _atmos.Log = Log;
@@ -215,6 +226,13 @@ public sealed partial class MainForm : Form
         {
             Log("Nuts & Bolts Mod Tool — open or create a workspace to begin (File menu).");
             var args = Environment.GetCommandLineArgs().Skip(1).ToList();
+            if (VehicleFilesAtStart.Count > 0)
+            {
+                // vehicle saves dropped on NBModStudio.exe: the last workspace (for the parts) and the Vehicle Editor
+                if (_settings.LastWorkspace != null && File.Exists(Path.Combine(_settings.LastWorkspace, "workspace.json"))) await OpenWorkspace(_settings.LastWorkspace);
+                SelectCenter("Vehicle Editor"); _vehicles.OpenFiles(VehicleFilesAtStart);
+                return;
+            }
             if (args.Count > 0) { _scripted = true; await RunScript(args); return; }
             // first start ever: offer the beginner's tour
             if (!_settings.TourOffered)
@@ -900,6 +918,7 @@ public sealed partial class MainForm : Form
         _tags.Index = _index;
         try { _text.SetWorkspace(_ws); _audio.SetWorkspace(_ws, _index); _video.SetWorkspace(_ws); _dialogue.SetWorkspace(_ws, _index); } catch (Exception e) { Log("Media panels: " + e.Message); }
         try { _parts.SetWorkspace(_ws, _index); } catch (Exception e) { Log("Part importer: " + e.Message); }
+        _vehicles.SetWorkspace(_ws, _index);
         try { _atmos.SetWorkspace(_ws, _index); } catch (Exception e) { Log("Atmosphere: " + e.Message); }
         Log($"Asset index: {_index.Entries.Count} assets in {_index.BundleSummary.Count} bundles; {_worlds.Items.Count} world scenes (double-click one to open).");
     }
@@ -1367,6 +1386,7 @@ public sealed partial class MainForm : Form
         var f = FocusedControl();
         bool typing = IsTextEntry(f);
         var tb = f as TextBoxBase;
+        if (_vehicles.Visible) return !typing && _vehicles.HandleEditKey(k);   // Vehicle Editor tab: its own undo / copy / paste / delete
         if (!typing && SceneKeysActive(f) && HandleCollisionKey(k)) return true;   // Edit Collision: Del, Ctrl+C / X / V / D act on the collision selection
         switch (k)
         {
@@ -2909,6 +2929,7 @@ public sealed partial class MainForm : Form
                     default:
                         if (await CollisionScript(a[i], Next, L)) break;
                         if (await _view.RunScriptCommand(a[i], Next, L)) break;
+                        if (await _vehicles.RunScriptCommand(a[i], Next, L, () => SelectCenter("Vehicle Editor"))) break;
                         L("script: unknown argument " + a[i]); break;
                 }
                 await Task.Delay(50);
@@ -2920,6 +2941,12 @@ public sealed partial class MainForm : Form
     // ------------------------------------------------------------------ helpers
 
     void SelectCenter(string name) { foreach (TabPage tp in _center.TabPages) if (tp.Text == name) _center.SelectedTab = tp; }
+
+    /// <summary>Vehicle saves passed to NBModStudio.exe (Program): opened in the Vehicle Editor at start.</summary>
+    public static List<string> VehicleFilesAtStart = new();
+
+    /// <summary>Opens vehicle files in this window's Vehicle Editor (the photo viewer routes vehicle packages here).</summary>
+    public void OpenVehicles(IEnumerable<string> files) { SelectCenter("Vehicle Editor"); _vehicles.OpenFiles(files); Activate(); }
 
     void Log(string s)
     {

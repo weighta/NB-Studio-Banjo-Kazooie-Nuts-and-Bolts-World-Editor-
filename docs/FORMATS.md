@@ -1175,3 +1175,111 @@ LF_K 7,602, and an 80 degree knee bend renders as a clean bend of the lower leg 
 ### Texture names
 * Imported texture names must not end in "top" (and probably "mip"): the game names texture entries `<name>top` / `<name>mip`; a "top"
   name (WOOD/OFFDESKTOP) hung Showdown Town's loading. NB's Source map importer adds `_m` to such names.
+
+
+## 11a. Vehicle saves and blueprints (Xbox 360 packages, content files, aid_vehicle assets) **[verified: 54/54 readable samples round-trip byte-identical; Xenia: editor-made packages load and drive]**
+
+(To be merged into docs/FORMATS.md after §11 "Vehicles". Code: `NB.Core/Vehicles/*`, CLI `vehicle-*`, NB Studio > Vehicle Editor.)
+
+### Three containers, one blueprint
+
+| Kind | How to tell | Layout |
+|---|---|---|
+| **Package** (what the console stores, files `0x0000000N`) | starts `CON ` | Xbox 360 STFS package (§ photo packages): title 4D5307ED, content type 1 (saved game), header size 0x971A, display name `VEHICLE: <name>` (UTF-16BE at 0x411, case as typed), thumbnail = the game icon (9573-byte PNG at 0x171A, same bytes in all 75 samples, also the title thumbnail 0x571A), media id 0x3E567DFF, transfer flags 0x40 (0x1711). **One file inside named like the package without `0x`** (package 0x00000082 holds `00000082`). |
+| **Content file** (what a package holds; what Xenia keeps in `content\<xuid>\4D5307ED\00000001\0x0000000N\0000000N`) | 8-byte prefix `3F9AE148 40547AE1` (f32 1.21, f32 3.32) | prefix + blueprint. Photo content files start f32 1.21, **f32 9.73** (never confused). |
+| **Blueprint** (`aid_vehicle_*` .data in the bundles, no pointers) | size = 0x7C + count × 0x24, part ids type 0x1F | the bare blueprint |
+
+The console names packages 0x00000001, 0x00000002, … (lowest free index) next to the save slots 0x0b0a5c5c / 0x0b0d6cca.
+**Xenia** shows a blueprint only when the file inside the content folder is named like the folder (a package installed
+under another number listed as "CORRUPT VEHICLE!" — `VehicleFile.InstallToXenia` renames). Its header file
+`Headers\00000001\0x0000000N.header` = package bytes 0..0x971A, then the folder name at 0x971A (0xA000 bytes).
+Xenia reads its content list at boot only.
+
+### Package integrity (console-written samples)
+
+* Block separation 0 (two level-0 hash tables; byte 0x37B bit 1 picks the active one: samples have both 0 and 2).
+  Rewrites leave freed blocks: hash status 0x00 unused, 0x40 freed (stale hash, skip), 0x80/0xC0 in use.
+* Checked per package (`StfsIntegrity.Check`): header hash 0x32C = SHA-1(0x344 .. first table), top hash (volume
+  descriptor +8) = SHA-1(active table), SHA-1 of every in-use block.
+* Writing (`StfsBuilder`): file table at block 0, files consecutive, two identical tables (sep 0), status 0x80, next
+  links, counts, top hash, header hash. The console signature (0x1AC, RSA over the header hash with the console's key)
+  cannot be redone: **Xenia does not check it; a real Xbox 360 needs the package rehashed and resigned (Horizon /
+  Velocity / Le Fluffie "Rehash & Resign")**. Saving over a package keeps its header (certificate, console id
+  0x36C, profile id 0x371, thumbnails); a brand-new package gets a neutral header (profile 0) or the header of a package
+  of the player's own (template).
+* **Sample folder `ROOT\vehicle saves`**: 53 of 75 packages are sound; **22 are damaged copies** (0x03, 0x18, 0x1e, 0x28,
+  0x4a–0x4e, 0x59, 0x5a, 0x5c–0x66): byte for byte equal to a sound package up to 0x4000, then other files' data
+  (an XDBF profile file, PNG pictures, UTF-16 text) — the first 16 KB FATX cluster is right, the cluster chain after it is
+  not (copied from a damaged drive / recovery tool). Header hash and top hash fail; the vehicle is not in the file.
+  0x75 "MY DEATH CAR." is hand-edited (file entry 435 bytes, declares 166 parts, records shifted by one byte); 0x85 has 28
+  bytes after its 250 parts. Both are read with warnings and round-trip unchanged.
+
+### Blueprint header (0x7C) — written by the game's serializer 0x8260FF20
+
+| Offset | Content |
+|---|---|
+| +0x00 | u16 part count (no fixed limit in the format: 65535; stock game 250, see §13.4) |
+| +0x02 | u8 1 = the vehicle is one piece ([veh+0xCDC] == 1) |
+| +0x03 | u8 not written by the game (dev assets carry 0x40..0xD0) |
+| +0x04 | f32 power = max([veh+0x1910], [veh+0x18F4]) — the "speed" bar of the blueprint lists |
+| +0x08, +0x0C | f32 stat bars ([veh+0xE90], [veh+0xE94]) |
+| +0x10 | f32 **weight = Σ objparams +0x190 of the parts** (exact on every sample and game asset) |
+| +0x14 | f32 stat bar ([veh+0xD08]) |
+| +0x18 | u32 OR of the parts' runtime ability masks ([block+0x478]; depends on the built vehicle, not per part type; game assets often hold garbage pointers — unused for spawning) |
+| +0x1C | u32 1 = some part has [block+0x334] != 0 |
+| +0x20 | name: saves UTF-16BE (≤ 31 chars + NUL, 0x40 bytes); the game's own assets an ASCII creator tag ("SalvyBob", "log_…") |
+| +0x60/+0x64/+0x68 | u32 part type (objparams id) shown for action buttons A / B / X (flags [veh+0x138C] bits 0x1000/0x2000/0x4000) |
+| +0x6C/+0x70/+0x74 | u32 per button |
+| +0x78 | u8 1 = named by the player (0: the game wrote "-- gamertag --") |
+
+The blueprint lists copy +4..+0x14 for their stat bars (0x82568170) and +0x18 (0x825DD2E0); spawning a vehicle does
+not need them. The editor recomputes count, weight and the button part types and keeps the rest.
+
+### Part record (0x24)
+
+| Offset | Content |
+|---|---|
+| +0x00 | u8 cell x, y, z (0..255; the stock garage edits 19 cells per axis, the build-area mod 31; the spawner takes any) |
+| +0x03 | u8 group: **the spawner skips parts with a non-zero group** unless the spawn asks for them (0x825698C8); the game's serializer writes 0 (one sample record has 4) |
+| +0x04 | u8 **painted**: 1 = use the paint at +0x18; 0 = the part's default colour (objparams +0x130 = a `paint_colours` entry). Set by the game when paint ≠ default (0x8256C1B8) |
+| +0x05 | u8 **setting** = index into the garage's list ([block+0x240], set by 0x82646AB8): wheels 0 Automatic, 1 Driven, 2 Steering, 3 Driven & Steering, 4 Freewheeling (verified by driving in Xenia: 1 and 3 drive, 2 and 4 do not); propellers 0 Automatic, 1 Push, 2 Pull (tables 0x821242A0 / 0x82124598: char[32] text + u32) |
+| +0x06 | u8 category = objparams +0x98 + 1 (the game's own early assets: 0) |
+| +0x07 | u8 0 |
+| +0x08 | u32 objparams id of the part (`aid_objparams_banjox_vehicleblock_*`; unknown ids: Disc Read Error in the blueprint lists) |
+| +0x0C/+0x10/+0x14 | f32 rotation X, Y, Z (rad). The game keeps one of 24 orientations per part (quaternion table 0x82F0FCD0) and writes R = Ry·Rx·Rz decomposed with atan2; System.Numerics: `CreateFromYawPitchRoll(Y, X, Z)`. Its float bits are fixed per orientation (90° about X = 0x3FC90FD6, about Y/Z = 0x3FC90FE0, …: `Orientations.Euler`). |
+| +0x18 | u32 paint RGBA |
+| +0x1C | u32 action buttons: bit 12 = A, 13 = B, 14 = X (combinations allowed) |
+| +0x20 | u32 buttons of the part's second action ([block+0x3D8]) |
+
+### Paint as the game draws it
+
+`paint_colours` = `aid_misc_banjox_paintcolours_startpack` (13 records of 0x28: char[32] name, u32 hash, u32 RGBA: blue
+4E7BC7, purple AF68CA, magenta E4CBB1, orange E09A07, greenblue 008049, pink CD65A0, black 303030, silver EBEBEB,
+greenlime 78E317, aqua 59AFB7, yellow FAFF1A, red D10903, brown 804000); the garage offers these, the format takes any
+RGB. Part materials that can be painted carry an `…_editable` texture (R = paint mask, G = hue variation). The paint
+reaches the pixel shader as **HSL in c42**; the shader tints the diffuse colour by
+`mix(1, hsl2rgb(clamp(H + 0.1·G − 0.05), S, L), R)` and the specular by half of that (literals c79 = (0.1, −0.05),
+c104..c106 = the HSL→RGB constants; read from model_banjox_vehicleparts_wheel_standard).
+
+### Part models
+
+Part models are drawn at their cell (one cell = one unit), rotated by the orientation, as authored (+Z = front).
+Their rendergraph (chunk 30) lists Maya node paths: `…SWITCH<n>_<k>` = option k of switch n. On a vehicle the game shows
+level-0 LOD nodes and one option per switch: the lowest option of the model unless the part sets it (the trolley tray's
+SWITCH1_1 junk — books, magazine, frog — shows in the garage and in town); **wheels show option 1** (suspension struts
+and springs instead of the boxy Parts Store frame, verified in Showdown Town); the shared seat model
+(model_banjox_vehicleparts_seats_all) turns switches 1–6 on from objparams +0x3DC..+0x3F0.
+
+Footprints (avatarhavokdata bounds) can share cells in valid vehicles (the trolley's wheels, bounds y −1..0, hang into
+the corners of its tray).
+
+### The game's own vehicles
+
+AI vehicles are marker records of type 21 (+0x38 blueprint id, +0x3C driver objparams, +0x40 strategy, +0x54 vehicle
+requirements). World of Sports Act 2 (act bundle 3112a5) "Burnin' Rubber": `worldofsport_burninrubber_racer1` = Mr. Fit
+(marker #42), `racer2` = Blubber (#43), `racer3` = Thomas (#8; also resident in e66c1c). Every bundle holding a blueprint
+must be written. **AI drivers sit in AI seats**: the racers carry `secondaryseats_large` / `secondaryseats_small`
+(variants "passengerlargeai" / "passengersmallai"), not a driver seat. A player vehicle put in their place gets that
+AI seat instead of its driver seat (moved up out of other parts: with the large AI seat sunk into the vehicle, Mr. Fit's
+car stayed on the start line in Xenia); then the race runs with all three replaced vehicles driving (verified: live
+positions of all three blueprints change during the race; one loose part fell off Mr. Fit's car).
