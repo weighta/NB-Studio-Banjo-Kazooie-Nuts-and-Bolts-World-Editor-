@@ -1,3 +1,4 @@
+using System.Drawing.Drawing2D;
 using System.Globalization;
 
 namespace NB.Studio.Panels;
@@ -120,4 +121,138 @@ sealed class SliderField : FlowLayoutPanel
 
     /// <summary>Sets the value as if the user typed it (scripts).</summary>
     public void SetByUser(float v) { _num.Value = Math.Clamp((decimal)v, _num.Minimum, _num.Maximum); }
+}
+
+/// <summary>
+/// The sky seen from above, for the sun direction: the centre is straight overhead, the rim the horizon (elevation 0°,
+/// the dashed rings are 30° and 60°). Drag the sun to move it; its shadow points the other way (dark line). The wedge shows
+/// where the 3D view's camera looks. Top-down map of the world: +X right, +Z down (the light setup's azimuth 0 puts the sun
+/// towards -Z: the direction towards the sun is (-cos e sin a, sin e, -cos e cos a)).
+/// </summary>
+sealed class SunDial : Control
+{
+    float _elev = 0.8f, _azim;
+    bool _drag;
+    public event Action? Changed;
+    public event Action? DragEnded;
+    /// <summary>Colour of the sun dot.</summary>
+    public Color SunColour { get => _sunColour; set { _sunColour = value; Invalidate(); } }
+    Color _sunColour = Color.FromArgb(255, 220, 120);
+    /// <summary>Yaw of the 3D view's camera (radians, forward = (sin yaw, ·, cos yaw)), or null when there is no view.</summary>
+    public float? CameraYaw { get => _camYaw; set { if (_camYaw != value) { _camYaw = value; Invalidate(); } } }
+    float? _camYaw;
+    public const float MinElevation = -10 * MathF.PI / 180;
+
+    public SunDial()
+    {
+        DoubleBuffered = true; ResizeRedraw = true; Cursor = Cursors.Hand;
+        Width = 150; Height = 150; Margin = new Padding(0, 4, 12, 4);
+        new ToolTip().SetToolTip(this, "Drag the sun. Centre = overhead, rim = horizon. The dark line is the way shadows fall; the grey wedge is where the 3D view looks.");
+    }
+
+    /// <summary>Sun elevation / azimuth in radians (the light setup's values).</summary>
+    public (float Elevation, float Azimuth) Value
+    {
+        get => (_elev, _azim);
+        set { _elev = value.Elevation; _azim = value.Azimuth; Invalidate(); }
+    }
+
+    float R => Math.Max(10, Math.Min(Width, Height) / 2f - 14);
+    PointF C => new(Width / 2f, Height / 2f);
+
+    PointF SunPoint()
+    {
+        float r = R * (1 - Math.Clamp(_elev, MinElevation, MathF.PI / 2) / (MathF.PI / 2));
+        return new PointF(C.X - MathF.Sin(_azim) * r, C.Y - MathF.Cos(_azim) * r);
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        var g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias;
+        g.Clear(Parent?.BackColor ?? Color.White);
+        var c = C; float r = R;
+        var disc = new RectangleF(c.X - r, c.Y - r, 2 * r, 2 * r);
+        using (var path = new GraphicsPath())
+        {
+            path.AddEllipse(disc);
+            using var pg = new PathGradientBrush(path) { CenterColor = Color.FromArgb(120, 170, 225), SurroundColors = new[] { Color.FromArgb(215, 230, 245) } };
+            g.FillPath(pg, path);
+        }
+        using (var ring = new Pen(Color.FromArgb(70, 40, 60, 90)) { DashStyle = DashStyle.Dot })
+            foreach (float k in new[] { 2 / 3f, 1 / 3f }) g.DrawEllipse(ring, c.X - r * k, c.Y - r * k, 2 * r * k, 2 * r * k);
+        using (var axis = new Pen(Color.FromArgb(45, 40, 60, 90)))
+        { g.DrawLine(axis, c.X - r, c.Y, c.X + r, c.Y); g.DrawLine(axis, c.X, c.Y - r, c.X, c.Y + r); }
+        using (var rim = new Pen(Color.FromArgb(150, 90, 100, 120), 1.2f)) g.DrawEllipse(rim, disc);
+        // camera wedge
+        if (_camYaw is float yaw)
+        {
+            float deg = 90 - yaw * 180 / MathF.PI;   // screen angle of (sin yaw, cos yaw) with +Z down
+            using var wb = new SolidBrush(Color.FromArgb(55, 30, 30, 40));
+            g.FillPie(wb, c.X - r * 0.9f, c.Y - r * 0.9f, r * 1.8f, r * 1.8f, deg - 27, 54);
+        }
+        // shadow direction and sun
+        var sp = SunPoint();
+        float dx = c.X - sp.X, dy = c.Y - sp.Y, len = MathF.Sqrt(dx * dx + dy * dy);
+        if (len > 1)
+        {
+            float k = r * 0.55f * Math.Clamp(1 - _elev / (MathF.PI / 2), 0.15f, 1) / len;
+            using var sh = new Pen(Color.FromArgb(170, 25, 25, 35), 4f) { EndCap = LineCap.Round, StartCap = LineCap.Round };
+            g.DrawLine(sh, c.X, c.Y, c.X + dx * k, c.Y + dy * k);
+        }
+        using (var cb = new SolidBrush(Color.FromArgb(60, 60, 70))) g.FillEllipse(cb, c.X - 3, c.Y - 3, 6, 6);
+        using (var glow = new SolidBrush(Color.FromArgb(90, _sunColour))) g.FillEllipse(glow, sp.X - 11, sp.Y - 11, 22, 22);
+        using (var sun = new SolidBrush(_sunColour)) g.FillEllipse(sun, sp.X - 7, sp.Y - 7, 14, 14);
+        using (var edge = new Pen(Color.FromArgb(200, 120, 70, 10), 1.5f)) g.DrawEllipse(edge, sp.X - 7, sp.Y - 7, 14, 14);
+        // labels: world axes
+        TextRenderer.DrawText(g, "−Z", Ui.Small, new Point((int)c.X - 8, (int)(c.Y - r) - 14), Ui.Subtle);
+        TextRenderer.DrawText(g, "+X", Ui.Small, new Point((int)(c.X + r) + 1, (int)c.Y - 7), Ui.Subtle);
+    }
+
+    void SetFrom(Point p)
+    {
+        var c = C; float r = R;
+        float px = (p.X - c.X) / r, pz = (p.Y - c.Y) / r;
+        float d = MathF.Sqrt(px * px + pz * pz);
+        float elev = Math.Clamp((1 - d) * MathF.PI / 2, MinElevation, MathF.PI / 2);
+        float azim = d < 1e-4f ? _azim : MathF.Atan2(-px, -pz);
+        if (elev == _elev && azim == _azim) return;
+        _elev = elev; _azim = azim; Invalidate();
+        Changed?.Invoke();
+    }
+
+    protected override void OnMouseDown(MouseEventArgs e) { if (e.Button == MouseButtons.Left) { _drag = true; Capture = true; SetFrom(e.Location); } base.OnMouseDown(e); }
+    protected override void OnMouseMove(MouseEventArgs e) { if (_drag) SetFrom(e.Location); base.OnMouseMove(e); }
+    protected override void OnMouseUp(MouseEventArgs e) { if (_drag) { _drag = false; Capture = false; DragEnded?.Invoke(); } base.OnMouseUp(e); }
+
+    /// <summary>Simulates a drag to a point (scripts): same path as the mouse.</summary>
+    public void DragTo(Point p) => SetFrom(p);
+}
+
+/// <summary>What the game makes of the ambient colour: its ambient is brighter on surfaces facing up and darker facing down
+/// (colour × (1.107 + 0.519 N.y), read from the game's shader constants), shown as two swatches.</summary>
+sealed class HemiSwatch : Control
+{
+    uint _amb;
+    public HemiSwatch() { DoubleBuffered = true; Width = 230; Height = 26; Margin = new Padding(10, 2, 0, 0); }
+    public uint Ambient { get => _amb; set { _amb = value; Invalidate(); } }
+
+    static Color Scale(uint rgb, float k)
+    {
+        var c = Ui.ToColor(rgb);
+        return Color.FromArgb(Math.Min(255, (int)(c.R * k)), Math.Min(255, (int)(c.G * k)), Math.Min(255, (int)(c.B * k)));
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        var g = e.Graphics;
+        g.Clear(Parent?.BackColor ?? Color.White);
+        int x = 0;
+        foreach (var (label, k) in new[] { ("sky-facing", 1.626f), ("ground-facing", 0.588f) })
+        {
+            using (var b = new SolidBrush(Scale(_amb, k))) g.FillRectangle(b, x, 4, 18, 18);
+            using (var p = new Pen(Color.FromArgb(110, 0, 0, 0))) g.DrawRectangle(p, x, 4, 18, 18);
+            TextRenderer.DrawText(g, label, Ui.Small, new Point(x + 22, 6), Ui.Subtle);
+            x += 22 + TextRenderer.MeasureText(label, Ui.Small).Width + 10;
+        }
+    }
 }

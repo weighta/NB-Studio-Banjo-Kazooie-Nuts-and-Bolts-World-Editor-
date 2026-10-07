@@ -38,6 +38,15 @@ public sealed class TextureResolver
 
     public static string Stem(string name) => name.EndsWith("top") || name.EndsWith("mip") ? name[..^3] : name;
 
+    /// <summary>Drops the decoded copies of a texture (all sizes) and the cached stream archives, after the texture was
+    /// replaced in the workspace: the next load reads the new data.</summary>
+    public void Forget(string name)
+    {
+        string stem = Stem(name);
+        foreach (var k in _cache.Keys.Where(k => Stem(k.Split('|')[0]).Equals(stem, StringComparison.OrdinalIgnoreCase)).ToList()) _cache.Remove(k);
+        _streams.Clear();
+    }
+
     /// <summary>Decodes a texture for display: the resident "…mip" asset first (half resolution, fast).</summary>
     public (byte[] Rgba, int W, int H)? Load(string name) => Load(name, full: false);
 

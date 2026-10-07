@@ -408,6 +408,7 @@ public sealed partial class SceneViewport : UserControl
         _r.InvalidateShadow();
         if (Scene != null) StartGrass();   // the grass shadow textures follow the time of day
         _gl.Invalidate();
+        LightApplied?.Invoke(LightingName);
     }
 
     /// <summary>Cycles through the level's light setups (morning, midday, afternoon, night in Showdown Town).</summary>

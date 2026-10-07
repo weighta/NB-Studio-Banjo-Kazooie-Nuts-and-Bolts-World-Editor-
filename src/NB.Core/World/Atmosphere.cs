@@ -7,11 +7,15 @@ namespace NB.Core.World;
 
 /// <summary>
 /// The values of one light setup (colours are 0xRRGGBB). Verified in Xenia for Showdown Town (snow/research/light/REPORT.md):
-/// ambient, sun colour, sun intensity, fog start / end / max opacity and fog colour. Sun elevation / azimuth and the fog
-/// switch are read back only (no visible change was tested).
+/// ambient, sun colour, sun intensity, fog start / end / max opacity and fog colour. Sun elevation / azimuth (radians):
+/// direction towards the sun = (-cos e sin a, sin e, -cos e cos a), the game's sun shader constant c51 (render research);
+/// see work/agent_src/studio19/MERGE.md for the in-game check of a changed sun direction. The fog switch is read back only.
+/// The fill light is the light setup's op 0x7E (a second directional light; off in Showdown Town, where its direction is
+/// the sun's mirrored: same elevation, azimuth + pi). HasFill is false when the setup has no op 0x7E.
 /// </summary>
 public sealed record LightValues(uint Ambient, uint Sun, float Intensity, float FogStart, float FogEnd, float FogMax, uint FogColour,
-    float SunElevation, float SunAzimuth, bool FogOn)
+    float SunElevation, float SunAzimuth, bool FogOn, bool HasFill = false, bool FillOn = false, uint FillColour = 0,
+    float FillIntensity = 0, float FillElevation = 0, float FillAzimuth = 0)
 {
     public static string Hex(uint rgb) => (rgb & 0xFFFFFF).ToString("X6");
     public override string ToString() =>
@@ -35,6 +39,26 @@ public sealed class LightSetup
 
     public const int Ambient = 0x08, Sun = 0x0C, SunElevation = 0x10, SunAzimuth = 0x14, Intensity = 0x1C;
     public const int FogOn = 0x08, FogStart = 0x0C, FogEnd = 0x10, FogMax = 0x14, FogColour = 0x24;
+    /// <summary>Fill light command (op 0x7E): +0x08 flag (0 = on), +0x0C colour RGB0, +0x10 / +0x14 elevation / azimuth,
+    /// +0x1C intensity (render research: the game's shader constants c81 / c82).</summary>
+    public const int FillFlag = 0x08, FillColour = 0x0C, FillElevation = 0x10, FillAzimuth = 0x14, FillIntensity = 0x1C;
+
+    /// <summary>Offset of the first command <paramref name="op"/> of at least <paramref name="minSize"/> bytes, or -1.</summary>
+    public static int FindOp(byte[] d, int op, int minSize)
+    {
+        if (d.Length < 0x24 + 8 || BE.S32(d, 0) != 0x24) return -1;
+        for (int o = 0x24; o + 8 <= d.Length;)
+        {
+            int size = BE.S32(d, o), k = BE.S32(d, o + 4);
+            if (size < 8 || o + size > d.Length || k == 0) return -1;
+            if (k == op && size >= minSize) return o;
+            o += size;
+        }
+        return -1;
+    }
+
+    /// <summary>Offset of the fill light command (op 0x7E), or -1.</summary>
+    public int FillCommand => FindOp(Data, 0x7E, 0x20);
 
     /// <summary>Offset of the fog command (op 0x53) or -1 when <paramref name="d"/> is not a light setup.</summary>
     public static int FindFog(byte[] d)
@@ -54,9 +78,15 @@ public sealed class LightSetup
 
     public LightValues Values
     {
-        get => new(BE.U32(Data, Ambient) >> 8, BE.U32(Data, Sun) >> 8, BE.F32(Data, Intensity),
-            BE.F32(Data, FogCommand + FogStart), BE.F32(Data, FogCommand + FogEnd), BE.F32(Data, FogCommand + FogMax),
-            BE.U32(Data, FogCommand + FogColour) >> 8, BE.F32(Data, SunElevation), BE.F32(Data, SunAzimuth), BE.U32(Data, FogCommand + FogOn) != 0);
+        get
+        {
+            int f = FillCommand;
+            return new(BE.U32(Data, Ambient) >> 8, BE.U32(Data, Sun) >> 8, BE.F32(Data, Intensity),
+                BE.F32(Data, FogCommand + FogStart), BE.F32(Data, FogCommand + FogEnd), BE.F32(Data, FogCommand + FogMax),
+                BE.U32(Data, FogCommand + FogColour) >> 8, BE.F32(Data, SunElevation), BE.F32(Data, SunAzimuth), BE.U32(Data, FogCommand + FogOn) != 0,
+                f >= 0, f >= 0 && BE.U32(Data, f + FillFlag) == 0, f >= 0 ? BE.U32(Data, f + FillColour) >> 8 : 0,
+                f >= 0 ? BE.F32(Data, f + FillIntensity) : 0, f >= 0 ? BE.F32(Data, f + FillElevation) : 0, f >= 0 ? BE.F32(Data, f + FillAzimuth) : 0);
+        }
         set
         {
             BE.W32(Data, Ambient, (value.Ambient & 0xFFFFFF) << 8);
@@ -69,6 +99,18 @@ public sealed class LightSetup
             BE.WF32(Data, FogCommand + FogEnd, value.FogEnd);
             BE.WF32(Data, FogCommand + FogMax, value.FogMax);
             BE.W32(Data, FogCommand + FogColour, (value.FogColour & 0xFFFFFF) << 8);
+            int f = FillCommand;
+            if (f >= 0 && value.HasFill)
+            {
+                // the flag word keeps its "off" value (1 in the game data) unless the light is switched
+                bool wasOn = BE.U32(Data, f + FillFlag) == 0;
+                if (value.FillOn != wasOn) BE.W32(Data, f + FillFlag, value.FillOn ? 0u : 1u);
+                // the colour word's low byte is kept (Showdown Town's night setup has 0x3EC18300 there while the light is off)
+                BE.W32(Data, f + FillColour, (value.FillColour & 0xFFFFFF) << 8 | (BE.U32(Data, f + FillColour) & 0xFF));
+                BE.WF32(Data, f + FillIntensity, value.FillIntensity);
+                BE.WF32(Data, f + FillElevation, value.FillElevation);
+                BE.WF32(Data, f + FillAzimuth, value.FillAzimuth);
+            }
         }
     }
 

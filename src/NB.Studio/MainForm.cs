@@ -191,6 +191,7 @@ public sealed partial class MainForm : Form
         _atmos.Log = Log;
         _atmos.Changed += () => UpdateTitle();
         _atmos.ExeModsChanged += () => ApplyExeMods();
+        _atmos.AttachViewport(_view, _center);   // the Atmosphere tab shows the 3D view as its live preview
         _atmos.WorldChanged += async b =>
         {
             if (_scene == null || _sceneEntry == null || _scene.Bundle != b) return;
@@ -2712,6 +2713,8 @@ public sealed partial class MainForm : Form
                         L($"script: sky texture {stem} <- {file}: {(await _atmos.ReplaceSky(stem, file, confirm: false) ? "replaced" : "FAILED")}"); break;
                     }
                     case "--atmos-save": _atmos.Save(); L("script: atmosphere saved"); break;
+                    case "--atmos-shot": { var f = Next(); await Task.Delay(300); _atmos.SaveShot(f); L("script: atmosphere tab captured " + f); break; }
+                    case "--atmos-drag": { var f = Next(); var inv = System.Globalization.CultureInfo.InvariantCulture; float a0 = float.Parse(Next(), inv), a1 = float.Parse(Next(), inv); int n = int.Parse(Next()); L("script: atmosphere drag " + _atmos.ScriptDrag(f, a0, a1, n)); break; }
                     case "--atmos-discard": _atmos.Discard(); L("script: atmosphere changes discarded: " + _atmos.ScriptState()); break;
                     case "--atmos-live": { int pid = int.Parse(Next()); L("script: atmosphere live: " + _atmos.AttachLive(pid)); break; }
                     case "--atmos-live-push": L($"script: atmosphere live push: {_atmos.PushLive()}; game reads back {_atmos.ReadLive()}"); break;

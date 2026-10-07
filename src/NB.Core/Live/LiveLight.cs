@@ -7,8 +7,13 @@ namespace NB.Core.Live;
 /// Live light and fog of the running game (snow/research/light/live.py, verified in Xenia 2026-10-01). The active light
 /// object is created from the level's light setup at load time and copied into the renderer every frame (fog start/end
 /// globals at 0x82F9DF6C), so writes show immediately and last until the next time-of-day / level load. Layout (floats):
-/// +0x10 ambient RGB, +0x20 sun RGB, +0x68 sun intensity, +0xA0 fog RGB, +0xD0 / +0xD4 / +0xD8 fog start / end / max;
-/// the fog block +0x80..+0xE0 has a second copy 0xC0 further on. Colours are byte / 255.
+/// +0x10 ambient RGB, +0x20 sun RGB, +0x30 sun direction (the light's travel direction = minus the unit vector towards
+/// the sun, from the light setup's elevation / azimuth), +0x50 the fill light's travel direction (op 0x7E), +0x68 sun
+/// intensity,
+/// +0xA0 fog RGB, +0xD0 / +0xD4 / +0xD8 fog start / end / max; the fog block +0x80..+0xE0 has a second copy 0xC0 further
+/// on. Colours are byte / 255. The sun direction is read but not written: written live, the shading follows but the
+/// shadows do not (the game sets its shadow casters up for the direction it loaded; checked 2026-10-06 in Xenia,
+/// work/agent_src/studio19/shots/live): a changed sun direction is seen in the game after saving and reloading the level.
 /// </summary>
 public static class LiveLight
 {
@@ -58,13 +63,16 @@ public static class LiveLight
         W(x, light, 0xD0, v.FogStart, v.FogEnd, v.FogMax);
     }
 
-    /// <summary>Reads the active light object (sun direction and fog switch are not part of it: returned as 0 / true).</summary>
+    /// <summary>Reads the active light object (the fog switch is not part of it: returned as true; the sun direction is
+    /// converted back to elevation / azimuth).</summary>
     public static LightValues Read(XeniaLive x, uint light)
     {
         var d = x.Read(light, 0xE0);
         if (d.Length < 0xE0) throw new InvalidOperationException("light object not readable");
         float F(int o) => BE.F32(d, o);
+        float dx = -F(0x30), dy = -F(0x34), dz = -F(0x38);
+        float elev = MathF.Asin(Math.Clamp(dy, -1f, 1f)), azim = MathF.Atan2(-dx, -dz);
         return new LightValues(ToRgb(F(0x10), F(0x14), F(0x18)), ToRgb(F(0x20), F(0x24), F(0x28)), F(0x68), F(0xD0), F(0xD4), F(0xD8),
-            ToRgb(F(0xA0), F(0xA4), F(0xA8)), 0, 0, true);
+            ToRgb(F(0xA0), F(0xA4), F(0xA8)), elev, azim, true);
     }
 }

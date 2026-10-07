@@ -51,12 +51,17 @@ public sealed class LevelLighting
     {
         var view = new AssetView(caff, symbol);
         if (!view.Has(".data")) return null;
-        var d = view.Data(".data");
+        return FromData(AssetIds.DisplayName(caff.Symbols[symbol - 1]).Replace("aid_script_banjox_lightsetup_", ""), view.Data(".data"));
+    }
+
+    /// <summary>Reads a light setup from its .data bytes (the Atmosphere tab's live preview passes the bytes it edits).</summary>
+    public static LevelLighting? FromData(string name, byte[] d)
+    {
         if (d.Length < 0x24) return null;
         static Vector3 Rgb(byte[] d, int o) => new(d[o] / 255f, d[o + 1] / 255f, d[o + 2] / 255f);
         var l = new LevelLighting
         {
-            Name = AssetIds.DisplayName(caff.Symbols[symbol - 1]).Replace("aid_script_banjox_lightsetup_", ""),
+            Name = name.Replace("aid_script_banjox_lightsetup_", ""),
             Ambient = Rgb(d, 0x08), Sun = Rgb(d, 0x0C),
             Elevation = BE.F32(d, 0x10), Azimuth = BE.F32(d, 0x14), Intensity = BE.F32(d, 0x1C),
         };
