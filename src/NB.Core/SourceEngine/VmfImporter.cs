@@ -191,6 +191,7 @@ public sealed class VmfPlan
     public int CollisionDropped, CollisionBoxed;
     public int HullBrushes;             // outer sealing hull brushes removed (or kept with KeepHull)
     public List<int> HullIds = new();   // their VMF solid ids
+    public int TileSplitExtra;          // see-through triangles added by cutting tiled faces at texture repeats (WriteScene)
     public int SkyShellBrushes, SkyPorted, SkySkippedReplica, SkyTriangles, SkyCollisionTriangles, SkyLuxels;
     public double SkyScale;
     public DVec3 SkyCamera;
@@ -990,6 +991,58 @@ public static class VmfImporter
                 sum += (0.3f * pages[u.Page][o] + 0.59f * pages[u.Page][o + 1] + 0.11f * pages[u.Page][o + 2]) / 255f; n++;
             }
         return Math.Clamp(MathF.Round(sum / n * 8) / 8, 0.125f, 1f);
+    }
+
+    /// <summary>
+    /// Cuts a triangle at the texture's repeat boundaries (integer u and v) and adds the pieces, each shifted so its texture
+    /// coordinates lie in 0..1 (positions and normals are interpolated: texture coordinates are affine on a brush face).
+    /// A triangle covering more than 1024 repeats is only shifted.
+    /// </summary>
+    static void TileSplit((Vector3 P, Vector3 N, Vector2 T) a, (Vector3 P, Vector3 N, Vector2 T) b, (Vector3 P, Vector3 N, Vector2 T) c,
+        List<(Vector3 P, Vector3 N, Vector2 T)> outTris)
+    {
+        var mn = Vector2.Min(a.T, Vector2.Min(b.T, c.T)); var mx = Vector2.Max(a.T, Vector2.Max(b.T, c.T));
+        const float Eps = 1e-4f;
+        int i0 = (int)MathF.Floor(mn.X + Eps), i1 = (int)MathF.Ceiling(mx.X - Eps) - 1, j0 = (int)MathF.Floor(mn.Y + Eps), j1 = (int)MathF.Ceiling(mx.Y - Eps) - 1;
+        i1 = Math.Max(i1, i0); j1 = Math.Max(j1, j0);
+        if ((long)(i1 - i0 + 1) * (j1 - j0 + 1) > 1024)
+        {
+            var s = new Vector2(i0, j0);
+            outTris.Add((a.P, a.N, a.T - s)); outTris.Add((b.P, b.N, b.T - s)); outTris.Add((c.P, c.N, c.T - s));
+            return;
+        }
+        static (Vector3, Vector3, Vector2) Lerp((Vector3 P, Vector3 N, Vector2 T) p, (Vector3 P, Vector3 N, Vector2 T) q, float t) =>
+            (Vector3.Lerp(p.P, q.P, t), Vector3.Lerp(p.N, q.N, t), Vector2.Lerp(p.T, q.T, t));
+        static List<(Vector3 P, Vector3 N, Vector2 T)> Clip(List<(Vector3 P, Vector3 N, Vector2 T)> poly, int axis, float bound, bool keepAbove)
+        {
+            var res = new List<(Vector3 P, Vector3 N, Vector2 T)>();
+            for (int k = 0; k < poly.Count; k++)
+            {
+                var p = poly[k]; var q = poly[(k + 1) % poly.Count];
+                float dp = (axis == 0 ? p.T.X : p.T.Y) - bound, dq = (axis == 0 ? q.T.X : q.T.Y) - bound;
+                if (!keepAbove) { dp = -dp; dq = -dq; }
+                if (dp >= 0) res.Add(p);
+                if ((dp >= 0) != (dq >= 0)) res.Add(Lerp(p, q, dp / (dp - dq)));
+            }
+            return res;
+        }
+        for (int i = i0; i <= i1; i++)
+            for (int j = j0; j <= j1; j++)
+            {
+                var poly = new List<(Vector3 P, Vector3 N, Vector2 T)> { a, b, c };
+                if (i > i0) poly = Clip(poly, 0, i, true);
+                if (i < i1 && poly.Count > 0) poly = Clip(poly, 0, i + 1, false);
+                if (j > j0 && poly.Count > 0) poly = Clip(poly, 1, j, true);
+                if (j < j1 && poly.Count > 0) poly = Clip(poly, 1, j + 1, false);
+                if (poly.Count < 3) continue;
+                var s = new Vector2(i, j);
+                for (int k = 1; k + 1 < poly.Count; k++)
+                {
+                    var (p0, p1, p2) = (poly[0], poly[k], poly[k + 1]);
+                    if (Vector3.Cross(p1.P - p0.P, p2.P - p0.P).LengthSquared() < 1e-12f) continue;
+                    outTris.Add((p0.P, p0.N, p0.T - s)); outTris.Add((p1.P, p1.N, p1.T - s)); outTris.Add((p2.P, p2.N, p2.T - s));
+                }
+            }
     }
 
     static List<List<VmfFace>> SplitFaces(List<VmfFace> faces, int maxTris, float maxExtent = float.MaxValue)
@@ -1930,11 +1983,28 @@ public static class VmfImporter
                 // texture coordinates in repeats; shifted by whole repeats per face so the 16-bit UVs stay precise
                 var uv = surf.Texels.Select(t => new Vector2((float)(t.U / mp.TexW), (float)(t.V / mp.TexH))).ToList();
                 float su = MathF.Floor(uv.Min(t => t.X)), sv = MathF.Floor(uv.Min(t => t.Y));
-                // the see-through templates clamp their texture coordinates (no repeat): a face showing one whole image
-                // (decal-like: 0.9995 .. 1.9997) is shifted by the repeat of its centre, so it maps onto 0 .. 1
                 if (mp.Kind != MaterialKind.Opaque)
                 {
-                    su = MathF.Floor((uv.Min(t => t.X) + uv.Max(t => t.X)) / 2); sv = MathF.Floor((uv.Min(t => t.Y) + uv.Max(t => t.Y)) / 2);
+                    // the see-through materials (the game's decal / grill sections) clamp their textures: a face whose
+                    // texture repeats is cut at the repeat boundaries, each piece mapped onto 0..1 of the texture
+                    var tp = surf.Positions.Select(p => f.Sky3D ? GS(p) : G(p)).ToList();
+                    var tn = surf.Normals.Select(GN).ToList();
+                    var tris = new List<(Vector3 P, Vector3 N, Vector2 T)>();
+                    for (int t = 0; t + 2 < surf.Triangles.Count; t += 3)
+                    {
+                        int a = surf.Triangles[t], b = surf.Triangles[t + 1], c = surf.Triangles[t + 2];
+                        TileSplit((tp[a], tn[a], uv[a]), (tp[b], tn[b], uv[b]), (tp[c], tn[c], uv[c]), tris);
+                    }
+                    plan.TileSplitExtra += tris.Count / 3 - surf.Triangles.Count / 3;
+                    for (int side = 0; side < (mp.TwoSided ? 2 : 1); side++)
+                        for (int t = 0; t < tris.Count; t += 3)
+                            for (int k = 0; k < 3; k++)
+                            {
+                                var (p, n, tt) = tris[t + (side == 0 ? k : 2 - k)];   // $nocull: the back side reversed
+                                mesh.Triangles.Add(mesh.Positions.Count);
+                                mesh.Positions.Add(p); mesh.Normals!.Add(side == 0 ? n : -n); mesh.UVs!.Add(tt);
+                            }
+                    continue;
                 }
                 for (int k = 0; k < surf.Positions.Count; k++)
                 {
@@ -2171,7 +2241,8 @@ public static class VmfImporter
         var t = p.Materials.Where(m => m.Kind != MaterialKind.Opaque).ToList();
         if (t.Count == 0) return "see-through materials: none";
         int cut = t.Count(m => m.Kind == MaterialKind.Cutout), two = t.Count(m => m.TwoSided);
-        return $"see-through materials: {t.Count} ({cut} cut out, {t.Count - cut} blended{(two > 0 ? $", {two} two-sided" : "")}) in {p.Chunks.Count(c => c.Material.Kind != MaterialKind.Opaque)} chunk(s); not lightmapped, no light blocking";
+        return $"see-through materials: {t.Count} ({cut} cut out, {t.Count - cut} blended{(two > 0 ? $", {two} two-sided" : "")}) in {p.Chunks.Count(c => c.Material.Kind != MaterialKind.Opaque)} chunk(s); not lightmapped, no light blocking" +
+               (p.TileSplitExtra > 0 ? $"; tiled faces cut at texture repeats: +{p.TileSplitExtra:N0} triangles" : "");
     }
 
     public static List<string> Describe(VmfPlan p)
