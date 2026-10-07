@@ -25,6 +25,14 @@ public sealed class Settings
     /// saved in Mumbo's garage during a test are there in the next test of the same workspace.</summary>
     public bool QuickTestFreshSave { get; set; }
 
+    /// <summary>Test in Xenia: every test starts with the full (all-unlocked) save, resumed in Showdown Town (TestSaves).</summary>
+    public bool QuickTestFullSave { get; set; }
+
+    /// <summary>Where vehicles saved during tests are kept (TestSaves): "" = shared, NB Multiplayer's blueprint folder when it
+    /// is installed (else NB Studio's); "studio" = NB Studio's shared folder; "workspace" = each workspace's own test save
+    /// (not shared); anything else = that folder.</summary>
+    public string? VehicleSaves { get; set; }
+
     /// <summary>How many steps Ctrl+Z can go back.</summary>
     public int UndoSteps { get; set; } = 100;
     /// <summary>3D view: S scales the selection (Blender style). Off: S always flies backwards.</summary>

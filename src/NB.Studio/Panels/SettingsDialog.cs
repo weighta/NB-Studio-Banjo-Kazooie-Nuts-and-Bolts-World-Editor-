@@ -13,6 +13,9 @@ public sealed class SettingsDialog : Form
     readonly NumericUpDown _undo = new() { Minimum = 1, Maximum = 1000, Width = 90, BackColor = Color.FromArgb(46, 49, 60), ForeColor = Text1, BorderStyle = BorderStyle.FixedSingle, Font = new Font("Segoe UI", 10.5f) };
     readonly CheckBox _autoOpen = Check("Open the last workspace when NB Studio starts");
     readonly CheckBox _freshSave = Check("Fresh save for every test (also forgets vehicles saved in the garage)");
+    readonly CheckBox _fullSave = Check("Start tests with a full (all-unlocked) save");
+    readonly ComboBox _vehicles = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 300, BackColor = Color.FromArgb(46, 49, 60), ForeColor = Color.FromArgb(236, 236, 242), FlatStyle = FlatStyle.Flat, Font = new Font("Segoe UI", 9.5f) };
+    string? _customVehicles;
     readonly TextBox _xenia = new() { BackColor = Color.FromArgb(46, 49, 60), ForeColor = Text1, BorderStyle = BorderStyle.FixedSingle, Font = new Font("Segoe UI", 9.5f) };
 
     readonly CheckedListBox _mods = new() { CheckOnClick = true, BorderStyle = BorderStyle.FixedSingle, BackColor = Color.FromArgb(46, 49, 60), ForeColor = Color.FromArgb(236, 236, 242), Font = new Font("Segoe UI", 9f), IntegralHeight = false };
@@ -39,7 +42,7 @@ public sealed class SettingsDialog : Form
         Text = "Settings";
         FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = false; MinimizeBox = false; ShowInTaskbar = false;
         StartPosition = FormStartPosition.CenterParent; BackColor = Bg; ForeColor = Text1; Font = new Font("Segoe UI", 10f);
-        ClientSize = new Size(600, 862);
+        ClientSize = new Size(600, 952);
         AutoScaleMode = AutoScaleMode.Dpi;
 
         var title = new Label { UseMnemonic = false, Text = "Settings", Font = new Font("Segoe UI Semibold", 16f), ForeColor = Accent, AutoSize = true, Location = new Point(22, 16) };
@@ -70,9 +73,38 @@ public sealed class SettingsDialog : Form
         startCard.Controls.Add(_autoOpen);
 
         // ---- xenia
-        var xCard = Section("Xenia (Build > Test in Xenia, F5)", ref y, 114);
+        var xCard = Section("Xenia (Build > Test in Xenia, F5)", ref y, 204);
         _freshSave.Location = new Point(16, 78); _freshSave.Checked = s.QuickTestFreshSave;
         xCard.Controls.Add(_freshSave);
+        _fullSave.Location = new Point(16, 106); _fullSave.Checked = s.QuickTestFullSave;
+        xCard.Controls.Add(_fullSave);
+        // where vehicles saved during tests go: shared by every workspace (and NB Multiplayer), or per workspace
+        xCard.Controls.Add(Label("Vehicle saves:", 16, 141));
+        string? mp = NB.Core.Project.VehicleVault.MultiplayerVault;
+        _vehicles.Items.AddRange(new object[] { mp != null ? "Shared with NB Multiplayer" : "Shared by all workspaces", "Shared by NB Studio's workspaces", "Per workspace (not shared)", "Custom folder…" });
+        _customVehicles = s.VehicleSaves is { Length: > 0 } c && c != "studio" && c != "workspace" ? c : null;
+        _vehicles.SelectedIndex = s.VehicleSaves switch { null or "" => 0, "studio" => 1, "workspace" => 2, _ => 3 };
+        _vehicles.Location = new Point(126, 138);
+        var vNote = Note("", 16, 170, 530, 30);
+        void ShowVehicles() => vNote.Text = _vehicles.SelectedIndex switch
+        {
+            0 => mp != null ? "NB Multiplayer's blueprint folder: " + mp : "NB Studio's folder: " + Path.Combine(NB.Core.Project.ProjectRegistry.DataDir, "blueprint_vault"),
+            1 => Path.Combine(NB.Core.Project.ProjectRegistry.DataDir, "blueprint_vault"),
+            2 => "Each workspace keeps the vehicles of its own tests (Build > Reset Test Save).",
+            _ => _customVehicles ?? "(choose a folder)",
+        };
+        _vehicles.SelectionChangeCommitted += (_, _) =>
+        {
+            if (_vehicles.SelectedIndex == 3)
+            {
+                using var d = new FolderBrowserDialog { Description = "Folder for the vehicles saved during tests", UseDescriptionForTitle = true };
+                if (d.ShowDialog(this) == DialogResult.OK) _customVehicles = d.SelectedPath;
+                else if (_customVehicles == null) _vehicles.SelectedIndex = 0;
+            }
+            ShowVehicles();
+        };
+        ShowVehicles();
+        xCard.Controls.Add(_vehicles); xCard.Controls.Add(vNote);
         _xenia.Location = new Point(16, 40); _xenia.Width = 420; _xenia.Text = s.XeniaPath ?? "";
         var browse = Btn("Browse…");
         browse.Location = new Point(446, 37);
@@ -109,6 +141,8 @@ public sealed class SettingsDialog : Form
             _s.UndoSteps = (int)_undo.Value;
             _s.AutoOpenLast = _autoOpen.Checked;
             _s.QuickTestFreshSave = _freshSave.Checked;
+            _s.QuickTestFullSave = _fullSave.Checked;
+            _s.VehicleSaves = _vehicles.SelectedIndex switch { 0 => null, 1 => "studio", 2 => "workspace", _ => _customVehicles };
             var list = _modIds.Where((_, i) => _mods.GetItemChecked(i)).ToList();
             // the recommended set is stored as "not customised", so later NB Studio versions can extend it
             bool same = list.Count == NB.Core.Mods.ExePatches.RecommendedForNewWorkspaces.Count && !list.Except(NB.Core.Mods.ExePatches.RecommendedForNewWorkspaces).Any();

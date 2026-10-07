@@ -16,7 +16,7 @@
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>NBModStudio</AssemblyName>
-    <Version>1.13.10</Version>
+    <Version>1.14.0</Version>
     <NoWarn>$(NoWarn);WFO1000</NoWarn>
     <ApplicationIcon>Assets\studio.ico</ApplicationIcon>
   </PropertyGroup>
@@ -24,6 +24,18 @@
   <ItemGroup>
     <None Update="Assets\*.png" CopyToOutputDirectory="PreserveNewest" />
     <None Update="Assets\Backgrounds\*.jpg" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <!-- the all-unlocked save of NB Multiplayer (coop\saves, beside NBModTool in the project folder or at the top of a checkout):
+         Test in Xenia's "full save" (TestSaves.cs); not bundled when it is missing (NB Multiplayer's own copy is used then) -->
+    <SavesRoot>$(MSBuildThisFileDirectory)..\..\..\</SavesRoot>
+    <SavesRoot Condition="!Exists('$(SavesRoot)coop\saves')">$(MSBuildThisFileDirectory)..\..\</SavesRoot>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="$(SavesRoot)coop\saves\AllUnlocked.sav" Link="saves\AllUnlocked.sav" Condition="Exists('$(SavesRoot)coop\saves\AllUnlocked.sav')" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="$(SavesRoot)coop\saves\savegame.header.template" Link="saves\savegame.header.template" Condition="Exists('$(SavesRoot)coop\saves\savegame.header.template')" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

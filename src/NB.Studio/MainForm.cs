@@ -490,6 +490,13 @@ public sealed partial class MainForm : Form
         build.DropDownItems.Add(new ToolStripMenuItem("&Launch Workspace in Xenia (title screen)", null, (_, _) => LaunchXenia(), Keys.Control | Keys.F5));
         build.DropDownItems.Add(new ToolStripMenuItem("Reset Test Save (vehicles saved during tests)…", null, async (_, _) => await ResetTestSave())
             { ToolTipText = "Test in Xenia keeps its own save per workspace: vehicles you save in Mumbo's garage during a test are there in the next test. This empties it (your NB Multiplayer and Xenia saves are never touched)." });
+        var fullSave = new ToolStripMenuItem("Start Tests with a &Full Save (all unlocked)") { CheckOnClick = true, Checked = _settings.QuickTestFullSave,
+            ToolTipText = "F5 / Shift+F5 resume NB Multiplayer's all-unlocked save (every world, Act, vehicle and part) in Showdown Town instead of a new game. Only the test's own save is changed." };
+        fullSave.CheckedChanged += (_, _) => { _settings.QuickTestFullSave = fullSave.Checked; _settings.Save(); Log($"Test in Xenia: {(fullSave.Checked ? "full (all-unlocked) save" : "new game")} from the next test."); };
+        build.DropDownOpening += (_, _) => fullSave.Checked = _settings.QuickTestFullSave;
+        build.DropDownItems.Add(fullSave);
+        build.DropDownItems.Add("Open &Vehicle Saves Folder", null, (_, _) => OpenVehicleSaves());
+        build.DropDownItems.Add("Import Xbox 360 Vehicles…", null, (_, _) => ImportVehicles());
         build.DropDownItems.Add("Set Xenia Executable…", null, (_, _) => PickXenia());
 
         var tools = new ToolStripMenuItem("&Tools");
@@ -2262,9 +2269,7 @@ public sealed partial class MainForm : Form
                     Log($"  Xenia settings (controls, graphics) from {cfg}");
                 }
                 var content = Path.Combine(storage, "content");
-                QuickTest.ClearSaves(content, keepBlueprints: !_settings.QuickTestFreshSave);
-                var bps = QuickTest.TestBlueprints(content);
-                Log(_settings.QuickTestFreshSave ? "  fresh test save (File > Settings)" : bps.Count > 0 ? $"  vehicles saved in earlier tests: {string.Join(", ", bps)} (Build > Reset Test Save forgets them)" : "  no vehicles saved in earlier tests yet");
+                TestSaves.Prepare(ws, content, _settings, exe, t.IsAct, s => Log("  " + s));   // full save, shared vehicles
                 WriteExeModsFor(storage);
                 port = _qtPort = int.TryParse(Environment.GetEnvironmentVariable("NB_STUDIO_PAD_PORT"), out var fixedPort) ? fixedPort : QuickTest.FreeUdpPort();   // env: test harnesses
                 foreach (var a in new[] { $"--storage_root={storage}", $"--content_root={Path.Combine(storage, "content")}", $"--log_file={Path.Combine(storage, "xenia.log")}", "--network_mode=0",
@@ -2275,13 +2280,14 @@ public sealed partial class MainForm : Form
                 // any other Xenia: its own settings, but a separate content folder (an empty save, the user's saves untouched)
                 string content = Path.Combine(dir, "content");
                 Directory.CreateDirectory(content);
-                QuickTest.ClearSaves(content, keepBlueprints: !_settings.QuickTestFreshSave);
+                TestSaves.Prepare(ws, content, _settings, null, t.IsAct, s => Log("  " + s));
                 ApplyExeMods(askForXenia: true);
                 psi.ArgumentList.Add($"--content_root={content}");
             }
             foreach (var a in (Environment.GetEnvironmentVariable("NB_STUDIO_XENIA_EXTRA") ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries)) psi.ArgumentList.Add(a);
             psi.ArgumentList.Add(xex);
             _qtProcess = Process.Start(psi); _live.PreferPid = _qtProcess?.Id;
+            if (_qtProcess != null) TestSaves.Watch(_qtProcess, ws, isFork ? Path.Combine(dir, "xenia", "content") : Path.Combine(dir, "content"), _settings, s => Log("  " + s));
         }
         catch (Exception e) { Error("Could not start Xenia", e); return; }
         if (_qtProcess == null) return;
@@ -2324,6 +2330,26 @@ public sealed partial class MainForm : Form
         catch (Exception) { }
     }
 
+    /// <summary>Build > Open Vehicle Saves Folder: the shared folder of vehicles saved during tests (TestSaves).</summary>
+    void OpenVehicleSaves()
+    {
+        var dir = TestSaves.VaultDir(_settings) ?? (_ws != null ? Path.Combine(QuickTest.Folder(_ws), "xenia", "content") : null);
+        if (dir == null) { Log("Vehicle saves are kept per workspace (File > Settings): open a workspace first."); return; }
+        Directory.CreateDirectory(dir);
+        var n = TestSaves.VaultDir(_settings) != null ? NB.Core.Project.VehicleVault.Vehicles(dir) : null;
+        Log($"Vehicle saves: {dir}" + (n != null ? $" — {n.Count} vehicle(s): {string.Join(", ", n.Select(e => e.Name).Take(20))}{(n.Count > 20 ? " …" : "")}" : ""));
+        try { Process.Start(new ProcessStartInfo("explorer.exe", $"\"{dir}\"") { UseShellExecute = true }); } catch (Exception e) { Log("Could not open the folder: " + e.Message); }
+    }
+
+    /// <summary>Build > Import Xbox 360 Vehicles: vehicle packages (0x0000000N files) copied from an Xbox 360 go into the
+    /// shared vehicle saves, so every test (and NB Multiplayer) has them.</summary>
+    void ImportVehicles()
+    {
+        using var d = new OpenFileDialog { Title = "Xbox 360 vehicle packages (files named 0x0000000N, copied from the console's Banjo-Kazooie: Nuts & Bolts saves)", Multiselect = true, Filter = "All files|*.*" };
+        if (d.ShowDialog(this) != DialogResult.OK) return;
+        try { Log(TestSaves.Import(_settings, d.FileNames)); } catch (Exception e) { Error("Import vehicles failed", e); }
+    }
+
     /// <summary>Build > Reset Test Save: empties this workspace's test save (game save and vehicles saved during tests).</summary>
     async Task ResetTestSave()
     {
@@ -2333,7 +2359,12 @@ public sealed partial class MainForm : Form
         if (!_scripted && MessageBox.Show(this, "Forget everything Test in Xenia saved for this workspace?" + (bps.Count > 0 ? "\n\nVehicles: " + string.Join(", ", bps) : "") +
                 "\n\nYour NB Multiplayer and Xenia saves are not touched.", "Reset Test Save", MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK) return;
         if (_qtProcess is { HasExited: false } p) await CloseTestGame(p);
-        try { QuickTest.ResetTestSave(_ws); Log($"Test save reset ({bps.Count} vehicle(s) forgotten); the next test starts with an empty save."); }
+        try
+        {
+            if (TestSaves.VaultDir(_settings) is { } vault) NB.Core.Project.VehicleVault.Forget(vault, TestSaves.Owner(_ws));   // not "deleted in the game"
+            QuickTest.ResetTestSave(_ws);
+            Log($"Test save reset ({bps.Count} vehicle(s) forgotten); the next test starts with an empty save" + (TestSaves.VaultDir(_settings) is { } v ? $" and the shared vehicle saves ({v})." : "."));
+        }
         catch (Exception e) { Error("Reset Test Save failed", e); }
     }
 
@@ -2723,6 +2754,9 @@ public sealed partial class MainForm : Form
                         L($"script: quick test started: pid {_qtProcess?.Id}"); break;
                     }
                     case "--quicktest-reset": await ResetTestSave(); L("script: test save reset"); break;
+                    case "--quicktest-fullsave": _settings.QuickTestFullSave = Next() == "on"; L($"script: full save {_settings.QuickTestFullSave}"); break;
+                    case "--vehicle-saves": { var v = Next(); _settings.VehicleSaves = v == "default" ? null : v; L($"script: vehicle saves {TestSaves.VaultDir(_settings) ?? "per workspace"}"); break; }
+                    case "--import-vehicles": L("script: " + TestSaves.Import(_settings, Directory.GetFiles(Next(), "0x*"))); break;
                     case "--quicktest-blueprints": L("script: test blueprints: " + string.Join(", ", QuickTest.TestBlueprints(Path.Combine(QuickTest.Folder(_ws!), "xenia", "content")))); break;
                     case "--quicktest-wait": { if (_qtBoot != null) L("script: quick test: " + await _qtBoot); break; }
                     case "--quicktest-pid": { var f = Next(); File.WriteAllText(f, _qtProcess?.Id.ToString() ?? ""); L($"script: quick test pid {_qtProcess?.Id} -> {f}"); break; }
