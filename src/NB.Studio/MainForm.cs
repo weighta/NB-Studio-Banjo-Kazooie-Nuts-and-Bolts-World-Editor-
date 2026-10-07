@@ -27,6 +27,7 @@ public sealed partial class MainForm : Form
     readonly TransformPanel _transform = new() { Dock = DockStyle.Fill };
     readonly TextPanel _text = new() { Dock = DockStyle.Fill };
     readonly DialoguePanel _dialogue = new() { Dock = DockStyle.Fill };
+    readonly AnimationPanel _anims = new() { Dock = DockStyle.Fill };
     readonly AudioPanel _audio = new() { Dock = DockStyle.Fill };
     readonly VideoPanel _video = new() { Dock = DockStyle.Fill };
     readonly TagEditorPanel _tags = new() { Dock = DockStyle.Fill };
@@ -109,7 +110,8 @@ public sealed partial class MainForm : Form
         var rTags = new TabPage("Tag Editor"); rTags.Controls.Add(_tags);
         var rLive = new TabPage("Live (game)"); rLive.Controls.Add(_live);
         var rDlg = _dialogueTab = new TabPage("Dialogue"); rDlg.Controls.Add(_dialogue);
-        _right.TabPages.AddRange(new[] { rProps, rTags, rLive, rDlg });
+        var rAnim = new TabPage("Animations"); rAnim.Controls.Add(_anims);   // the selected character's animations (Panels/AnimationPanel.cs)
+        _right.TabPages.AddRange(new[] { rProps, rTags, rLive, rDlg, rAnim });
 
         var splitLR = new SplitContainer { Dock = DockStyle.Fill, SplitterDistance = 320 };
         var splitCR = new SplitContainer { Dock = DockStyle.Fill, SplitterDistance = 900 };
@@ -206,6 +208,7 @@ public sealed partial class MainForm : Form
         _preview.Log = Log;
         _tags.Log = Log;
         _dialogue.Log = Log;
+        _anims.Log = Log; _anims.View = _view;
         _text.Log = Log; _audio.Log = Log; _video.Log = Log; _parts.Log = Log;
         _vehicles.Log = Log;
         _vehicles.WorldBundles = () => _scene?.LoadSet;
@@ -1888,6 +1891,9 @@ public sealed partial class MainForm : Form
             terrain.Checked = scenery.Checked = true;
             foreach (var o in _scene.Objects.Where(o => o.Kind == SceneObjectKind.Terrain))
                 terrain.Nodes.Add(new TreeNode(o.Name) { Tag = o, Checked = o.Visible });
+            // water regions (chunk 38): selectable and movable like scenery (WorldScene.Water.cs)
+            foreach (var o in _scene.Objects.Where(o => o.Kind == SceneObjectKind.Water))
+                terrain.Nodes.Add(new TreeNode(o.Name + (o.Dirty ? " *" : "")) { Tag = o, Checked = o.Visible, ToolTipText = "Water region of the background model (chunk 38): move, scale or turn it about the vertical axis, then World > Save. The game's water is flat: other rotations are dropped when saving." });
             foreach (var g in _scene.Objects.Where(o => o.Kind == SceneObjectKind.Scenery && (q == "" || o.Name.ToLowerInvariant().Contains(q) || o.ModelName.ToLowerInvariant().Contains(q)))
                          .GroupBy(o => AssetIds.DisplayName(o.ModelName).Replace("aid_model_banjox_background_", "")).OrderBy(g => g.Key))
             {
@@ -1931,6 +1937,7 @@ public sealed partial class MainForm : Form
             _dialogueFor = o;
             _dialogue.Show(o?.Kind == SceneObjectKind.Marker ? _scene : null, o?.Kind == SceneObjectKind.Marker ? o : null, _index);
             _dialogueTab.Text = _dialogue.LineCount > 0 ? $"Dialogue ({_dialogue.LineCount})" : "Dialogue";
+            _anims.Show(o?.Kind == SceneObjectKind.Marker ? _scene : null, o?.Kind == SceneObjectKind.Marker ? o : null, _index);
             if (_dialogue.AutoShow && _dialogue.LineCount > 0 && _right.SelectedIndex == 0) _right.SelectedTab = _dialogueTab;   // from Properties only (not Tag Editor / Live)
         }
         _tags.ShowObject(_scene, o);
@@ -2607,6 +2614,10 @@ public sealed partial class MainForm : Form
                     case "--dialogue-lang": _dialogue.ScriptLanguage(Next()); L("script: dialogue " + _dialogue.ScriptState()); break;
                     case "--dialogue-edit": { var n = Next(); var t = Next(); L("script: dialogue " + _dialogue.ScriptEdit(n, t)); break; }
                     case "--dialogue-save": _dialogue.ScriptSave(); L("script: dialogue saved"); break;
+                    case "--anim-list": L("script: animations " + _anims.ScriptState()); foreach (var x in _anims.ScriptList()) L("    " + x); break;
+                    case "--anim-pose": { var q = Next(); float sec = float.Parse(Next(), System.Globalization.CultureInfo.InvariantCulture); L("script: animation pose " + _anims.ScriptPose(q, sec)); break; }
+                    case "--anim-play": { bool on = Next() == "on"; _anims.ScriptPlay(on); L($"script: animation {(on ? "playing" : "paused")}"); break; }
+                    case "--anim-export": { var f = Next(); L("script: animation exported " + (_anims.Export(f) ?? "(nothing)") + ": " + _anims.LastExport); break; }
                     case "--redo": await Redo(); L("script: redo"); break;
                     case "--path-link":
                     {

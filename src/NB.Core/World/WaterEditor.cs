@@ -135,7 +135,8 @@ public static class WaterEditor
             W32(r + 8, (uint)surf); selfPtrs.Add(r + 8);
             W32(r + 0xC, (uint)reg.Triangles.Count);
             W32(r + 0x10, (uint)vo); gpuPtrs.Add(r + 0x10);
-            var corners = new[] { new Vector3(mn.X, mn.Y, mn.Z), new Vector3(mx.X, mn.Y, mn.Z), new Vector3(mn.X, mn.Y, mx.Z), new Vector3(mx.X, mn.Y, mx.Z) };
+            // the region's own plane when it has one (Nutty Acres' sea square), else the triangles' box at their lowest height
+            var corners = reg.Plane.Length == 4 ? reg.Plane : new[] { new Vector3(mn.X, mn.Y, mn.Z), new Vector3(mx.X, mn.Y, mn.Z), new Vector3(mn.X, mn.Y, mx.Z), new Vector3(mx.X, mn.Y, mx.Z) };
             for (int k = 0; k < 4; k++) WF4(r + 0x20 + 16 * k, corners[k]);
             WF4(r + 0x60, mn); WF4(r + 0x70, mx);
             WF4(r + 0x80, new Vector3(cx, 0, cz));

@@ -59,6 +59,7 @@ public sealed partial class SceneViewport : UserControl
     bool DrawsModel(SceneObject o, bool keepSelected = true) => o.Visible && o.Model != null && o.Kind switch
     {
         SceneObjectKind.Terrain => ShowTerrain,
+        SceneObjectKind.Water => WaterShown,   // SceneViewport.Visgroups.cs
         SceneObjectKind.Scenery => ShowScenery && ((keepSelected && o == Selected) || !IsHidden(o)),
         _ => _showObjects,
     };
@@ -475,35 +476,10 @@ public sealed partial class SceneViewport : UserControl
     /// water shader is not translated; colour and opacity were matched by eye to Showdown Town's harbour).</summary>
     ModelAsset? BuildWater(WorldScene scene)
     {
-        try
-        {
-            var regions = WaterEditor.Read(scene.Caff, scene.Background.View.Symbol);
-            if (regions.Count == 0) return null;
-            var model = new ModelAsset();
-            string? skyTex = (_sky != null ? new[] { _sky } : _skies.Select(sk => sk.Model)).Select(m => m?.Draws.SelectMany(d => d.Textures).Select(t => t.Texture).FirstOrDefault(t => !t.StartsWith('#'))).FirstOrDefault(t => t != null);
-            foreach (var r in regions)
-            {
-                if (r.Triangles.Count < 3) continue;
-                int n = r.Triangles.Count - r.Triangles.Count % 3;
-                var d = new MeshDraw
-                {
-                    Positions = r.Triangles.Take(n).ToArray(),
-                    Normals = Enumerable.Repeat(Vector3.UnitY, n).ToArray(),
-                    UVs = r.Triangles.Take(n).Select(p => new Vector2(p.X, p.Z) * 0.02f).ToArray(),
-                    Indices = Enumerable.Range(0, n).ToArray(),
-                    SectionFlags = 0x4502,
-                };
-                model.Draws.Add(d);
-                _r.MaterialOverrides[d] = new MaterialInfo
-                {
-                    Blend = BlendKind.Blend, Tint = new Vector3(0.10f, 0.21f, 0.24f), Opacity = 0.85f,
-                    SpecPower = 140, SpecColour = new Vector3(0.9f), Reflect = skyTex, ReflectStrength = 0.38f,
-                };
-            }
-            AddSea(model, regions, skyTex);   // Nutty Acres' sea (SceneViewport.Visgroups.cs)
-            return model.Draws.Count > 0 ? model : null;
-        }
-        catch (Exception e) { scene.Log.Add("water: " + e.Message); return null; }
+        // the water regions are objects of the scene (WorldScene.Water.cs: selectable, movable, saved); only their look
+        // is set here (SceneViewport.Visgroups.cs)
+        SetWaterMaterials(scene);
+        return null;
     }
 
     // ------------------------------------------------------------------ scene
@@ -528,6 +504,7 @@ public sealed partial class SceneViewport : UserControl
     public void SetScene(WorldScene? scene, bool keepCamera = false)
     {
         CancelTransform();
+        ClearPoses();
         if (_ready)
         {
             _gl.MakeCurrent();
@@ -563,6 +540,7 @@ public sealed partial class SceneViewport : UserControl
             if (!keepCamera) { _camPos = c + new Vector3(0, 120, -250); _yaw = 0; _pitch = -0.4f; }
             using (Prof.Time("  SetScene: lighting")) EnsureLighting();
             using (Prof.Time("  SetScene: water")) _water = BuildWater(scene);
+            StartIdlePoses();   // characters in their idle pose (SceneViewport.Anim.cs)
         }
         using (Prof.Time("  SetScene: SelectionChanged")) SelectionChanged?.Invoke(null);
         _gl.Invalidate();
@@ -745,7 +723,7 @@ public sealed partial class SceneViewport : UserControl
                 if (!DrawsModel(o)) continue;
                 if (!NoCull && o.Kind != SceneObjectKind.Terrain) { var (wc, wr) = WorldBounds(o); if (!fr.Visible(wc, wr) || BeyondCullDistance(o, wc)) continue; }
                 var tint = IsSelected(o) ? new Vector4(1f, 0.55f, 0.1f, _viewMode == ViewMode.Wireframe ? 1f : 0.35f) : o.Dirty ? new Vector4(0.2f, 0.9f, 0.3f, 0.15f) : Vector4.Zero;
-                _r.DrawModel(o.Model, o.Transform, tint, NoCull ? null : fr);
+                _r.DrawModel(ModelFor(o)!, o.Transform, tint, NoCull ? null : fr);   // posed copy while animated (SceneViewport.Anim.cs)
                 foreach (var (cm, cl) in o.Children) _r.DrawModel(cm, cl * o.Transform, tint, NoCull ? null : fr);
             }
             if (_water != null && ShowWater && ShowTerrain && _viewMode is ViewMode.Textured or ViewMode.Rendered) _r.DrawModel(_water, Matrix4x4.Identity, Vector4.Zero, NoCull ? null : fr);
@@ -801,7 +779,7 @@ public sealed partial class SceneViewport : UserControl
             if (!DrawsModel(o, keepSelected: false)) continue;
             if (o.Kind != SceneObjectKind.Terrain) { var (wc, wr) = WorldBounds(o); if (!fr.Visible(wc, wr) || (!NoCull && BeyondCullDistance(o, wc))) continue; }
             if (ShadowCasters == 1 && o.Kind == SceneObjectKind.Terrain || ShadowCasters == 2 && o.Kind != SceneObjectKind.Terrain) continue;
-            _r.DrawShadow(o.Model, o.Transform, fr);
+            _r.DrawShadow(ModelFor(o)!, o.Transform, fr);
             foreach (var (cm, cl) in o.Children) _r.DrawShadow(cm, cl * o.Transform, fr);
         }
         _r.EndShadow(W, H);
@@ -1829,6 +1807,7 @@ public sealed partial class SceneViewport : UserControl
         {
             if (!o.Visible) continue;
             if (o.Kind == SceneObjectKind.Terrain && !ShowTerrain) continue;
+            if (o.Kind == SceneObjectKind.Water && !WaterShown) continue;
             if (o.Kind == SceneObjectKind.Scenery && !ShowScenery) continue;
             bool asModel = o.Model != null && (o.Kind != SceneObjectKind.Marker || _showObjects);   // marker objects: their mesh
             if (o.Kind == SceneObjectKind.Marker && !asModel && !ShowMarkers) continue;

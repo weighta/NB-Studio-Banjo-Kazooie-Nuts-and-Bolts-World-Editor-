@@ -302,6 +302,50 @@ public sealed partial class SceneViewport
                 }
                 return true;
             }
+            case "--list-objects": { var f = next(); foreach (var o in Scene?.Objects.Where(o => o.Name.Contains(f, StringComparison.OrdinalIgnoreCase)) ?? Enumerable.Empty<NB.Core.World.SceneObject>()) log($"script: object {o.Name} at {Fmt(o.Transform.Translation)} model {(o.Model != null ? "yes" : "no")}"); return true; }
+            case "--idle-poses": IdlePoses = next() == "on"; log($"script: idle poses {(IdlePoses ? "on" : "off")}"); return true;
+            case "--idle-info": log("script: idle poses: " + IdlePoseInfo + "; posed " + string.Join(", ", _posed.Keys.Select(o => o.Name))); return true;
+
+            case "--deselect": Select(null); log("script: selection cleared"); return true;
+            case "--xlate-audit":
+            {
+                // every model of the open world (objects and marker objects): draws whose pixel shader is not translated,
+                // grouped by reason, with the models (names containing the filter argument, "all" for every model)
+                var filter = next();
+                var fails = new Dictionary<string, HashSet<string>>(); int draws = 0, failed = 0;
+                if (Scene != null)
+                    foreach (var o in Scene.Objects)
+                        foreach (var m in o.Children.Select(c => c.Model).Prepend(o.Model))
+                        {
+                            if (m == null || (filter != "all" && !o.ModelName.Contains(filter, StringComparison.OrdinalIgnoreCase) && !o.Name.Contains(filter, StringComparison.OrdinalIgnoreCase))) continue;
+                            foreach (var d in m.Draws)
+                            {
+                                if (d.ColourShader == null) continue;
+                                draws++;
+                                if (MaterialInfo.Of(d).Shader != null) continue;
+                                failed++;
+                                var why = XenosTranslator.Translate(d.ColourShader, d.Passes.Length > 0 ? d.Passes[0].Constants : d.PixelConstants, d.Colors != null, d.UVs2 != null).Fail ?? "?";
+                                why = System.Text.RegularExpressions.Regex.Replace(why, @"r\d+\.[xyzw]|pc \d+", "#");
+                                if (!fails.TryGetValue(why, out var set)) fails[why] = set = new();
+                                set.Add(o.Kind == NB.Core.World.SceneObjectKind.Marker ? System.Text.RegularExpressions.Regex.Replace(o.Name, @"#\d+ ", "") : NB.Core.Formats.AssetIds.DisplayName(o.ModelName).Replace("aid_model_banjox_", ""));
+                            }
+                        }
+                log($"script: shader audit ({filter}): {draws} draws with a pixel shader, {failed} not translated");
+                foreach (var (why, set) in fails.OrderByDescending(kv => kv.Value.Count)) log($"    {why}: {set.Count} models: {string.Join(", ", set.Take(12))}{(set.Count > 12 ? " …" : "")}");
+                return true;
+            }
+            case "--sel-mat-draw":
+            {
+                // one draw of the selected model: textures, pixel constants, pixel and vertex shader disassembly
+                int di = int.Parse(next());
+                if (Selected?.Model == null || di >= Selected.Model.Draws.Count) { log("script: no such draw"); return true; }
+                var d = Selected.Model.Draws[di];
+                log($"script: draw #{di} textures {string.Join(" | ", d.Textures.Select(t => $"s{t.Slot}:{t.Texture}"))}");
+                log("    constants " + string.Join(" ", d.PixelConstants.Select(kv => $"c{kv.Key}={kv.Value}")));
+                if (d.ColourShader is { } ps) log(ps.Disassemble());
+                if (d.ColourVertexShader is { } vs) log(vs.Disassemble());
+                return true;
+            }
             case "--sel-info":
             {
                 if (Selected == null) { log("script: nothing selected"); return true; }

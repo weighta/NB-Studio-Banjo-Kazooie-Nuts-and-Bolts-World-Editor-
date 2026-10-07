@@ -174,6 +174,7 @@ public static class FbxExporter
             p70.Add("P", "Lcl Translation", "Lcl Translation", "", "A", (double)t.X, (double)t.Y, (double)t.Z);
             var e = QuatToEulerXyzDegrees(j.Rotation);
             if (e != Vector3.Zero) p70.Add("P", "Lcl Rotation", "Lcl Rotation", "", "A", (double)e.X, (double)e.Y, (double)e.Z);
+            p70.Add("P", "InheritType", "enum", "", "", 2);   // eInheritRrs: a joint's scale keys do not scale its children (the game's rule, see CharacterAnims)
             objects.Children.Add(m);
             conns.Add("C", "OO", attrId, modelId);
         }

@@ -7,10 +7,10 @@ using NB.Core.Textures;
 
 namespace NB.Core.World;
 
-public enum SceneObjectKind { Terrain, Scenery, Marker }
+public enum SceneObjectKind { Terrain, Scenery, Marker, Water }
 
 /// <summary>An editable object in a loaded world.</summary>
-public sealed class SceneObject
+public sealed partial class SceneObject
 {
     public int Id;
     public SceneObjectKind Kind;
@@ -48,7 +48,7 @@ public sealed class SceneObject
 /// scenery instance (chunk 12) with its reference model. Transform edits are written back into the
 /// background model's .data (chunk-12 matrix + position, and the matching chunk-2 node), in place.
 /// </summary>
-public sealed class WorldScene
+public sealed partial class WorldScene
 {
     public readonly Workspace Workspace;
     public readonly uint Bundle;
@@ -105,6 +105,7 @@ public sealed class WorldScene
         var terrain = new SceneObject { Id = id++, Kind = SceneObjectKind.Terrain, Name = "Terrain (" + backgroundModel + ")", ModelName = backgroundModel, Model = Background, ModelBundle = bundle & 0xFFFFFF };
         ComputeBounds(terrain);
         Objects.Add(terrain);
+        AddWater(ref id);   // water regions as objects (WorldScene.Water.cs)
 
         int n = 0;
         foreach (var inst in Background.Instances)
@@ -918,6 +919,7 @@ public sealed class WorldScene
             DirtyBundles.Add(Bundle);
             changed++;
         }
+        changed += ApplyWaterEdits();   // last: it rebuilds the background model's .data (WorldScene.Water.cs)
         return changed;
     }
 

@@ -87,6 +87,10 @@ public sealed class TransformPanel : UserControl
             if (_obj.Marker is { Type: 22 } pm) _link.Value = Math.Clamp(pm.Link, 0, 65535);
             _info.Text = _obj.Kind == SceneObjectKind.Terrain
                 ? "Terrain is the background model's own geometry; it is not movable here. Use the Tag Editor for its data."
+                : _obj.Kind == SceneObjectKind.Water
+                ? $"Water region {_obj.WaterRegion + 1} of the background model (chunk 38): its surface triangles{(_obj.WaterPlane.Length == 4 ? " and the open-sea plane around the world" : "")}. " +
+                  "Move, scale and turn it about the vertical axis (Y); World > Save writes the region again. The game's water is flat: X/Z rotations are dropped on saving, " +
+                  "and each triangle keeps one height.\n" + (_obj.Dirty ? "Modified (not yet saved)" : "Unmodified")
                 : _obj.Kind == SceneObjectKind.Marker
                 ? (SpawnPoints.Label(_obj) is { } spl ? $"{spl.ToUpperInvariant()}: {SpawnPoints.Detail(_obj)}\n" : "") +
                   $"Marker type {_obj.Marker!.Type} ({NB.Core.World.MarkerRecord.TypeName(_obj.Marker.Type)}) #{_obj.Marker.Index} in {_obj.ModelName} at 0x{_obj.Marker.Offset:X}\n" +

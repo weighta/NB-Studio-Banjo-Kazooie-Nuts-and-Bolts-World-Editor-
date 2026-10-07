@@ -396,7 +396,8 @@ public static class XenosTranslator
             if (!taint.TryGetValue(r, out var a)) { long v = InputTaint(r); taint[r] = a = new[] { v, v, v, v }; }
             return a;
         }
-        long ConstTaint(int r) => IsMat(r) ? TMat : LightRegs.Contains(r) ? (r == 51 ? TC51 : r == 32 ? TC32 : TC51 | TC32) : r == 52 ? TC52 : r == 0 ? TMat : TEngine;
+        long ConstTaint(int r) => IsMat(r) || r == 69 || r == 42 ? TMat :   // c69 overlay switch, c42 Jinjo colour: constants in the viewer (see Const)
+             LightRegs.Contains(r) ? (r == 51 ? TC51 : r == 32 ? TC32 : TC51 | TC32) : r == 52 ? TC52 : r == 0 ? TMat : TEngine;
         long SrcTaint(XenosShader.Instr i, int k, int comps)
         {
             var (r, temp, swz, _) = i.Srcs[k];
@@ -629,6 +630,14 @@ public static class XenosTranslator
                 case 81: t.Engine.Add("fill"); return "uFillCol";
                 case 82: t.Engine.Add("fill"); return "uFillDir";
                 case 28: t.Engine.Add("vcolscale"); return "uVcolScale";
+                // c69: the engine's surface overlay of characters (x/y blend an engine colour texture tf11 over the
+                // colour, z/w an engine normal texture tf10 over the normal; every use is predicated on c69.x > 0). Off
+                // in normal play: 0 keeps those branches out (Boggy, Bottles, Mumbo … failed to translate on it).
+                case 69: return "vec4(0.0)";
+                // c42: the object's colour for "colour change" materials (Jinjos, King Jingaling, component crates): hue
+                // offset, saturation, lightness of an HSL colour applied to the texture's hue mask; set per object by the
+                // game. The viewer uses no hue offset at medium saturation / lightness (the texture's own hue).
+                case 42: return "vec4(0.0, 0.75, 0.5, 1.0)";
             }
             throw new NotSupportedException($"engine constant c{r}");
         }
@@ -818,6 +827,16 @@ public static class XenosTranslator
             if (i.Fetch)
             {
                 if (i.FetchOp != "tfetch") throw new NotSupportedException(i.FetchOp);
+                if (i.Sampler is 10 or 11)
+                {
+                    // engine overlay textures (see c69): only read under c69.x > 0, which the viewer keeps off
+                    EnsureInit(i.Src, n);
+                    var z = new StringBuilder();
+                    for (int c = 0; c < 4; c++) if (i.DstSwz[c] != '_') z.Append($" r{i.Dst}.{"xyzw"[c]} = 0.0;");
+                    initialised.Add(i.Dst);
+                    sb.Append($"  {pred}{{{z} }}\n");
+                    continue;
+                }
                 if (i.Sampler >= 8) throw new NotSupportedException($"sampler tf{i.Sampler}");
                 bool cubeFetch = i.Dim == 3;
                 t.Samplers.Add(i.Sampler);

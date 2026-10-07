@@ -104,57 +104,21 @@ public sealed partial class SceneViewport
         g.DrawString("Show ▾", font, tb, r.X + 23, r.Y + 2);
     }
 
-    // ------------------------------------------------------------------ the open sea
+    // ------------------------------------------------------------------ water
 
-    /// <summary>Water regions whose plane (region record +0x20..+0x5F, four corners) reaches far beyond their surface
-    /// triangles are the open sea: Nutty Acres' three regions all carry a ±943-unit square (at y −35, below the water) — the
-    /// sea seen around the island in the game; in other worlds the plane is the triangles' own bounding box. The square is
-    /// drawn as water at the lowest surface height of the regions that share it (Nutty Acres: −30.36; checked in the game
-    /// with the photo camera: above the waves at −29, under water at −34), and those regions' own triangles at that height are
-    /// left out (two transparent layers in one place drew a dark band).</summary>
-    void AddSea(ModelAsset model, List<WaterEditor.Region> regions, string? skyTex)
+    /// <summary>Water objects are drawn (and picked) in the Textured and Rendered modes when Water is shown.</summary>
+    bool WaterShown => _showWater && _viewMode is ViewMode.Textured or ViewMode.Rendered;
+
+    /// <summary>The look of the water objects: translucent blue-green with the sky reflected (the game's dynamic water
+    /// shader is not translated; matched by eye to Showdown Town's harbour), the open sea a clearer turquoise.</summary>
+    void SetWaterMaterials(WorldScene scene)
     {
-        static bool Big(WaterEditor.Region r)
-        {
-            if (r.Plane.Length != 4 || r.Triangles.Count < 3) return false;
-            var pmn = r.Plane.Aggregate(Vector3.Min); var pmx = r.Plane.Aggregate(Vector3.Max);
-            var tmn = r.Triangles.Aggregate(Vector3.Min); var tmx = r.Triangles.Aggregate(Vector3.Max);
-            return (pmx.X - pmn.X) * (pmx.Z - pmn.Z) >= 2 * Math.Max(1, (tmx.X - tmn.X) * (tmx.Z - tmn.Z));
-        }
-        foreach (var grp in regions.Where(Big).GroupBy(r => { var mn = r.Plane.Aggregate(Vector3.Min); var mx = r.Plane.Aggregate(Vector3.Max); return (mn.X, mn.Z, mx.X, mx.Z); }))
-        {
-            var pmn = grp.First().Plane.Aggregate(Vector3.Min); var pmx = grp.First().Plane.Aggregate(Vector3.Max);
-            float y = SeaLevelOverride ?? grp.Min(r => r.Triangles.Min(p => p.Y));
-            // the regions' surfaces at sea level are part of the sea
-            model.Draws.RemoveAll(d => d.Positions.Length > 0 && d.Positions.All(p => MathF.Abs(p.Y - y) < 0.02f)
-                && d.Positions.All(p => p.X >= pmn.X - 1 && p.X <= pmx.X + 1 && p.Z >= pmn.Z - 1 && p.Z <= pmx.Z + 1));
-            // a grid rather than one quad: per-vertex fog and lighting stay smooth over 1900 units
-            const int N = 24;
-            var pos = new List<Vector3>(); var idx = new List<int>();
-            for (int j = 0; j <= N; j++)
-                for (int i = 0; i <= N; i++)
-                    pos.Add(new Vector3(pmn.X + (pmx.X - pmn.X) * i / N, y, pmn.Z + (pmx.Z - pmn.Z) * j / N));
-            for (int j = 0; j < N; j++)
-                for (int i = 0; i < N; i++)
-                {
-                    int a = j * (N + 1) + i, b = a + 1, c = a + N + 1, d = c + 1;
-                    idx.AddRange(new[] { a, c, b, b, c, d });
-                }
-            var draw = new MeshDraw
-            {
-                Positions = pos.ToArray(), Normals = Enumerable.Repeat(Vector3.UnitY, pos.Count).ToArray(),
-                UVs = pos.Select(p => new Vector2(p.X, p.Z) * 0.02f).ToArray(), Indices = idx.ToArray(), SectionFlags = 0x4502,
-            };
-            model.Draws.Add(draw);
-            _r.MaterialOverrides[draw] = new MaterialInfo
-            {
-                Blend = BlendKind.Blend, Tint = new Vector3(0.12f, 0.33f, 0.34f), Opacity = 0.72f,   // Nutty Acres' clear turquoise sea
-                SpecPower = 140, SpecColour = new Vector3(0.9f), Reflect = skyTex, ReflectStrength = 0.38f,
-            };
-            Scene?.Log.Add($"water: open sea {pmx.X - pmn.X:F0} x {pmx.Z - pmn.Z:F0} at y {y:G4}");
-        }
+        string? skyTex = (_sky != null ? new[] { _sky } : _skies.Select(sk => sk.Model)).Select(m => m?.Draws.SelectMany(d => d.Textures).Select(t => t.Texture).FirstOrDefault(t => !t.StartsWith('#'))).FirstOrDefault(t => t != null);
+        foreach (var o in scene.Objects.Where(o => o.Kind == SceneObjectKind.Water && o.Model != null))
+            foreach (var d in o.Model!.Draws)
+                _r.MaterialOverrides[d] = o.WaterPlane.Length == 4
+                    ? new MaterialInfo { Blend = BlendKind.Blend, Tint = new Vector3(0.12f, 0.33f, 0.34f), Opacity = 0.72f, SpecPower = 140, SpecColour = new Vector3(0.9f), Reflect = skyTex, ReflectStrength = 0.38f }
+                    : new MaterialInfo { Blend = BlendKind.Blend, Tint = new Vector3(0.10f, 0.21f, 0.24f), Opacity = 0.85f, SpecPower = 140, SpecColour = new Vector3(0.9f), Reflect = skyTex, ReflectStrength = 0.38f };
     }
 
-    /// <summary>Test hook: draw the open sea at this height instead of the region plane's (NB_STUDIO_SEA_Y).</summary>
-    static float? SeaLevelOverride => float.TryParse(Environment.GetEnvironmentVariable("NB_STUDIO_SEA_Y"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var y) ? y : null;
 }
