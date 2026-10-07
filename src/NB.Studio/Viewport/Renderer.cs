@@ -943,16 +943,21 @@ public sealed partial class Renderer : IDisposable
         fs.Append(XFS_LIGHT);
         fs.Append(tr.Body);
         fs.Append(XFS_TAIL.Replace("HASPRE", tr.HasPreTone ? "true" : "false"));
+        // the program bound by the caller is restored afterwards: Resolve() also runs inside the sun-shadow pass, whose next
+        // GL.Uniform1(_uShCut, cut) would otherwise land in this new program (its location 1 = tS1: a cut-out whose mask has
+        // no alpha, cut = 2, then read texture unit 2 as its mask - imported Source billboards vanished in Rendered mode)
+        GL.GetInteger(GetPName.CurrentProgram, out int prevProg);
         try
         {
             int prog = Link(VS, fs.ToString());
             xp = new XProg { Prog = prog, Translated = true };
-            GL.UseProgram(prog); _cur = null;
+            GL.UseProgram(prog);
             for (int i = 0; i < 8; i++) GL.Uniform1(GL.GetUniformLocation(prog, "tS" + i), i);
             GL.Uniform1(GL.GetUniformLocation(prog, "tShadow"), 8);
             ProgramsCompiled++;
         }
         catch (Exception e) { xp = null; ProgramsFailed++; LastProgramError = e.Message + "\n" + fs; }
+        GL.UseProgram(prevProg);
         _xprogs[key] = xp;
         return xp;
     }
