@@ -7,7 +7,9 @@ namespace NB.Studio.Panels;
 /// (the open world's vehicles first, then World › Act › vehicle, then "Other / templates": shop blueprints, demo, test,
 /// live and credits vehicles), the part count on every vehicle and the details of the selected one. The list comes from
 /// the editor's per-workspace catalog, built in the background when the workspace opens and kept in the workspace cache,
-/// so the window opens at once. Enter / double-click / Open opens the vehicle; Esc or clicking elsewhere hides it.
+/// so the window opens at once. Browsing: with no unsaved changes in the editor, a single click (or the arrow keys, after a
+/// short pause) opens the vehicle at once and the window stays open for the next one; with unsaved changes a click only
+/// selects, and a double-click / Enter / Open opens it after the editor's Save / Don't save / Cancel. Esc or × hides it.
 /// </summary>
 public sealed class GameVehiclePicker : Form
 {
@@ -20,8 +22,15 @@ public sealed class GameVehiclePicker : Form
     (string World, string Act)? _here;
     string _hereLabel = "";
 
-    /// <summary>A vehicle was chosen (with the World / Act it was picked under, when any).</summary>
+    /// <summary>A vehicle was chosen with a double-click, Enter or Open (with the World / Act it was picked under).</summary>
     public event Action<PregameVehicle, VehiclePlace?>? Picked;
+    /// <summary>A vehicle was selected by a single click or the arrow keys while <see cref="CanBrowse"/> says yes.</summary>
+    public event Action<PregameVehicle, VehiclePlace?>? Browsed;
+    /// <summary>Single-click browsing is on (the editor has no unsaved changes).</summary>
+    public Func<bool>? CanBrowse;
+    /// <summary>Clicks and arrow keys open after a short pause, so holding Down does not open every vehicle on the way.</summary>
+    readonly System.Windows.Forms.Timer _browse = new() { Interval = 220 };
+    bool _filling;
 
     public GameVehiclePicker()
     {
@@ -38,12 +47,23 @@ public sealed class GameVehiclePicker : Form
             if (e.KeyCode == Keys.Down) { _tree.Focus(); e.Handled = true; }
             if (e.KeyCode == Keys.Enter) { var leaf = FirstLeaf(_tree.Nodes); if (leaf != null) { _tree.SelectedNode = leaf; Choose(); } e.SuppressKeyPress = true; }
         };
-        _tree.AfterSelect += (_, _) => ShowInfo();
+        _tree.AfterSelect += (_, e) =>
+        {
+            ShowInfo();
+            _browse.Stop();
+            if (!_filling && e.Action != TreeViewAction.Unknown && _tree.SelectedNode?.Tag is Leaf && CanBrowse?.Invoke() == true)
+            {
+                // a click opens at once; the arrow keys after a pause (holding Down skips over the vehicles in between)
+                if (e.Action == TreeViewAction.ByMouse) Browse(); else _browse.Start();
+            }
+        };
+        _browse.Tick += (_, _) => { _browse.Stop(); if (CanBrowse?.Invoke() == true) Browse(); };
         _tree.NodeMouseDoubleClick += (_, e) => { if (e.Node?.Tag is Leaf) Choose(); };
         _tree.KeyDown += (_, e) => { if (e.KeyCode == Keys.Enter) { Choose(); e.SuppressKeyPress = true; } };
         _open.Click += (_, _) => Choose();
         KeyDown += (_, e) => { if (e.KeyCode == Keys.Escape) { Hide(); e.Handled = true; } };
-        Deactivate += (_, _) => { if (Visible) Hide(); };
+        // stays open while browsing (it used to hide when the main window was clicked); Esc or × hides it
+        FormClosing += (_, e) => { if (e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; Hide(); } };
     }
 
     sealed record Leaf(PregameVehicle V, VehiclePlace? P);
@@ -61,6 +81,23 @@ public sealed class GameVehiclePicker : Form
     /// <summary>The game's order of the worlds (hub first), then the rest by name.</summary>
     static readonly string[] WorldOrder = { "spiralmountain", "showdowntown", "nuttyacres", "cpu", "banjoland", "terrorium", "worldofsport" };
     static int ActSort(string act) => act.StartsWith("act") && int.TryParse(act[3..], out int n) ? n : act == "actww" ? 50 : act == "live" ? 70 : 60;
+
+    /// <summary>The vehicles the picker shows under "Open world: …", in its order.</summary>
+    public static List<(PregameVehicle V, VehiclePlace P)> OpenWorldVehicles(List<PregameVehicle> list, (string World, string Act) h) =>
+        list.SelectMany(v => v.Places.Where(p => p.World == h.World && (h.Act.Length == 0 || p.Act == h.Act)).Take(1).Select(p => (V: v, P: p)))
+            .OrderBy(x => x.P.Challenge.Length == 0 ? 1 : 0).ThenBy(x => x.P.Challenge).ThenBy(x => x.V.Title).ToList();
+
+    /// <summary>The first vehicle the picker lists (first world in the game's order, its first Act, first vehicle).</summary>
+    public static (PregameVehicle V, VehiclePlace? P)? FirstListed(List<PregameVehicle> list)
+    {
+        var first = list.SelectMany(v => v.Places.Select(p => (V: v, P: p)))
+            .OrderBy(x => Array.IndexOf(WorldOrder, x.P.World) is int k && k >= 0 ? k : 99).ThenBy(x => x.P.WorldName)
+            .ThenBy(x => ActSort(x.P.Act)).ThenBy(x => x.P.Challenge.Length == 0 ? 1 : 0).ThenBy(x => x.P.Challenge).ThenBy(x => x.V.Title)
+            .FirstOrDefault();
+        if (first.V != null) return (first.V, first.P);
+        var rest = list.OrderBy(v => v.Section).ThenBy(v => v.Title).FirstOrDefault();
+        return rest == null ? null : (rest, null);
+    }
 
     static string LeafText(PregameVehicle v, VehiclePlace? p)
     {
@@ -86,11 +123,26 @@ public sealed class GameVehiclePicker : Form
 
     void AddLeaf(TreeNode parent, PregameVehicle v, VehiclePlace? p, string? text = null)
     {
-        parent.Nodes.Add(new TreeNode(text ?? LeafText(v, p)) { Tag = new Leaf(v, p), ToolTipText = $"{v.Asset}{(v.Users.Count > 0 ? "\n" + string.Join("\n", v.Users) : "")}" });
+        var n = new TreeNode(text ?? LeafText(v, p)) { Tag = new Leaf(v, p), ToolTipText = $"{v.Asset}{(v.Users.Count > 0 ? "\n" + string.Join("\n", v.Users) : "")}" };
+        if (v.Id == _openId) { n.ForeColor = OpenColour; n.BackColor = OpenBack; }
+        parent.Nodes.Add(n);
+    }
+
+    uint _openId;
+    static readonly Color OpenColour = Color.FromArgb(0, 100, 30), OpenBack = Color.FromArgb(222, 244, 226);
+
+    /// <summary>The vehicle open in the editor is shown in green (bold text would be clipped by the tree).</summary>
+    public void MarkOpen(uint id)
+    {
+        if (id == _openId) return;
+        _openId = id;
+        void M(TreeNodeCollection ns) { foreach (TreeNode n in ns) { if (n.Tag is Leaf l) { bool on = l.V.Id == id; n.ForeColor = on ? OpenColour : Color.Empty; n.BackColor = on ? OpenBack : Color.Empty; } M(n.Nodes); } }
+        _tree.BeginUpdate(); M(_tree.Nodes); _tree.EndUpdate();
     }
 
     void Fill()
     {
+        _filling = true;
         _tree.BeginUpdate();
         _tree.Nodes.Clear();
         try
@@ -100,8 +152,7 @@ public sealed class GameVehiclePicker : Form
             // the open world / Act first
             if (_here is { } h)
             {
-                var mine = _list.SelectMany(v => v.Places.Where(p => p.World == h.World && (h.Act.Length == 0 || p.Act == h.Act)).Take(1).Select(p => (V: v, P: p)))
-                    .Where(x => Matches(x.V, x.P)).OrderBy(x => x.P.Challenge.Length == 0 ? 1 : 0).ThenBy(x => x.P.Challenge).ThenBy(x => x.V.Title).ToList();
+                var mine = OpenWorldVehicles(_list, h).Where(x => Matches(x.V, x.P)).ToList();
                 if (mine.Count > 0)
                 {
                     var n = Node(_tree.Nodes, $"Open world: {_hereLabel} ({mine.Count})");
@@ -139,7 +190,7 @@ public sealed class GameVehiclePicker : Form
             }
             if (_tree.Nodes.Count == 0) _tree.Nodes.Add(new TreeNode("No vehicle matches the search."));
         }
-        finally { _tree.EndUpdate(); }
+        finally { _tree.EndUpdate(); _filling = false; }
         ShowInfo();
     }
 
@@ -166,10 +217,56 @@ public sealed class GameVehiclePicker : Form
 
     void Choose()
     {
+        _browse.Stop();
         if (_tree.SelectedNode?.Tag is not Leaf l) return;
-        Hide();
         Picked?.Invoke(l.V, l.P);
     }
+
+    void Browse()
+    {
+        if (_tree.SelectedNode?.Tag is Leaf l) Browsed?.Invoke(l.V, l.P);
+    }
+
+    /// <summary>The status line under the tree (the list's state, and how clicks open now).</summary>
+    public void SetHint(string state, bool dirty)
+    {
+        _state.Text = dirty ? "Unsaved changes: a click selects; double-click or Enter asks to save first." : state + "  ·  click a vehicle to open it";
+        _state.ForeColor = dirty ? Color.FromArgb(170, 90, 0) : SystemColors.GrayText;
+    }
+
+    /// <summary>Scripted tests: posts a real mouse click (or double-click) to the tree at the vehicle's node.</summary>
+    public bool PostClick(string q, bool dbl)
+    {
+        TreeNode? F(TreeNodeCollection ns)
+        {
+            foreach (TreeNode n in ns)
+            {
+                if (n.Tag is Leaf l && (l.V.Short.Contains(q, StringComparison.OrdinalIgnoreCase) || l.V.Title.Contains(q, StringComparison.OrdinalIgnoreCase))) return n;
+                if (F(n.Nodes) is { } x) return x;
+            }
+            return null;
+        }
+        var hit = F(_tree.Nodes);
+        if (hit == null) return false;
+        hit.EnsureVisible(); Application.DoEvents();
+        var b = hit.Bounds;
+        IntPtr xy = (IntPtr)(((b.Top + b.Height / 2) & 0xFFFF) << 16 | ((b.Left + 8) & 0xFFFF));
+        Post(_tree.Handle, 0x201, (IntPtr)1, xy); Post(_tree.Handle, 0x202, IntPtr.Zero, xy);
+        if (dbl) { Post(_tree.Handle, 0x203, (IntPtr)1, xy); Post(_tree.Handle, 0x202, IntPtr.Zero, xy); }
+        Application.DoEvents();
+        return true;
+    }
+
+    /// <summary>Scripted tests: a key message to the tree (Down, Up, Return).</summary>
+    public void PostKey(Keys k)
+    {
+        Post(_tree.Handle, 0x100, (IntPtr)(int)k, (IntPtr)1); Post(_tree.Handle, 0x101, (IntPtr)(int)k, unchecked((IntPtr)(int)0xC0000001));
+        Application.DoEvents();
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint = "PostMessage")] static extern bool Post(IntPtr h, int msg, IntPtr w, IntPtr l);
+
+    public string SelectedText => _tree.SelectedNode?.Text ?? "";
 
     /// <summary>Scripted tests: the tree's text (expanded nodes indented).</summary>
     public IEnumerable<string> Dump()

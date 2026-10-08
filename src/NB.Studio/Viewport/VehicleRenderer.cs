@@ -164,13 +164,18 @@ public sealed class VehicleRenderer : IDisposable
         if (_lineVao != 0) GL.DeleteVertexArray(_lineVao);
     }
 
+    /// <summary>Time spent reading and decoding textures so far (timings).</summary>
+    public static double TextureLoadMs;
+
     int Texture(string? name)
     {
         if (name == null || TextureSource == null) return 0;
         if (_textures.TryGetValue(name, out int t)) return t;
         t = 0;
         (byte[] Rgba, int W, int H)? img = null;
+        var tsw = System.Diagnostics.Stopwatch.StartNew();
         try { img = TextureSource(name); } catch { }
+        TextureLoadMs += tsw.Elapsed.TotalMilliseconds;
         if (img is { } im && im.W > 0 && im.H > 0)
         {
             t = GL.GenTexture();
@@ -222,6 +227,53 @@ public sealed class VehicleRenderer : IDisposable
     Batch[] Batches(ModelAsset model)
     {
         if (_batches.TryGetValue(model, out var bs)) return bs;
+        var bsw = System.Diagnostics.Stopwatch.StartNew();
+        try { return _batches[model] = BuildBatches(model); }
+        finally { BatchBuildMs += bsw.Elapsed.TotalMilliseconds; }
+    }
+
+    /// <summary>Time spent building and uploading model buffers so far (timings).</summary>
+    public static double BatchBuildMs;
+
+    /// <summary>A model's batches ready for upload (materials worked out, vertex and index arrays filled): built on any
+    /// thread (<see cref="Prepare"/>), uploaded on the GL thread.</summary>
+    sealed class Prepared { public readonly List<(Batch Bt, float[] Fa, uint[] Ia)> Items = new(); }
+    static readonly System.Runtime.CompilerServices.ConditionalWeakTable<ModelAsset, Prepared> _prepared = new();
+
+    /// <summary>Works out a model's batches off the GL thread (the background part catalog does it for every part when a
+    /// workspace opens), so the first frame showing it only uploads the arrays.</summary>
+    public static void Prepare(ModelAsset model)
+    {
+        if (_prepared.TryGetValue(model, out _)) return;
+        var p = PrepareNow(model);
+        _prepared.AddOrUpdate(model, p);
+    }
+
+    Batch[] BuildBatches(ModelAsset model)
+    {
+        var prep = _prepared.TryGetValue(model, out var pp) ? pp : PrepareNow(model);
+        _prepared.Remove(model);   // the arrays are not needed once they are on the GPU
+        var list = new List<Batch>();
+        foreach (var (bt, fa, ia) in prep.Items)
+        {
+            bt.Vao = GL.GenVertexArray(); bt.Vbo = GL.GenBuffer(); bt.Ebo = GL.GenBuffer();
+            GL.BindVertexArray(bt.Vao);
+            GL.BindBuffer(BufferTarget.ArrayBuffer, bt.Vbo); GL.BufferData(BufferTarget.ArrayBuffer, fa.Length * 4, fa, BufferUsageHint.StaticDraw);
+            GL.BindBuffer(BufferTarget.ElementArrayBuffer, bt.Ebo); GL.BufferData(BufferTarget.ElementArrayBuffer, ia.Length * 4, ia, BufferUsageHint.StaticDraw);
+            int st = Floats * 4;
+            GL.EnableVertexAttribArray(0); GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, st, 0);
+            GL.EnableVertexAttribArray(1); GL.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, st, 12);
+            GL.EnableVertexAttribArray(2); GL.VertexAttribPointer(2, 2, VertexAttribPointerType.Float, false, st, 24);
+            GL.EnableVertexAttribArray(3); GL.VertexAttribPointer(3, 2, VertexAttribPointerType.Float, false, st, 32);
+            GL.BindVertexArray(0);
+            list.Add(bt);
+        }
+        return list.ToArray();
+    }
+
+    static Prepared PrepareNow(ModelAsset model)
+    {
+        var res = new Prepared();
         var draws = model.Draws.Where(d => d.Positions.Length > 0 && d.Indices.Length > 0).ToList();
         var lod0 = draws.Where(d => !model.LodOnlyNodes.Contains(d.Node)).ToList();
         if (lod0.Count > 0) draws = lod0;
@@ -230,7 +282,6 @@ public sealed class VehicleRenderer : IDisposable
             var m = MaterialInfo.Of(d);
             return m.Key + "|" + d.Textures.Select(t => t.Texture).FirstOrDefault(IsEditable);
         });
-        var list = new List<Batch>();
         foreach (var g in groups)
         {
             var d0 = g.First();
@@ -263,20 +314,9 @@ public sealed class VehicleRenderer : IDisposable
             }
             if (idx.Count == 0) continue;
             bt.Count = idx.Count;
-            bt.Vao = GL.GenVertexArray(); bt.Vbo = GL.GenBuffer(); bt.Ebo = GL.GenBuffer();
-            GL.BindVertexArray(bt.Vao);
-            var fa = buf.ToArray(); var ia = idx.ToArray();
-            GL.BindBuffer(BufferTarget.ArrayBuffer, bt.Vbo); GL.BufferData(BufferTarget.ArrayBuffer, fa.Length * 4, fa, BufferUsageHint.StaticDraw);
-            GL.BindBuffer(BufferTarget.ElementArrayBuffer, bt.Ebo); GL.BufferData(BufferTarget.ElementArrayBuffer, ia.Length * 4, ia, BufferUsageHint.StaticDraw);
-            int st = Floats * 4;
-            GL.EnableVertexAttribArray(0); GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, st, 0);
-            GL.EnableVertexAttribArray(1); GL.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, st, 12);
-            GL.EnableVertexAttribArray(2); GL.VertexAttribPointer(2, 2, VertexAttribPointerType.Float, false, st, 24);
-            GL.EnableVertexAttribArray(3); GL.VertexAttribPointer(3, 2, VertexAttribPointerType.Float, false, st, 32);
-            GL.BindVertexArray(0);
-            list.Add(bt);
+            res.Items.Add((bt, buf.ToArray(), idx.ToArray()));
         }
-        return _batches[model] = list.ToArray();
+        return res;
     }
 
     /// <summary>Scripted tests: how the batches of a model are drawn (after its first frame).</summary>

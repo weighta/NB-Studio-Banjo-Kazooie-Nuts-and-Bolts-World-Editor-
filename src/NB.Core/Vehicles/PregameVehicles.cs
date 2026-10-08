@@ -29,6 +29,10 @@ public sealed class PregameVehicle
     /// (humba_truck1 → "Humba Truck 1", mpsumo → "Rikishi", trolley4 → "Trolley Mk. 4: Spring"); else a readable name
     /// field ("Red Baron"); empty for creator tags (SalvyBob, y0mper, …).</summary>
     public string Friendly = "";
+    /// <summary>The blueprint as read by the background build (not cached on disk), with the size / time stamp of the bundle
+    /// it came from: opening the vehicle uses it while the bundle file is unchanged (<see cref="PregameVehicles.Cached"/>).</summary>
+    [System.Text.Json.Serialization.JsonIgnore] public Blueprint? Blueprint;
+    [System.Text.Json.Serialization.JsonIgnore] public long BlueprintStamp;
 
     public string Short => Asset.Replace("aid_vehicle_banjox_", "");
     public string Label => Owner.Length > 0 ? $"{Owner}'s vehicle ({Short})" : Short;
@@ -166,11 +170,13 @@ public static class PregameVehicles
                     v.Places.Add(new VehiclePlace(lc.World, "live", lc.Name));
             }
         }
-        // every blueprint: its parts and the game's name for it
+        // every blueprint: its parts and the game's name for it (kept for opening the vehicle without reading its bundle)
         foreach (var v in list)
             try
             {
+                long stamp = Stamp(ws, v);
                 var bp = Load(load, v);
+                v.Blueprint = bp; v.BlueprintStamp = stamp;
                 v.Parts = bp.Blocks.Count;
                 var n = bp.Name;
                 if (text.TryGetValue("vehicle__" + n.ToLowerInvariant(), out var f)) v.Friendly = f;
@@ -180,16 +186,44 @@ public static class PregameVehicles
         return list;
     }
 
+    /// <summary>Size and write time of the first bundle file holding the vehicle (0 when it is missing).</summary>
+    public static long Stamp(Workspace ws, PregameVehicle v)
+    {
+        if (v.Bundles.Count == 0) return 0;
+        var fi = new FileInfo(ws.Game.ResidentPath(v.Bundles[0]));
+        return fi.Exists ? fi.LastWriteTimeUtc.Ticks ^ (fi.Length << 1) : 0;
+    }
+
+    /// <summary>A copy of the blueprint the background build read, when its bundle file has not changed since; else null.</summary>
+    public static Blueprint? Cached(Workspace ws, PregameVehicle v)
+    {
+        var bp = v.Blueprint;
+        return bp != null && v.BlueprintStamp != 0 && v.BlueprintStamp == Stamp(ws, v) ? bp.Clone() : null;
+    }
+
+    /// <summary>Reads the blueprints of a listed catalog (one taken from the workspace cache has none) on any thread, through
+    /// <paramref name="load"/>; parts and names are kept as listed.</summary>
+    public static void Prefetch(Workspace ws, IEnumerable<PregameVehicle> list, Func<uint, CaffFile> load)
+    {
+        // bundle by bundle, so a loader that keeps only the last bundles (ReadOnlyLoader keep: 2) reads each one once
+        foreach (var v in list.OrderBy(v => v.Bundles.FirstOrDefault()))
+        {
+            if (v.Blueprint != null) continue;
+            try { long stamp = Stamp(ws, v); var bp = Load(load, v); v.Blueprint = bp; v.BlueprintStamp = stamp; } catch { }
+        }
+    }
+
     /// <summary>Reads resident bundles without touching the workspace's caches (for a build on another thread): the
     /// decompressed copy NB Studio keeps when it is there and complete, else the bundle file decompressed in memory. Each
     /// bundle is read once per loader.</summary>
-    public static Func<uint, CaffFile> ReadOnlyLoader(Workspace ws)
+    public static Func<uint, CaffFile> ReadOnlyLoader(Workspace ws, int keep = int.MaxValue)
     {
         var seen = new Dictionary<uint, CaffFile>();
         return b =>
         {
             b &= 0xFFFFFF;
             if (seen.TryGetValue(b, out var c)) return c;
+            if (seen.Count >= keep) seen.Clear();   // keep the memory down (whole world bundles are 100+ MB)
             var path = ws.Game.ResidentPath(b);
             var raw = File.ReadAllBytes(path);
             if (XCompressFile.IsCompressed(raw))

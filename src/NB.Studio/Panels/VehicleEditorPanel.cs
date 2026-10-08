@@ -87,6 +87,11 @@ public sealed class VehicleEditorPanel : UserControl
     readonly Panel _aiNote = new() { Visible = false, BackColor = Color.FromArgb(255, 244, 214), BorderStyle = BorderStyle.FixedSingle, Width = 360, Height = 96, Padding = new Padding(6) };
     readonly Label _aiText = new() { Dock = DockStyle.Fill, ForeColor = Color.FromArgb(90, 60, 0) };
     readonly LinkLabel _aiSwap = new() { Dock = DockStyle.Bottom, Height = 18, Text = "" };
+    /// <summary>The "Opened … — the last vehicle you edited" banner after an automatic open (bottom of the view; hides by
+    /// itself after 12 s or on a click).</summary>
+    readonly Label _toast = new() { Visible = false, AutoSize = false, Height = 30, TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(10, 0, 10, 0),
+        BackColor = Color.FromArgb(40, 120, 70), ForeColor = Color.White, Font = new Font(SystemFonts.MessageBoxFont ?? SystemFonts.DefaultFont, FontStyle.Bold), Cursor = Cursors.Hand };
+    readonly System.Windows.Forms.Timer _toastTimer = new() { Interval = 12000 };
     readonly ComboBox _setting = new() { Width = 150, DropDownStyle = ComboBoxStyle.DropDownList };
     readonly CheckBox[] _act1 = new CheckBox[3], _act2 = new CheckBox[3];
     readonly NumericUpDown _groupByte = new() { Width = 60, Minimum = 0, Maximum = 255 };
@@ -107,7 +112,11 @@ public sealed class VehicleEditorPanel : UserControl
         _bar.Items.Add(new ToolStripButton("Open…", null, (_, _) => OpenDialog()) { ToolTipText = "Open an Xbox 360 vehicle save (package 0x0000000N or its extracted content file) or a blueprint .bin. You can also drop files here." });
         _pregameBtn = new ToolStripButton("Game Vehicles ▾") { ToolTipText = "The game's own vehicles: the open world's first, then World › Act › challenge (AI racers with their drivers, challenge and prize vehicles), then Other / templates (shop blueprints, demo, test, live). Search box, part counts." };
         _pregameBtn.Click += (_, _) => ShowPicker();
-        _picker.Picked += (v, p) => OpenPregame(v, p);
+        // double-click / Enter / Open: opens (after Save / Don't save / Cancel when there are unsaved changes)
+        _picker.Picked += (v, p) => { if (!(IsOpen(v, p) && !_doc.Dirty)) OpenPregame(v, p); };
+        // single click / arrow keys with no unsaved changes: open at once, the picker stays open for the next one
+        _picker.CanBrowse = () => !_doc.Dirty;
+        _picker.Browsed += (v, p) => { if (!_doc.Dirty && !IsOpen(v, p)) OpenPregame(v, p); };
         _bar.Items.Add(_pregameBtn);
         _bar.Items.Add(new ToolStripSeparator());
         _bar.Items.Add(new ToolStripButton("Save", null, (_, _) => Save()) { ToolTipText = "Save back where the vehicle came from: its 360 package / content file / blueprint, or into the game (game vehicles)" });
@@ -228,6 +237,21 @@ public sealed class VehicleEditorPanel : UserControl
         _aiNote.Controls.Add(_aiText); _aiNote.Controls.Add(_aiSwap);
         viewHost.Controls.Add(_aiNote);
         _aiNote.BringToFront();
+        viewHost.Controls.Add(_toast);
+        _toast.BringToFront();
+        void PlaceToast()
+        {
+            int tw = TextRenderer.MeasureText(_toast.Text, _toast.Font).Width + 24;
+            _toast.Width = Math.Max(200, Math.Min(_view.Width - 16, tw));
+            _toast.Height = tw > _toast.Width ? 48 : 30;
+            _toast.Location = new Point(8, _view.Bottom - _toast.Height - 8);
+        }
+        viewHost.Layout += (_, _) => PlaceToast();
+        _toast.TextChanged += (_, _) => PlaceToast();
+        _toast.Click += (_, _) => _toast.Visible = false;
+        _toastTimer.Tick += (_, _) => { _toastTimer.Stop(); _toast.Visible = false; };
+        // the tab shown for the first time in a workspace with nothing open: open a vehicle for the user
+        VisibleChanged += (_, _) => { if (Visible) BeginAutoOpen(); };
         void PlaceNote() { _aiNote.Location = new Point(8, _where.Bottom + 8); }
         viewHost.Layout += (_, _) => PlaceNote();
         _aiSwap.LinkClicked += (_, _) => SwapToAi();
@@ -306,7 +330,18 @@ public sealed class VehicleEditorPanel : UserControl
 
     // ------------------------------------------------------------------ editor settings (recent colours, rotate mode)
 
-    sealed class EditorSettings { public List<uint> RecentColours { get; set; } = new(); public bool RotateEach { get; set; } }
+    sealed class EditorSettings
+    {
+        public List<uint> RecentColours { get; set; } = new();
+        public bool RotateEach { get; set; }
+        /// <summary>Per workspace folder: the vehicle last opened in the editor (reopened when the tab is first shown).</summary>
+        public Dictionary<string, LastVehicle> LastVehicles { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>A game vehicle (asset + the World / Act it was opened under) or a vehicle file (360 package, content file,
+    /// blueprint, a vehicle in the vehicle saves).</summary>
+    public sealed class LastVehicle { public string Asset { get; set; } = ""; public string World { get; set; } = ""; public string Act { get; set; } = ""; public string File { get; set; } = ""; }
+    readonly Dictionary<string, LastVehicle> _lastVehicles = new(StringComparer.OrdinalIgnoreCase);
     static string SettingsPath => Path.Combine(NB.Core.Project.ProjectRegistry.DataDir, "vehicle-editor.json");
     bool _loadingSettings;
 
@@ -319,6 +354,7 @@ public sealed class VehicleEditorPanel : UserControl
             {
                 _recentColours.Clear(); _recentColours.AddRange(s.RecentColours.Take(RecentMax));
                 _each.Checked = s.RotateEach;
+                _lastVehicles.Clear(); foreach (var (k, v) in s.LastVehicles) _lastVehicles[k] = v;
             }
         }
         catch { }
@@ -332,10 +368,101 @@ public sealed class VehicleEditorPanel : UserControl
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath)!);
-            File.WriteAllText(SettingsPath, System.Text.Json.JsonSerializer.Serialize(new EditorSettings { RecentColours = _recentColours.ToList(), RotateEach = _each.Checked }));
+            var es = new EditorSettings { RecentColours = _recentColours.ToList(), RotateEach = _each.Checked };
+            foreach (var (k, v) in _lastVehicles) es.LastVehicles[k] = v;
+            File.WriteAllText(SettingsPath, System.Text.Json.JsonSerializer.Serialize(es));
         }
         catch { }
     }
+
+    static string WsKey(Workspace ws) { try { return Path.TrimEndingDirectorySeparator(Path.GetFullPath(ws.Root)); } catch { return ws.Root; } }
+
+    /// <summary>Remembers the vehicle now open as the workspace's last one (kept in NB Studio's data folder, not in the
+    /// workspace).</summary>
+    void RememberLast()
+    {
+        if (_ws == null) return;
+        LastVehicle? l = _target switch
+        {
+            Target.Game when _game != null => new LastVehicle { Asset = _game.Asset, World = _gamePlace?.World ?? "", Act = _gamePlace?.Act ?? "" },
+            Target.File when _file?.Path != null => new LastVehicle { File = _file.Path },
+            _ => null,
+        };
+        if (l == null) return;
+        _lastVehicles[WsKey(_ws)] = l;
+        SaveEditorSettings();
+    }
+
+    // ------------------------------------------------------------------ auto-open (first show of the tab in a workspace)
+
+    bool _autoOpenTried, _autoOpenPending;
+    /// <summary>Open game vehicles from the blueprints the background build read (timing tests switch it off).</summary>
+    bool _useBpCache = true;
+    /// <summary>Scripted runs (command-line options) do not open a vehicle by themselves unless --vehicle-autoopen asks.</summary>
+    static readonly bool ScriptRun = Environment.GetCommandLineArgs().Skip(1).Any(a => a.StartsWith("--") && a != "--log");
+    bool _autoOpenScript;
+
+    /// <summary>
+    /// The first time the tab is shown in a workspace with nothing open (and nothing unsaved): opens the vehicle last edited
+    /// in this workspace if it still exists, else the first vehicle of the open world / Act (the picker's "Open world" order),
+    /// else the first vehicle the picker lists, and says so in a banner over the view and in the log. Waits for the Game
+    /// Vehicles list without blocking (it is being built in the background).
+    /// </summary>
+    void BeginAutoOpen()
+    {
+        if (_autoOpenTried || _ws == null || !Visible || (ScriptRun && !_autoOpenScript)) return;
+        if (_target != Target.None || _doc.Dirty || _doc.Parts.Count > 0) { _autoOpenTried = true; return; }
+        if (_gameCat == null)
+        {
+            _autoOpenPending = true;
+            StartGameCatalog();
+            if (_gameCat == null) { _status.Text = "Finding a vehicle to show you…"; return; }   // the list's continuation comes back here
+        }
+        _autoOpenTried = true; _autoOpenPending = false;
+        string why;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        // 1. the last vehicle edited in this workspace
+        if (_lastVehicles.TryGetValue(WsKey(_ws), out var last))
+        {
+            if (last.File.Length > 0 && File.Exists(last.File))
+            {
+                OpenFiles(new[] { last.File });
+                if (_target == Target.File) { Toast($"Opened {_doc.Name} ({Path.GetFileName(last.File)}) — the last vehicle you edited", sw); return; }
+            }
+            else if (last.Asset.Length > 0 && _gameCat!.FirstOrDefault(v => v.Asset == last.Asset) is { } lv)
+            {
+                var pl = lv.Places.FirstOrDefault(p => p.World == last.World && p.Act == last.Act) ?? lv.Places.FirstOrDefault();
+                OpenPregame(lv, pl);
+                if (_target == Target.Game) { Toast($"Opened {GameTitleWhere()} — the last vehicle you edited", sw); return; }
+            }
+        }
+        // 2. the first vehicle of the open world / Act, 3. else the first one the picker lists
+        (PregameVehicle V, VehiclePlace? P)? pick = null;
+        if (WorldAct?.Invoke() is { } here && GameVehiclePicker.OpenWorldVehicles(_gameCat!, here) is { Count: > 0 } mine) { pick = (mine[0].V, mine[0].P); why = "the first vehicle of this world"; }
+        else { pick = GameVehiclePicker.FirstListed(_gameCat!); why = "the first vehicle in Game Vehicles"; }
+        if (pick is not { } p) return;
+        OpenPregame(p.V, p.P);
+        if (_target == Target.Game) Toast($"Opened {GameTitleWhere()} — {why}", sw);
+    }
+
+    /// <summary>"Thomas' vehicle (World of Sports › Act 2 Burnin' Rubber)".</summary>
+    string GameTitleWhere()
+    {
+        var path = GamePath();
+        int i = path.LastIndexOf(" › ", StringComparison.Ordinal);
+        return i < 0 ? path : $"{path[(i + 3)..]} ({path[..i]})";
+    }
+
+    void Toast(string text, System.Diagnostics.Stopwatch sw)
+    {
+        _toast.Text = text + "   (click to hide)";
+        _toast.Visible = true; _toast.BringToFront();
+        _toastTimer.Stop(); _toastTimer.Start();
+        Log?.Invoke($"Vehicle Editor: {text} (opened by itself when the tab was first shown, {sw.ElapsedMilliseconds} ms).");
+        _status.Text = text + ". Game Vehicles ▾ lists them all.";
+    }
+
+    bool IsOpen(PregameVehicle v, VehiclePlace? p) => _target == Target.Game && _game?.Id == v.Id;
 
     /// <summary>A colour picked with Colour… goes to the front of the Recent row (last 8, no duplicates).</summary>
     void AddRecent(uint rgba)
@@ -392,7 +519,10 @@ public sealed class VehicleEditorPanel : UserControl
         _lib.Items.Clear(); _lib.Groups.Clear(); _category.Items.Clear(); _thumbQueue.Clear(); _thumbTimer.Stop(); _gameCat = null; _gameTask = null;
         if (_target == Target.Game) { _target = Target.None; _game = null; _gamePlace = null; }
         UpdateSourceLabel();
+        _autoOpenTried = false; _autoOpenPending = false; _toast.Visible = false;
         StartGameCatalog();
+        StartPartCatalog();
+        if (Visible) BeginAutoOpen();
     }
 
     /// <summary>
@@ -414,6 +544,9 @@ public sealed class VehicleEditorPanel : UserControl
             {
                 _gameCat = cached; _gameState = $"{cached.Count} vehicles (from the workspace cache, {sw.ElapsedMilliseconds} ms)";
                 RefreshPicker();
+                // the cache has no blueprints: read them in the background too, so opening one does not read its bundle
+                var pl = PregameVehicles.ReadOnlyLoader(ws, keep: 2);
+                Task.Run(() => PregameVehicles.Prefetch(ws, cached, pl));
                 return;
             }
             List<NB.Core.Project.ActEntry> acts;
@@ -438,6 +571,7 @@ public sealed class VehicleEditorPanel : UserControl
                 else _gameState = "The list could not be built in the background: " + t.Exception?.GetBaseException().Message;
                 RefreshPicker();
                 UpdateSourceLabel(); UpdateVehicleInfo();
+                if (_autoOpenPending) BeginAutoOpen();
             }, ui);
         }
         catch (Exception e) { _gameState = "Game vehicles: " + e.Message; }
@@ -463,7 +597,8 @@ public sealed class VehicleEditorPanel : UserControl
     void RefreshPicker()
     {
         var here = WorldAct?.Invoke();
-        _picker.SetData(_gameCat, here, WorldLabel?.Invoke() ?? "", _gameCat == null ? _gameState : _gameState);
+        _picker.SetData(_gameCat, here, WorldLabel?.Invoke() ?? "", _gameState);
+        _picker.SetHint(_gameState, _doc.Dirty);
     }
 
     /// <summary>Game Vehicles: the navigator window under the button.</summary>
@@ -482,7 +617,43 @@ public sealed class VehicleEditorPanel : UserControl
         _picker.Activate();
     }
 
-    /// <summary>Loads the part catalog (first use after a workspace opened).</summary>
+    Task<(PartCatalog Cat, NB.Core.Formats.CaffFile? Town)>? _catBuild;
+    string _catTiming = "";
+
+    /// <summary>The part catalog and every part's model, read on another thread when the workspace opens (read-only loader:
+    /// NB Studio's caches are left alone), so the first vehicle opens without the second of loading them.</summary>
+    void StartPartCatalog()
+    {
+        var ws = _ws;
+        _catBuild = null;
+        if (ws == null) return;
+        try
+        {
+            _idx ??= AssetIndex.LoadOrBuild(ws);
+            var idx = _idx;
+            var load = PregameVehicles.ReadOnlyLoader(ws);
+            _catBuild = Task.Run(() =>
+            {
+                var c = PartCatalog.Load(ws, idx, load);
+                // the town bundle the texture lookup starts from
+                NB.Core.Formats.CaffFile? town = null;
+                try { town = load(0x234CEC); } catch { }
+                return (c, town);
+            });
+            // then every part's model and its batches ready for the GPU (the first vehicle then only uploads them); the
+            // editor can already use the catalog meanwhile (models are parsed under the catalog's lock)
+            _catBuild.ContinueWith(t =>
+            {
+                if (t.Status != TaskStatus.RanToCompletion) return;
+                var c = t.Result.Cat;
+                foreach (var p in c.Parts.Values) try { if (c.Model(p) is { } m) VehicleRenderer.Prepare(m); } catch { }
+            }, TaskScheduler.Default);
+        }
+        catch { _catBuild = null; }
+    }
+
+    /// <summary>Loads the part catalog (first use after a workspace opened): the background one when it is there (waiting
+    /// for it if needed), else here.</summary>
     bool EnsureCatalog()
     {
         if (_cat != null) return true;
@@ -490,9 +661,18 @@ public sealed class VehicleEditorPanel : UserControl
         UseWaitCursor = true;
         try
         {
+            var esw = System.Diagnostics.Stopwatch.StartNew();
             _idx ??= AssetIndex.LoadOrBuild(_ws);
-            _cat = PartCatalog.Load(_ws, _idx);
-            _tex = new TextureResolver(_ws, _idx, _ws.LoadResident(0x234CEC), 0x234CEC);
+            PartCatalog? pre = null; NB.Core.Formats.CaffFile? town = null;
+            if (_catBuild != null)
+            {
+                try { if (_catBuild.Wait(120000) && _catBuild.Status == TaskStatus.RanToCompletion && ReferenceEquals(_catBuild.Result.Cat.Workspace, _ws)) (pre, town) = _catBuild.Result; } catch { }
+                _catBuild = null;
+            }
+            _cat = pre ?? PartCatalog.Load(_ws, _idx);
+            double tCat = esw.Elapsed.TotalMilliseconds;
+            _tex = new TextureResolver(_ws, _idx, town ?? _ws.LoadResident(0x234CEC), 0x234CEC);
+            double tTex = esw.Elapsed.TotalMilliseconds;
             _view.Catalog = _cat;
             _view.TextureSource = n => _tex?.Load(n);
             _palette.Controls.Clear();
@@ -503,6 +683,22 @@ public sealed class VehicleEditorPanel : UserControl
                 b.Click += (_, _) => { _view.PaintColour = (uint)b.Tag!; _colourShow.BackColor = b.BackColor; if (_doc.Selection.Count > 0) PaintSel(_view.PaintColour); };
                 _palette.Controls.Add(b);
             }
+            // the library (part pictures, categories, part types) right after the vehicle shows, not before it
+            if (IsHandleCreated) BeginInvoke(FillLibraryUi); else FillLibraryUi();
+            Log?.Invoke(_catTiming = $"Vehicle Editor: {_cat.Parts.Count} parts ({_cat.Parts.Values.Count(p => p.Modded)} modded), {_cat.Palette.Count} garage colours " +
+                        $"(ready in {esw.ElapsedMilliseconds} ms: parts {tCat:0}{(pre != null ? " from the background" : "")}, textures {tTex - tCat:0}).");
+            return true;
+        }
+        catch (Exception e) { Log?.Invoke("Vehicle Editor: parts could not be loaded: " + e.Message); return false; }
+        finally { UseWaitCursor = false; }
+    }
+
+    /// <summary>The parts library, the categories and the part-type list of the loaded catalog.</summary>
+    void FillLibraryUi()
+    {
+        if (_cat == null) return;
+        var lsw = System.Diagnostics.Stopwatch.StartNew();
+        {
             // part pictures: a colour chip first, the rendered part as soon as the 3D view can draw it
             _thumbs.Images.Clear(); _thumbQueue.Clear();
             foreach (var p in Ordered(_cat.Parts.Values))
@@ -519,12 +715,10 @@ public sealed class VehicleEditorPanel : UserControl
             _partType.Items.Clear();
             foreach (var p in Ordered(_cat.Parts.Values)) _partType.Items.Add(p);
             FillLibrary();
-            Log?.Invoke($"Vehicle Editor: {_cat.Parts.Count} parts ({_cat.Parts.Values.Count(p => p.Modded)} modded), {_cat.Palette.Count} garage colours.");
-            return true;
         }
-        catch (Exception e) { Log?.Invoke("Vehicle Editor: parts could not be loaded: " + e.Message); return false; }
-        finally { UseWaitCursor = false; }
+        _libTiming = lsw.ElapsedMilliseconds;
     }
+    long _libTiming;
 
     // ------------------------------------------------------------------ library
 
@@ -616,6 +810,7 @@ public sealed class VehicleEditorPanel : UserControl
         d.Changed += () =>
         {
             _view.Redraw(); SyncSelection(); UpdateVehicleInfo(); UpdateUndo(); UpdateSourceLabel();
+            if (_picker.Visible) _picker.SetHint(_gameState, _doc.Dirty);
             if (_name.Text != d.Name && !_name.Focused) { _syncing = true; _name.Text = d.Name; _syncing = false; }
         };
         _syncing = true; _name.Text = d.Name; _syncing = false;
@@ -969,8 +1164,22 @@ public sealed class VehicleEditorPanel : UserControl
     /// <summary>Scripted test runs: no questions.</summary>
     bool _scripted;
 
-    bool ConfirmDiscard() =>
-        _scripted || !_doc.Dirty || MessageBox.Show(this, "The vehicle has unsaved changes. Discard them?", "Vehicle Editor", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes;
+    /// <summary>Scripted runs that want the question (--vehicle-prompts on): tests answer it with window messages.</summary>
+    bool _scriptPrompts;
+
+    /// <summary>Before something replaces the vehicle shown: with unsaved changes, Save / Don't save / Cancel (as NB Studio
+    /// asks elsewhere). Yes saves where the vehicle came from (Save; a new vehicle asks where), No drops the changes.
+    /// False: stay (Cancel, or the save did not happen).</summary>
+    bool ConfirmDiscard(string? what = null)
+    {
+        if ((_scripted && !_scriptPrompts) || !_doc.Dirty) return true;
+        string name = _target == Target.Game && _game != null ? GameTitleWhere() : _target == Target.File && _file?.Path != null ? Path.GetFileName(_file.Path) : "the new vehicle";
+        var ans = MessageBox.Show(FindForm() ?? (IWin32Window)this, $"Save your changes to {name} before {what ?? "opening another vehicle"}?\n\nYes: save them\nNo: don't save (they are dropped)\nCancel: go back",
+            "Vehicle Editor", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Warning);
+        if (ans == DialogResult.Cancel) { _status.Text = "Cancelled: the vehicle with your changes stays open."; return false; }
+        if (ans == DialogResult.Yes) { Save(); return !_doc.Dirty; }
+        return true;
+    }
 
     void OpenDialog()
     {
@@ -987,8 +1196,9 @@ public sealed class VehicleEditorPanel : UserControl
         {
             var v = VehicleFile.Open(f);
             EnsureCatalog();
-            _target = Target.File; _file = v; _game = null; _gamePlace = null;
+            _target = Target.File; _file = v; _game = null; _gamePlace = null; _toast.Visible = false;
             Attach(VehicleDocument.From(v.Blueprint));
+            RememberLast();
             Log?.Invoke($"Vehicle Editor: opened {v.Kind.ToString().ToLowerInvariant()} \"{v.Blueprint.Name}\" ({v.Blueprint.Blocks.Count} parts) from {f}" + (v.Problems.Count > 0 ? " — " + string.Join("; ", v.Problems) : ""));
             UpdateSourceLabel();
         }
@@ -1066,13 +1276,18 @@ public sealed class VehicleEditorPanel : UserControl
     /// <summary>Opens one of the game's vehicles (Save to Game writes it back into every bundle holding it).</summary>
     public void OpenPregame(PregameVehicle v, VehiclePlace? place = null)
     {
-        if (_ws == null || !ConfirmDiscard()) return;
+        if (_ws == null || !ConfirmDiscard($"opening {v.Title}")) return;
         try
         {
             EnsureCatalog();
-            var bp = PregameVehicles.Load(_ws, v);
+            // the blueprint the background build read, while its bundle file is unchanged; else from the bundle
+            var listed = _gameCat?.FirstOrDefault(x => x.Id == v.Id) ?? v;
+            var bp = (_useBpCache ? PregameVehicles.Cached(_ws, listed) : null) ?? PregameVehicles.Load(_ws, v);
             _target = Target.Game; _game = v; _gamePlace = place; _file = null; _aiNoteHidden = false;
+            _toast.Visible = false;
             Attach(VehicleDocument.From(bp));
+            RememberLast();
+            _picker.MarkOpen(v.Id);
             Log?.Invoke($"Vehicle Editor: game vehicle {GamePath()} ({v.Short}), {bp.Blocks.Count} parts (in {string.Join(", ", v.Bundles.Select(b => b.ToString("x6")))}). Drop an Xbox 360 vehicle here to replace it.");
             _status.Text = "Game vehicle: drop an Xbox 360 vehicle (package or content file) onto the editor to replace it, edit, then Save to Game.";
             UpdateSourceLabel();
@@ -1191,6 +1406,7 @@ public sealed class VehicleEditorPanel : UserControl
             WriteFile(d.FileName, bytes, backup: true);
             Log?.Invoke($"Vehicle Editor: wrote package {d.FileName} (\"VEHICLE: {bp.Name}\", {bp.Blocks.Count} parts). Xenia loads it as is; a real Xbox 360 needs it resigned (Horizon / Velocity: Rehash and Resign).");
             _target = Target.File; _file = VehicleFile.Open(d.FileName); _game = null; _gamePlace = null; _doc.Source = _file.Blueprint.Clone();
+            RememberLast();
             Saved();
         }
         catch (Exception e) { MessageBox.Show(this, e.Message, "Save failed", MessageBoxButtons.OK, MessageBoxIcon.Error); }
@@ -1250,6 +1466,8 @@ public sealed class VehicleEditorPanel : UserControl
         {
             var done = PregameVehicles.Save(_ws, _game, bp, $"vehicle {_game.Short}{(_game.Owner.Length > 0 ? $" ({_game.Owner})" : "")}: {bp.Blocks.Count} parts (Vehicle Editor)");
             _doc.Source = bp.Clone();
+            // the listed copy follows (the next open does not read the bundle again)
+            if (_gameCat?.FirstOrDefault(x => x.Id == _game.Id) is { } lv) { lv.Blueprint = bp.Clone(); lv.BlueprintStamp = PregameVehicles.Stamp(_ws, lv); lv.Parts = bp.Blocks.Count; }
             Saved();
             Log?.Invoke(done.Count > 0 ? $"Vehicle Editor: {_game.Label} written into {string.Join(", ", done.Select(b => b.ToString("x6")))} ({bp.Blocks.Count} parts). Edit > Undo restores it."
                 : $"Vehicle Editor: {_game.Label} unchanged.");
@@ -1312,7 +1530,7 @@ public sealed class VehicleEditorPanel : UserControl
                 await Task.Delay(300); Application.DoEvents();
                 using (var b = _view.Capture()) b.Save(f);
                 var form = FindForm();
-                if (form != null) { using var whole = new Bitmap(form.Width, form.Height); form.DrawToBitmap(whole, new Rectangle(0, 0, form.Width, form.Height)); using var g = Graphics.FromImage(whole); using var v = _view.Capture(); var off = new Size(form.Width - form.ClientSize.Width - 8, form.Height - form.ClientSize.Height - 8); g.DrawImage(v, form.RectangleToClient(_view.RectangleToScreen(_view.ClientRectangle)).Location + off); if (_aiNote.Visible) { using var nb = new Bitmap(_aiNote.Width, _aiNote.Height); _aiNote.DrawToBitmap(nb, new Rectangle(0, 0, nb.Width, nb.Height)); g.DrawImage(nb, form.RectangleToClient(_aiNote.RectangleToScreen(_aiNote.ClientRectangle)).Location + off); } whole.Save(Path.ChangeExtension(f, null) + "_ui.png"); }
+                if (form != null) { using var whole = new Bitmap(form.Width, form.Height); form.DrawToBitmap(whole, new Rectangle(0, 0, form.Width, form.Height)); using var g = Graphics.FromImage(whole); using var v = _view.Capture(); var off = new Size(form.Width - form.ClientSize.Width - 8, form.Height - form.ClientSize.Height - 8); g.DrawImage(v, form.RectangleToClient(_view.RectangleToScreen(_view.ClientRectangle)).Location + off); foreach (var ov in new Control[] { _aiNote, _toast }.Where(c => c.Visible)) { using var nb = new Bitmap(ov.Width, ov.Height); ov.DrawToBitmap(nb, new Rectangle(0, 0, nb.Width, nb.Height)); g.DrawImage(nb, form.RectangleToClient(ov.RectangleToScreen(ov.ClientRectangle)).Location + off); } whole.Save(Path.ChangeExtension(f, null) + "_ui.png"); }
                 log($"script: vehicle shot {f}"); break;
             }
             case "--vehicle-paint-all": { var c = Col(next()); SelectAll(); PaintSel(c); log($"script: painted {_doc.Parts.Count} parts #{c >> 8:X6}"); break; }
@@ -1457,6 +1675,65 @@ public sealed class VehicleEditorPanel : UserControl
                 break;
             }
             case "--vehicle-state": log($"script: tool {_view.Tool}, place part {_view.PlacePart?.Key} o{_view.PlaceOrientation} ({OrientName(_view.PlaceOrientation)}), rotate {_each.Text}, selection {string.Join(", ", _doc.Selection.Select(p => $"{_cat?[p.B.Part]?.Key}@{p.X},{p.Y},{p.Z} o{p.Orientation}"))}, buttons: {_tSel.Text} / {_tPlace.Text} / {_tPaint.Text}"); break;
+            case "--vehicle-open-timing":
+            {
+                // --vehicle-open-timing A,B,C: opens each game vehicle (asset short names) and logs the time to load, show and draw it
+                foreach (var n in next().Split(','))
+                {
+                    var v = GameCatalog()?.FirstOrDefault(x => x.Short == n || x.Asset == n);
+                    if (v == null) { log("script: no vehicle " + n); continue; }
+                    var sw = System.Diagnostics.Stopwatch.StartNew();
+                    OpenPregame(v, v.Places.FirstOrDefault());
+                    double open = sw.Elapsed.TotalMilliseconds;
+                    var msw = System.Diagnostics.Stopwatch.StartNew();
+                    foreach (var pi in _doc.Parts.Select(p => _cat?[p.B.Part]).Where(p => p != null).Distinct()) _cat!.Model(pi!);
+                    double models = msw.Elapsed.TotalMilliseconds, tex0 = VehicleRenderer.TextureLoadMs, bat0 = VehicleRenderer.BatchBuildMs;
+                    double frame = _view.RenderNowMs();
+                    if (_catTiming.Length > 0) { log("script: " + _catTiming); _catTiming = ""; }
+                    if (_libTiming > 0) { log($"script: library filled right after (not part of the open): {_libTiming} ms"); _libTiming = 0; }
+                    log($"script: open timing {n}: {_doc.Parts.Count} parts, open {open:0} ms, models {models:0} ms, first frame {frame:0} ms (textures {VehicleRenderer.TextureLoadMs - tex0:0} ms, buffers {VehicleRenderer.BatchBuildMs - bat0:0} ms), total {open + models + frame:0} ms");
+                    Application.DoEvents();
+                }
+                break;
+            }
+            case "--vehicle-part-cache": { if (next() == "off") _catBuild = null; log("script: background part catalog " + (_catBuild == null ? "off" : "on")); break; }
+            case "--vehicle-bp-cache": _useBpCache = next() == "on"; log("script: blueprint cache " + (_useBpCache ? "on" : "off (reads the bundles, as before round 5)")); break;
+            case "--vehicle-autoopen":
+            {
+                // --vehicle-autoopen on: lets this scripted run open a vehicle by itself like a user's first show of the tab
+                _autoOpenScript = next() == "on"; _autoOpenTried = false;
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                BeginAutoOpen();
+                while (_autoOpenPending && sw.ElapsedMilliseconds < 120000) { await Task.Delay(50); Application.DoEvents(); }
+                log($"script: auto-open -> {(_toast.Visible ? _toast.Text : "(nothing opened)")}; target {_where.Text} ({sw.ElapsedMilliseconds} ms)");
+                break;
+            }
+            case "--vehicle-forget-last": { if (_ws != null) _lastVehicles.Remove(WsKey(_ws)); SaveEditorSettings(); log("script: last vehicle forgotten"); break; }
+            case "--vehicle-prompts": _scriptPrompts = next() == "on"; log("script: vehicle prompts " + (_scriptPrompts ? "on" : "off")); break;
+            case "--vehicle-picker-click":
+            {
+                // --vehicle-picker-click VEHICLE single|double: a mouse click message on the vehicle's node in the open picker
+                var q = next(); bool dbl = next() == "double";
+                var before = _where.Text;
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                bool ok = _picker.PostClick(q, dbl);
+                await Task.Delay(400); Application.DoEvents();
+                log($"script: picker {(dbl ? "double-" : "")}click {q}: {ok}; selected '{_picker.SelectedText}'; open: {before} -> {_where.Text} ({sw.ElapsedMilliseconds} ms incl. 400 ms wait); dirty {_doc.Dirty}; picker shown {_picker.Visible}");
+                break;
+            }
+            case "--vehicle-picker-key":
+            {
+                // --vehicle-picker-key KEY N: N key messages to the picker's tree, 60 ms apart (holding a key), then waits
+                var k = (Keys)Enum.Parse(typeof(Keys), next(), true); int n = int.Parse(next());
+                int opens = 0; void Count(PregameVehicle a, VehiclePlace? b) => opens++;
+                _picker.Browsed += Count;
+                for (int i = 0; i < n; i++) { _picker.PostKey(k); await Task.Delay(60); Application.DoEvents(); }
+                await Task.Delay(500); Application.DoEvents();
+                _picker.Browsed -= Count;
+                log($"script: picker key {k} x{n}: selected '{_picker.SelectedText}', opened {opens} time(s): {_where.Text}");
+                break;
+            }
+            case "--vehicle-move-part": { var k = next(); SelectWhere((p, i) => Match(p, i, k)); Move(0, 1, 0); log($"script: moved '{k}' up: dirty {_doc.Dirty}"); break; }
             case "--vehicle-unsaved": log($"script: unsaved for Save All: {HasUnsaved} {(HasUnsaved ? UnsavedLabel : "")}; dirty {_doc.Dirty}"); break;
             case "--vehicle-game-path": { var n = next(); var v = GameCatalog()?.FirstOrDefault(x => x.Short == n || x.Asset == n); if (v != null) OpenPregame(v, v.Places.FirstOrDefault()); log($"script: game vehicle {n}: {(v == null ? "not found" : _doc.Parts.Count + " parts; header: " + _where.Text + "; status: " + _source.Text)}"); break; }
             case "--vehicle-name": { _doc.Begin("rename"); _doc.Name = next(); _doc.Commit(); _syncing = true; _name.Text = _doc.Name; _syncing = false; break; }

@@ -89,6 +89,16 @@ public sealed class VehicleViewport : UserControl
     public void ResetGpu() { if (_ready) { _gl.MakeCurrent(); _r.Clear(); } _gl.Invalidate(); }
 
     public void Redraw() => _gl.Invalidate();
+
+    /// <summary>Draws a frame now and waits for the GPU (timings): milliseconds, the uploads of new models included.</summary>
+    public double RenderNowMs()
+    {
+        if (!_ready) return -1;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        Render();
+        _gl.MakeCurrent(); GL.Finish();
+        return sw.Elapsed.TotalMilliseconds;
+    }
     public new void Focus() => _gl.Focus();
 
     // ------------------------------------------------------------------ camera

@@ -82,12 +82,18 @@ public sealed class PartCatalog
     readonly Dictionary<uint, CaffFile?> _caffs = new();
     readonly Dictionary<uint, ModelAsset?> _models = new();
 
-    PartCatalog(Workspace ws, AssetIndex idx) { Workspace = ws; Index = idx; }
+    /// <summary>How bundles are read: the workspace's loader, or one that leaves NB Studio's caches alone (a catalog built on
+    /// another thread, <see cref="PregameVehicles.ReadOnlyLoader"/>).</summary>
+    readonly Func<uint, CaffFile> _load;
 
-    public static PartCatalog Load(Workspace ws, AssetIndex? idx = null)
+    PartCatalog(Workspace ws, AssetIndex idx, Func<uint, CaffFile>? load) { Workspace = ws; Index = idx; _load = load ?? ws.LoadResident; }
+
+    /// <summary>Every part of the workspace. With <paramref name="load"/> (a read-only loader) it can be built on another
+    /// thread while NB Studio works on: it then only reads files.</summary>
+    public static PartCatalog Load(Workspace ws, AssetIndex? idx = null, Func<uint, CaffFile>? load = null)
     {
         idx ??= AssetIndex.LoadOrBuild(ws);
-        var cat = new PartCatalog(ws, idx);
+        var cat = new PartCatalog(ws, idx, load);
         foreach (var e in idx.Entries)
             if (!e.Streamed && e.Symbol > 0 && e.Id != 0) { if (!cat._byId.TryGetValue(e.Id, out var l)) cat._byId[e.Id] = l = new(); l.Add(e); }
         cat.LoadPalette();
@@ -290,7 +296,7 @@ public sealed class PartCatalog
     {
         bundle &= 0xFFFFFF;
         if (_caffs.TryGetValue(bundle, out var c)) return c;
-        try { c = Workspace.LoadResident(bundle); } catch { c = null; }
+        try { c = _load(bundle); } catch { c = null; }
         return _caffs[bundle] = c;
     }
 
@@ -307,7 +313,16 @@ public sealed class PartCatalog
     public IEnumerable<uint> HoldersOf(uint id) => _byId.TryGetValue(id, out var l) ? l.Select(e => e.Bundle & 0xFFFFFF).Distinct() : Enumerable.Empty<uint>();
 
     /// <summary>The part's model as stored (from any bundle that holds it resident; the town bundle first), parsed once.</summary>
+    /// <summary>Models are parsed under this lock: a catalog handed over by a background build may still be reading the
+    /// rest of its models while the editor asks for one.</summary>
+    readonly object _modelLock = new();
+
     public ModelAsset? RawModel(uint modelId)
+    {
+        lock (_modelLock) return RawModelLocked(modelId);
+    }
+
+    ModelAsset? RawModelLocked(uint modelId)
     {
         if (_models.TryGetValue(modelId, out var m)) return m;
         m = null;
@@ -330,6 +345,11 @@ public sealed class PartCatalog
     public static float WheelTravel = 0.6f;
 
     public ModelAsset? Model(PartInfo p)
+    {
+        lock (_modelLock) return ModelLocked(p);
+    }
+
+    ModelAsset? ModelLocked(PartInfo p)
     {
         string key = p.ModelId.ToString("X8") + "|" + string.Join(",", p.Switches.OrderBy(k => k.Key).Select(k => $"{k.Key}={k.Value}")) + "|" + p.SuspensionTravel * WheelTravel;
         if (_shown.TryGetValue(key, out var shown)) return shown;
