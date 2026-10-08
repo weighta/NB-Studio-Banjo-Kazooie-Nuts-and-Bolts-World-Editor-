@@ -20,6 +20,9 @@ public sealed partial class SceneObject
     /// <summary>Sky dome: true when the level script centres it on the camera (Showdown Town), false when it stands at the
     /// world origin (Nutty Acres' bluesky, Spiral Mountain).</summary>
     public bool SkyFollowsCamera;
+    /// <summary>Markers: the class of the objparams the marker places (objparams +0x42, e.g. "objDefId_entityAvatarBall"),
+    /// or null.</summary>
+    public string? ObjClass;
 }
 
 /// <summary>

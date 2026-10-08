@@ -65,6 +65,7 @@ public sealed class TransformPanel : UserControl
         _obj = o;
         bool editable = o != null && o.Kind != SceneObjectKind.Terrain;
         foreach (var n in _pos.Concat(_rot)) n.Enabled = editable;
+        _rot[0].Enabled = _rot[2].Enabled = editable && !ActorMarkers.YawOnly(o);   // player starts and characters: Y only
         // markers keep their scale (the record's scale field is not a size; path nodes use it as a node value)
         foreach (var n in _scl) n.Enabled = editable && !Viewport.SceneViewport.ScaleLocked(o);
         _apply.Enabled = _reset.Enabled = editable;
@@ -81,7 +82,7 @@ public sealed class TransformPanel : UserControl
         {
             if (_obj == null) { _info.Text = ""; return; }
             Matrix4x4.Decompose(_obj.Transform, out var s, out var q, out var t);
-            var e = ToEuler(q);
+            var e = ActorMarkers.YawOnly(_obj) ? new Vector3(0, ActorMarkers.Yaw(_obj.Transform) * 180 / MathF.PI, 0) : ToEuler(q);
             Set(_pos, t); Set(_rot, e); Set(_scl, s);
             if (InfoFor?.Invoke(_obj) is string special) { _info.Text = special; return; }
             if (_obj.Marker is { Type: 22 } pm) _link.Value = Math.Clamp(pm.Link, 0, 65535);
@@ -98,6 +99,7 @@ public sealed class TransformPanel : UserControl
                   "and each triangle keeps one height.\n" + (_obj.Dirty ? "Modified (not yet saved)" : "Unmodified")
                 : _obj.Kind == SceneObjectKind.Marker
                 ? (SpawnPoints.Label(_obj) is { } spl ? $"{spl.ToUpperInvariant()}: {SpawnPoints.Detail(_obj)}\n" : "") +
+                  (ActorMarkers.Is(_obj) ? ActorMarkers.Detail(_obj) + "\n" : "") +
                   $"Marker type {_obj.Marker!.Type} ({NB.Core.World.MarkerRecord.TypeName(_obj.Marker.Type)}) #{_obj.Marker.Index} in {_obj.ModelName} at 0x{_obj.Marker.Offset:X}\n" +
                   $"References: {string.Join(", ", _obj.Marker.AssetIds.Zip(_obj.Marker.AssetNames).Take(6).Select(p => p.Second == "?" ? p.First.ToString("X8") : p.Second))}\n" +
                   $"Strings: {string.Join(", ", _obj.Marker.Strings.Take(4))}\n" +

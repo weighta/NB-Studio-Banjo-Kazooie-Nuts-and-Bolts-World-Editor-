@@ -14,6 +14,9 @@ public sealed partial class SceneViewport
         public ModelAsset Source = null!, Copy = null!;
         public readonly List<(MeshDraw Bind, Vector3[] Pos, Vector3[]? Nrm)> Buffers = new();
         public readonly Dictionary<MeshDraw, MaterialInfo> Mats = new();
+        /// <summary>The object's own box (bind pose) to put back, and the box of what is not skinned (other draws,
+        /// nested models): the posed box is that plus the skinned vertices as posed.</summary>
+        public Vector3 BindMin, BindMax, RestMin = new(float.MaxValue), RestMax = new(float.MinValue);
     }
     readonly Dictionary<SceneObject, Posed> _posed = new();
     static readonly MethodInfo CloneMethod = typeof(object).GetMethod("MemberwiseClone", BindingFlags.Instance | BindingFlags.NonPublic)!;
@@ -27,18 +30,22 @@ public sealed partial class SceneViewport
     {
         if (skin == null || o.Model == null)
         {
-            if (_posed.Remove(o, out var old) && _ready) { _gl.MakeCurrent(); _r.ForgetModel(old.Copy); }
+            if (_posed.Remove(o, out var old))
+            {
+                if (old.Source == o.Model) { o.BoundsMin = old.BindMin; o.BoundsMax = old.BindMax; }
+                if (_ready) { _gl.MakeCurrent(); _r.ForgetModel(old.Copy); }
+            }
             _gl.Invalidate();
             return;
         }
         if (!_posed.TryGetValue(o, out var p) || p.Source != o.Model)
         {
-            p = new Posed { Source = o.Model, Copy = o.Model.ShallowCopy() };
+            p = new Posed { Source = o.Model, Copy = o.Model.ShallowCopy(), BindMin = o.BoundsMin, BindMax = o.BoundsMax };
             var arrays = new Dictionary<Vector3[], (Vector3[] Pos, Vector3[]? Nrm)>(ReferenceEqualityComparer.Instance as IEqualityComparer<Vector3[]>);
             var draws = new List<MeshDraw>();
             foreach (var d in o.Model.Draws)
             {
-                if (d.BlendIndices == null || d.BlendWeights == null) { draws.Add(d); continue; }
+                if (d.BlendIndices == null || d.BlendWeights == null) { draws.Add(d); AddBox(ref p.RestMin, ref p.RestMax, d, Matrix4x4.Identity, o.Model); continue; }
                 var c = (MeshDraw)CloneMethod.Invoke(d, null)!;
                 if (!arrays.TryGetValue(d.Positions, out var a))
                 {
@@ -49,12 +56,31 @@ public sealed partial class SceneViewport
                 draws.Add(c);
             }
             p.Copy.Draws = draws;
+            foreach (var (cm, cl) in o.Children) foreach (var cd in cm.Draws) AddBox(ref p.RestMin, ref p.RestMax, cd, cl, cm);
             foreach (var d in draws) p.Mats[d] = MaterialInfo.Of(d);
             _posed[o] = p;
         }
         foreach (var (bind, pos, nrm) in p.Buffers) CharacterAnims.Skin(bind, pos, nrm, skin);
+        // picking, the selection box, box select and focus use the box of the character as drawn (posed, at the
+        // animation's joint scale), not the bind pose's (arms out, smaller)
+        var mn = p.RestMin; var mx = p.RestMax;
+        foreach (var d in p.Copy.Draws) if (d.BlendIndices != null) AddBox(ref mn, ref mx, d, Matrix4x4.Identity, p.Copy);
+        if (mn.X <= mx.X) { o.BoundsMin = mn; o.BoundsMax = mx; }
         if (_ready) { _gl.MakeCurrent(); _r.UpdateVertices(p.Copy, p.Mats); }
         _gl.Invalidate();
+    }
+
+    /// <summary>Grows a box by the vertices a draw uses (LOD-only nodes left out), moved by <paramref name="xf"/>.</summary>
+    static void AddBox(ref Vector3 mn, ref Vector3 mx, MeshDraw d, Matrix4x4 xf, ModelAsset m)
+    {
+        if (m.LodOnlyNodes.Contains(d.Node)) return;
+        var P = d.Positions; bool id = xf.IsIdentity;
+        foreach (int i in d.Indices)
+        {
+            if ((uint)i >= (uint)P.Length) continue;
+            var v = id ? P[i] : Vector3.Transform(P[i], xf);
+            mn = Vector3.Min(mn, v); mx = Vector3.Max(mx, v);
+        }
     }
 
     /// <summary>Forgets every posed copy (a new scene).</summary>

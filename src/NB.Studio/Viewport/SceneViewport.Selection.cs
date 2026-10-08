@@ -111,6 +111,7 @@ public sealed partial class SceneViewport
             if (o == Selected) continue;
             if (ScaleLocked(o) && scales) { var m = start; m.Translation = Vector3.Transform(start.Translation, x); o.Transform = m; }
             else o.Transform = start * x;
+            if (ActorMarkers.YawOnly(o)) o.Transform = ActorMarkers.Upright(o.Transform);   // characters in a turned group stay upright
             if (o.Kind == SceneObjectKind.Marker && !_movingLines.Contains(o)) _linesVersion++;
         }
     }
@@ -215,7 +216,7 @@ public sealed partial class SceneViewport
                 if (!b.IntersectsWith(rf)) continue;
                 if (rf.Contains(b)) { res.Add(o); continue; }
             }
-            bool hit = asModel ? ModelInRect(o.Model!, m4, rf, W, H) : BoxInRect(o.BoundsMin, o.BoundsMax, m4, rf, W, H);
+            bool hit = asModel ? ModelInRect(ModelFor(o)!, m4, rf, W, H) : BoxInRect(o.BoundsMin, o.BoundsMax, m4, rf, W, H);
             if (!hit && asModel)
                 foreach (var (cm, cl) in o.Children)
                     if (ModelInRect(cm, cl * m4, rf, W, H)) { hit = true; break; }

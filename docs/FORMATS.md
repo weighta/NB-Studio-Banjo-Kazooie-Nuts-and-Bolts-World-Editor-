@@ -1388,3 +1388,10 @@ The camera of an `aid_cutscene_*` main record (the part that is not an "animatio
 - Deleting those triangles makes the game draw black sky with stars in those directions; the black area turns with the camera.
 - Deleting an ordinary collision triangle does not cause this.
 - The engine mechanism is not traced; the likely explanation is that the outer box sets the draw distance or the visibility bounds.
+
+### 18.3. Actor markers stand upright (verified in Xenia, NB Studio 1.20.1)
+- Markers whose object class is `objDefId_banjoactor` (town NPCs, Jinjos, Gruntbots, wind-up critters) are stood upright by the game.
+- The game removes the tilt the shortest way and keeps the heading, i.e. it rotates the marker's up axis onto world +Y.
+- Examples: Thomas tilted 60° and Bottles tilted 45° appear upright. Klungo pitched 120° does not appear at all.
+- Props (e.g. Jig-o-Vend) keep their tilt.
+- A yaw beyond ±90° stored as (X 180, Y y, Z 180) is read correctly.

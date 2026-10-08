@@ -521,7 +521,10 @@ public sealed partial class SceneViewport : UserControl
         Scene = scene; Selected = null;
         if (scene != null)
             foreach (var o in scene.Objects)
+            {
                 if (SpawnPoints.Is(o) && o.Model == null) { o.BoundsMin = SpawnBounds.Min; o.BoundsMax = SpawnBounds.Max; }
+                ActorMarkers.StandUpright(o);   // characters stand upright, as in the game (ActorMarkers.cs)
+            }
         InitCameras(scene);   // warp pad cameras etc. (SceneViewport.Cameras.cs)
 
         _allColl = null; _collFor = null; CollisionSummary = "";
@@ -966,7 +969,7 @@ public sealed partial class SceneViewport : UserControl
         if (Mode == GizmoMode.Select || (Mode == GizmoMode.Scale && ScaleLocked(Selected))) return;
         var ax = GizmoAxes(); float len = GizmoLength();
         var right = Right(); var up = Vector3.Normalize(Vector3.Cross(right, Forward()));
-        bool yawOnly = Mode == GizmoMode.Rotate && SpawnPoints.Is(Selected);   // a player start turns about Y only
+        bool yawOnly = Mode == GizmoMode.Rotate && ActorMarkers.YawOnly(Selected);   // a player start or character turns about Y only
         for (int i = 0; i < 3; i++)
         {
             if (yawOnly && i != 1) continue;
@@ -993,7 +996,7 @@ public sealed partial class SceneViewport : UserControl
         int best = -1; float bestD = 9;
         for (int i = 0; i < 3; i++)
         {
-            if (Mode == GizmoMode.Rotate && i != 1 && SpawnPoints.Is(Selected)) continue;   // a player start: the Y handle only
+            if (Mode == GizmoMode.Rotate && i != 1 && ActorMarkers.YawOnly(Selected)) continue;   // a player start / character: the Y handle only
             var s1 = ToScreen(p + ax[i] * len); if (s1 == null) continue;
             var a = s0.Value; var b = s1.Value; var ab = b - a; float l2 = ab.LengthSquared(); if (l2 < 4) continue;
             float t = Math.Clamp(Vector2.Dot(new Vector2(m.X, m.Y) - a, ab) / l2, 0.15f, 1f);
@@ -1367,8 +1370,8 @@ public sealed partial class SceneViewport : UserControl
     {
         if (Selected == null || Selected.Kind == SceneObjectKind.Terrain) return;
         if (kind == XfKind.Scale && ScaleLocked(Selected)) return;   // markers keep their scale
-        if (kind == XfKind.Rotate && SpawnPoints.Is(Selected)) { axis = 1; space = AxisSpace.World; }   // a player start turns about Y only (its yaw is Banjo's facing)
-        if (_xf != XfKind.None) { if (!drag) { _xf = kind; _xfTyped = ""; if (kind == XfKind.Rotate && SpawnPoints.Is(Selected)) { _xfAxis = 1; _xfSpace = AxisSpace.World; } UpdateTransform(); } return; }
+        if (kind == XfKind.Rotate && ActorMarkers.YawOnly(Selected)) { axis = 1; space = AxisSpace.World; }   // a player start / character turns about Y only (the game uses its facing only)
+        if (_xf != XfKind.None) { if (!drag) { _xf = kind; _xfTyped = ""; if (kind == XfKind.Rotate && ActorMarkers.YawOnly(Selected)) { _xfAxis = 1; _xfSpace = AxisSpace.World; } UpdateTransform(); } return; }
         _xf = kind; _xfDrag = drag; _xfAxis = axis; _xfSpace = space; _xfTyped = ""; _xfDragKeyAxis = false;
         _xfStart = Selected.Transform; _xfMouse0 = _mouse;
         _xfPivot = GizmoPoint();
@@ -1408,7 +1411,7 @@ public sealed partial class SceneViewport : UserControl
 
     void SetAxis(int axis)
     {
-        if (_xf == XfKind.Rotate && Selected != null && SpawnPoints.Is(Selected)) { _xfAxis = 1; _xfSpace = AxisSpace.World; UpdateTransform(); return; }   // yaw only
+        if (_xf == XfKind.Rotate && Selected != null && ActorMarkers.YawOnly(Selected)) { _xfAxis = 1; _xfSpace = AxisSpace.World; UpdateTransform(); return; }   // yaw only
         // X / Y / Z: world axis, the same key again: the object's own axis, again: free. Scaling a turned object starts with
         // its own axis (scaling along a world axis would shear it), then the world axis.
         bool aligned = IsAxisAligned(_xfStart);
@@ -1829,11 +1832,20 @@ public sealed partial class SceneViewport : UserControl
     {
         if (Scene == null) return (null, 0);
         using var _p = Prof.Time("Pick (objects)");
+        var (best, bestT) = PickRay(p, markersOnly: false, float.MaxValue);
+        if (best?.Kind != SceneObjectKind.Marker && PickNear(p, bestT) is { Obj: not null } near) return near;   // SceneViewport.Pick.cs
+        if (best == null && PickableSky is { } sky) return (sky, 1e6f);
+        return (best, bestT);
+    }
+
+    /// <summary>The nearest object under one pixel (closer than <paramref name="limit"/>); characters as posed.</summary>
+    (SceneObject? Obj, float Dist) PickRay(Point p, bool markersOnly, float limit)
+    {
         var (ro, rd) = Ray(p);
-        SceneObject? best = null; float bestT = float.MaxValue;
-        foreach (var o in Scene.Objects)
+        SceneObject? best = null; float bestT = limit;
+        foreach (var o in Scene!.Objects)
         {
-            if (!o.Visible) continue;
+            if (!o.Visible || (markersOnly && o.Kind != SceneObjectKind.Marker)) continue;
             if (o.Kind == SceneObjectKind.Terrain && !ShowTerrain) continue;
             if (o.Kind == SceneObjectKind.Water && !WaterShown) continue;
             if (o.IsSkyDome) continue;   // the sky: only when nothing else is hit (below)
@@ -1844,13 +1856,12 @@ public sealed partial class SceneViewport : UserControl
             if (!Matrix4x4.Invert(o.Transform, out var inv)) continue;
             var lo = Vector3.Transform(ro, inv); var ld = Vector3.TransformNormal(rd, inv);
             if (!RayBox(lo, ld, o.BoundsMin, o.BoundsMax, out float tb) || tb > bestT) continue;
-            float t = !asModel ? tb : RayMesh(lo, ld, o.Model!, bestT);
+            float t = !asModel ? tb : RayMesh(lo, ld, ModelFor(o)!, bestT);
             if (asModel)
                 foreach (var (cm, cl) in o.Children)
                     if (Matrix4x4.Invert(cl, out var ci)) t = MathF.Min(t, RayMesh(Vector3.Transform(lo, ci), Vector3.TransformNormal(ld, ci), cm, bestT));
             if (t < bestT) { bestT = t; best = o; }
         }
-        if (best == null && PickableSky is { } sky) return (sky, 1e6f);
         return (best, bestT);
     }
 
@@ -1886,7 +1897,7 @@ public sealed partial class SceneViewport : UserControl
             if (!DrawsModel(o, keepSelected: false) || !Matrix4x4.Invert(o.Transform, out var inv)) continue;
             var lo = Vector3.Transform(ro, inv); var ld = Vector3.TransformNormal(rd, inv);
             if (o.Kind != SceneObjectKind.Terrain && (!RayBox(lo, ld, o.BoundsMin, o.BoundsMax, out float tb) || tb > bestT)) continue;
-            float t = RayMesh(lo, ld, o.Model!, bestT);
+            float t = RayMesh(lo, ld, ModelFor(o)!, bestT);
             foreach (var (cm, cl) in o.Children)
                 if (Matrix4x4.Invert(cl, out var ci)) t = MathF.Min(t, RayMesh(Vector3.Transform(lo, ci), Vector3.TransformNormal(ld, ci), cm, bestT));
             if (t < bestT) { bestT = t; best = o; }

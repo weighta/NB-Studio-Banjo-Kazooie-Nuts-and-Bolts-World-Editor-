@@ -311,7 +311,7 @@ public sealed partial class SceneViewport
                 }
                 return true;
             }
-            case "--list-objects": { var f = next(); foreach (var o in Scene?.Objects.Where(o => o.Name.Contains(f, StringComparison.OrdinalIgnoreCase)) ?? Enumerable.Empty<NB.Core.World.SceneObject>()) log($"script: object {o.Name} at {Fmt(o.Transform.Translation)} model {(o.Model != null ? "yes" : "no")}"); return true; }
+            case "--list-objects": { var f = next(); foreach (var o in Scene?.Objects.Where(o => o.Name.Contains(f, StringComparison.OrdinalIgnoreCase)) ?? Enumerable.Empty<NB.Core.World.SceneObject>()) log($"script: object {o.Name} at {Fmt(o.Transform.Translation)} model {(o.Model != null ? "yes" : "no")}{(o.ModelSource is { Length: > 0 } ms ? " (" + ms + ")" : "")}{(o.ObjClass != null ? " class " + o.ObjClass : "")}{(o.Marker != null ? $" rot {Fmt(o.Marker.Rotation * (180 / MathF.PI))}" : "")}"); return true; }
             case "--idle-poses": IdlePoses = next() == "on"; log($"script: idle poses {(IdlePoses ? "on" : "off")}"); return true;
             case "--idle-info": log("script: idle poses: " + IdlePoseInfo + "; posed " + string.Join(", ", _posed.Keys.Select(o => o.Name))); return true;
 
@@ -325,6 +325,21 @@ public sealed partial class SceneViewport
                 _speedMenu.Close(); v.Save(file); log("script: speed menu captured"); return true;
             }
             case "--deselect": Select(null); log("script: selection cleared"); return true;
+            case "--pick-audit": PickAudit(next(), log); return true;   // SceneViewport.Pick.cs
+            case "--set-rot":
+            {
+                // test only: the selection's rotation set to Euler angles X,Y,Z (degrees, as markers store them), no rules applied
+                var v = next().Split(',').Select(F).ToArray(); var o = Selected!; var t = o.Transform;
+                o.Transform = Matrix4x4.CreateRotationX(v[0] * MathF.PI / 180) * Matrix4x4.CreateRotationY(v[1] * MathF.PI / 180) * Matrix4x4.CreateRotationZ(v[2] * MathF.PI / 180) * Matrix4x4.CreateTranslation(t.Translation);
+                _gl.Invalidate(); log($"script: {o.Name} rotation set to {v[0]}, {v[1]}, {v[2]}"); return true;
+            }
+            case "--set-yaw":
+            {
+                // the selection upright, turned to a yaw (degrees, 0 = facing +Z), position and scale kept (not saved)
+                var o = Selected!; var t = o.Transform; float sc = new Vector3(t.M11, t.M12, t.M13).Length();
+                o.Transform = Matrix4x4.CreateScale(sc) * Matrix4x4.CreateRotationY(F(next()) * MathF.PI / 180) * Matrix4x4.CreateTranslation(t.Translation);
+                _gl.Invalidate(); log($"script: {o.Name} upright, x-axis {Fmt(new Vector3(o.Transform.M11, o.Transform.M12, o.Transform.M13))}"); return true;
+            }
             case "--xlate-audit":
             {
                 // every model of the open world (objects and marker objects): draws whose pixel shader is not translated,

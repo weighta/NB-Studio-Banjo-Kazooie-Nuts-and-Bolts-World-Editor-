@@ -482,6 +482,7 @@ public sealed partial class WorldScene
             }
             else Audit.Note("objects the game places at tag markers (not found)", spawned);
         }
+        obj.ObjClass = cls;
         if (loc == null)
         {
             var vehicles = r.AssetIds.Where(a => a >> 24 == 0x00).Select(a => FindAsset(a, markerCaff))
