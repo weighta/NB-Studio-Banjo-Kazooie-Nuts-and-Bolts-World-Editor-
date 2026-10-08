@@ -106,7 +106,7 @@ public sealed partial class SceneViewport
             case "--show":
             {
                 var what = next(); bool on = next() == "on";
-                switch (what) { case "markers": ShowMarkers = on; break; case "paths": ShowPaths = on; break; case "terrain": ShowTerrain = on; break; case "scenery": ShowScenery = on; break; case "objects": ShowObjects = on; break; case "grass": ShowGrass = on; break; case "cameras": ShowCameras = on; break; }
+                switch (what) { case "markers": ShowMarkers = on; break; case "paths": ShowPaths = on; break; case "terrain": ShowTerrain = on; break; case "scenery": ShowScenery = on; break; case "objects": ShowObjects = on; break; case "grass": ShowGrass = on; break; case "cameras": ShowCameras = on; break; case "cutscenepaths": ShowAllCutscenePaths = on; break; }
                 Refresh3D(); log($"script: show {what} {on}"); return true;
             }
             case "--key":
@@ -276,7 +276,15 @@ public sealed partial class SceneViewport
                 // --hover X,Y: mouse rests over a view pixel (the start-point tooltip)
                 var v = next().Split(',').Select(int.Parse).ToArray();
                 OnMouseMove(null, new MouseEventArgs(MouseButtons.None, 0, v[0], v[1], 0)); HoverTick();
-                log($"script: hover {v[0]},{v[1]}: {(_tipFor != null ? "tooltip for " + _tipFor.Name : "no tooltip")} (picked {Pick(new Point(v[0], v[1])).Obj?.Name ?? "-"})"); return true;
+                log($"script: hover {v[0]},{v[1]}: {(_tipFor != null ? "tooltip for " + _tipFor.Name : _tipPath != null ? "cut-scene path " + _tipPath.Asset : "no tooltip")} (picked {Pick(new Point(v[0], v[1])).Obj?.Name ?? "-"})"); return true;
+            }
+            case "--cut-path-pixel":
+            {
+                // --cut-path-pixel NAME FRAME: where frame FRAME of a cut-scene camera path is in the view
+                var q = next(); int f = int.Parse(next());
+                var c = _cutPaths.First(x => x.Asset.Contains(q, StringComparison.OrdinalIgnoreCase));
+                var sp = ToScreen(c.Positions[Math.Min(f, c.Positions.Length - 1)]);
+                log(sp is { } pp ? $"script: path pixel {pp.X:0},{pp.Y:0}" : "script: path pixel off screen"); return true;
             }
             case "--sel-collision":
             {

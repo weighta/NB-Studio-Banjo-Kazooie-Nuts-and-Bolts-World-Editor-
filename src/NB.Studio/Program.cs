@@ -6,6 +6,14 @@ static class Program
     static void Main(string[] args)
     {
         ApplicationConfiguration.Initialize();
+        if (NB.Core.IO.QuietLaunch.Enabled)
+        {
+            // background test runs: the 3D views' GLFW windows must not take the foreground when they are shown
+            NB.Core.IO.QuietLaunch.LockForeground();
+            OpenTK.Windowing.Desktop.GLFWProvider.EnsureInitialized();
+            OpenTK.Windowing.GraphicsLibraryFramework.GLFW.WindowHint(OpenTK.Windowing.GraphicsLibraryFramework.WindowHintBool.FocusOnShow, false);
+            OpenTK.Windowing.GraphicsLibraryFramework.GLFW.WindowHint(OpenTK.Windowing.GraphicsLibraryFramework.WindowHintBool.Focused, false);
+        }
         Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
         Application.ThreadException += (_, e) => MessageBox.Show(e.Exception.ToString(), "Unexpected error", MessageBoxButtons.OK, MessageBoxIcon.Error);
         // "--photos [files]", or console photo packages dropped on NBStudio.exe: only the Xbox 360 Photo Viewer

@@ -1044,6 +1044,7 @@ public sealed partial class SceneViewport : UserControl
         DrawHiddenNote(W, H);
         DrawSpeedReadout(W, H);
         DrawTip(W, H);
+        DrawPathTip(W, H);
         var hud = HudText();
         if (hud != null)
         {
@@ -1063,7 +1064,8 @@ public sealed partial class SceneViewport : UserControl
         {
             if (!o.Visible || !SpawnPoints.Is(o) || SpawnPoints.Label(o) is not { } text) continue;
             var top = o.Transform.Translation + Vector3.UnitY * 3.7f;
-            if (Vector3.Dot(top - _camPos, Forward()) < 0.5f || Vector3.Distance(top, _camPos) > 2000) continue;
+            // like the camera labels: the name only when near (or selected / hovered); far away the green flag figure shows it
+            if (Vector3.Dot(top - _camPos, Forward()) < 0.5f || (Vector3.Distance(top, _camPos) > 250 && !IsSelected(o) && o != _tipFor)) continue;
             if (ToScreen(top) is not { } sp) continue;
             if (!_spawnLabels.TryGetValue(text, out var ov))
             {
@@ -1106,7 +1108,7 @@ public sealed partial class SceneViewport : UserControl
     void HoverMoved()
     {
         _hoverTimer.Stop();
-        if (_tipFor != null) { _tipFor = null; _gl.Invalidate(); }
+        if (_tipFor != null || _tipPath != null) { _tipFor = null; _tipPath = null; _gl.Invalidate(); }
         _hoverTimer.Start();
     }
 
@@ -1116,7 +1118,7 @@ public sealed partial class SceneViewport : UserControl
         using var _p = Prof.Time("hover pick");
         if (Scene == null || _looking || _panning || _xf != XfKind.None || !_gl.ClientRectangle.Contains(_mouse)) return;
         var o = Pick(_mouse).Obj;
-        if (!SpawnPoints.Is(o) && !CameraPoints.Is(o)) return;
+        if (!SpawnPoints.Is(o) && !CameraPoints.Is(o)) { HoverCutscenePath(); return; }   // SceneViewport.Cameras.cs
         _tipFor = o;
         _tipAt = new Point(_mouse.X + 14, _mouse.Y + 18);
         _gl.Invalidate();
@@ -1655,7 +1657,7 @@ public sealed partial class SceneViewport : UserControl
             case Keys.U when fresh: UnhideAll(); e.Handled = true; break;
             case Keys.B when fresh: ArmBoxSelect(); e.Handled = true; break;
             case Keys.Z when e.Shift: ViewMode = (ViewMode)(((int)_viewMode + 1) % 4); break;
-            case Keys.Escape: Select(null); break;
+            case Keys.Escape: Select(null); EscapePressed?.Invoke(); break;   // MainForm: a lifted object goes back (MainForm.Lift.cs)
         }
     }
 
@@ -1735,6 +1737,7 @@ public sealed partial class SceneViewport : UserControl
                 _dragMoved = false;
                 UpdateTransform();
             }
+            else if ((hit.Obj == null || hit.Obj.Kind is SceneObjectKind.Terrain or SceneObjectKind.Scenery) && CutscenePathAt(e.Location) is { } cp) CutscenePathClicked?.Invoke(cp);   // open its keys
             else Select(hit.Obj);
         }
     }

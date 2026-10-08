@@ -155,6 +155,8 @@ public sealed partial class MainForm : Form
         _view.SelectionCollisionChanged += s => Log("Collision: " + s);
         _view.TextureSource = n => _scene?.LoadTexture(n);
         // a confirmed G / R / T or gizmo drag: one undo step for the whole selection
+        _view.CutscenePathClicked += c => OpenCutscene(c);
+        _view.EscapePressed += () => { if (_lifted.Count > 0) PutBackLifted("Esc"); };   // a click on a cut-scene path (MainForm.Cutscenes.cs)
         _view.ObjectsEdited += list =>
         {
             var cams = FollowCameras(list);   // a moved warp pad can take its camera along (MainForm.Cameras.cs)
@@ -427,9 +429,9 @@ public sealed partial class MainForm : Form
         var undoItem = new ToolStripMenuItem("&Undo", null, async (_, _) => await Undo()) { ShortcutKeyDisplayString = "Ctrl+Z" };
         var redoItem = new ToolStripMenuItem("&Redo", null, async (_, _) => await Redo()) { ShortcutKeyDisplayString = "Ctrl+Y" };
         var histItem = new ToolStripMenuItem("(no changes yet)") { Enabled = false };
-        var cutItem = new ToolStripMenuItem("Cu&t Object", null, async (_, _) => await CutSelection()) { ShortcutKeyDisplayString = "Ctrl+X" };
+        var cutItem = new ToolStripMenuItem("Cu&t Object (lift; Ctrl+V puts it down)", null, (_, _) => LiftSelection()) { ShortcutKeyDisplayString = "Ctrl+X" };
         var copyItem = new ToolStripMenuItem("&Copy Object", null, (_, _) => CopySelection()) { ShortcutKeyDisplayString = "Ctrl+C" };
-        var pasteItem = new ToolStripMenuItem("&Paste Object", null, async (_, _) => await PasteClipboard()) { ShortcutKeyDisplayString = "Ctrl+V",
+        var pasteItem = new ToolStripMenuItem("&Paste Object", null, async (_, _) => { if (_lifted.Count > 0) PlaceLifted(); else await PasteClipboard(); }) { ShortcutKeyDisplayString = "Ctrl+V",
             ToolTipText = "Pastes a copy where the mouse points in the 3D view (on the ground or an object), keeping its rotation and size. From this menu: at the centre of the view." };
         var delItem = new ToolStripMenuItem("&Delete Object", null, async (_, _) => await DeleteSelection()) { ShortcutKeyDisplayString = "Del" };
         edit.DropDownItems.AddRange(new ToolStripItem[] { undoItem, redoItem, histItem, new ToolStripSeparator(), cutItem, copyItem, pasteItem, delItem, new ToolStripSeparator() });
@@ -441,9 +443,10 @@ public sealed partial class MainForm : Form
             histItem.Text = _history.Count == 0 ? "(no changes to undo yet)" : $"{_history.Count} step(s) can be undone (File > Settings: up to {_history.Limit})";
             var sel = _view.Selected;
             bool can = sel?.Kind == SceneObjectKind.Scenery && sel.Instance != null;
-            cutItem.Enabled = copyItem.Enabled = delItem.Enabled = can;
-            pasteItem.Enabled = _clip.Count > 0 && _scene != null;
-            pasteItem.Text = _clip.Count > 0 ? "&Paste " + MenuText(_clip[0].Name) : "&Paste Object";
+            copyItem.Enabled = delItem.Enabled = can;
+            cutItem.Enabled = sel != null && Liftable(sel);   // any object but the terrain: lifted, put down with Ctrl+V
+            pasteItem.Enabled = (_clip.Count > 0 || _lifted.Count > 0) && _scene != null;
+            pasteItem.Text = _lifted.Count > 0 ? "&Put " + MenuText(_lifted[0].Name) + " Down (where the mouse points)" : _clip.Count > 0 ? "&Paste " + MenuText(_clip[0].Name) : "&Paste Object";
         };
         edit.DropDownClosed += (_, _) => { foreach (ToolStripItem i in edit.DropDownItems) if (i != histItem) i.Enabled = true; };
         edit.DropDownItems.Add(new ToolStripMenuItem("Undo Last &Bundle Save (import / duplicate / delete)", null, async (_, _) => await UndoLastBundleSave()));
@@ -611,7 +614,7 @@ public sealed partial class MainForm : Form
         };
         var help = new ToolStripMenuItem("&Help");
         help.DropDownItems.Add("Controls", null, (_, _) => MessageBox.Show(this,
-            "3D view:\n  Right-drag: look    WASD / Q E or the arrow keys: fly (Shift = fast; S always flies backwards)\n  Wheel: dolly    Middle-drag: pan    Left-click: select    Ctrl / Shift + click: add or remove    B or Ctrl+drag: rectangle    Ctrl+A: all shown    F: focus    Esc: deselect\n  H: hide the selection (this session only)    U or Alt+H: show everything again\n  View modes: the bar in the top-right corner (Wire, Solid, Texture, Render) or Shift+Z. Render uses the level's light setup (click the light line to switch).\n\nTransforms (Blender style), with an object selected:\n  G move on the camera plane, R rotate, T scale; then X / Y / Z constrain to that world axis (drawn as a line in the axis colour;\n  press again for the object's own axis, again for free). Type a value (e.g. G Z 5 Enter); Ctrl snaps.\n  Left click / Enter confirms (one undo step, also for several selected objects), right click / Esc cancels.\n  1 / 2 / 3: move / rotate / scale gizmo; drag the selection with the left button (ground plane), or drag an axis handle\n  (or hold X, Y or Z) to constrain to that axis.\n  Right-click an object for its context menu.\n\nEdits are held in memory until you save them: Ctrl+S (World > Save All Changes) saves everything unsaved at once (Help > What Is Saved When).\nCtrl+Z / Ctrl+Y undo and redo any change, including imports, duplicates, deletes and saved tag or atmosphere edits (File > Settings: number of steps).\nCtrl+C / Ctrl+X copy / cut the selected objects, Ctrl+V pastes copies where the mouse points (keeping their layout), Del deletes them (all undoable).\nEdit Collision (toolbar): click / drag to select collision, G / R / T to move it, Del, Ctrl+C / X / V / D, right-click for boxes, ramps and planes.\nF5 plays the open world in Xenia (no title screen or menus), Shift+F5 starts at the 3D view's camera, Ctrl+F5 starts at the title screen.", "Controls"));
+            "3D view:\n  Right-drag: look    WASD / Q E or the arrow keys: fly (Shift = fast; S always flies backwards)\n  Wheel: dolly    Middle-drag: pan    Left-click: select    Ctrl / Shift + click: add or remove    B or Ctrl+drag: rectangle    Ctrl+A: all shown    F: focus    Esc: deselect\n  H: hide the selection (this session only)    U or Alt+H: show everything again\n  View modes: the bar in the top-right corner (Wire, Solid, Texture, Render) or Shift+Z. Render uses the level's light setup (click the light line to switch).\n\nTransforms (Blender style), with an object selected:\n  G move on the camera plane, R rotate, T scale; then X / Y / Z constrain to that world axis (drawn as a line in the axis colour;\n  press again for the object's own axis, again for free). Type a value (e.g. G Z 5 Enter); Ctrl snaps.\n  Left click / Enter confirms (one undo step, also for several selected objects), right click / Esc cancels.\n  1 / 2 / 3: move / rotate / scale gizmo; drag the selection with the left button (ground plane), or drag an axis handle\n  (or hold X, Y or Z) to constrain to that axis.\n  Right-click an object for its context menu.\n\nEdits are held in memory until you save them: Ctrl+S (World > Save All Changes) saves everything unsaved at once (Help > What Is Saved When).\nCtrl+Z / Ctrl+Y undo and redo any change, including imports, duplicates, deletes and saved tag or atmosphere edits (File > Settings: number of steps).\nCtrl+X lifts the selected objects (actors and other markers too), Ctrl+V puts them down where the mouse points, Esc puts them back. Ctrl+C / Ctrl+V paste copies of scenery; Del deletes scenery (all undoable).\nEdit Collision (toolbar): click / drag to select collision, G / R / T to move it, Del, Ctrl+C / X / V / D, right-click for boxes, ramps and planes.\nF5 plays the open world in Xenia (no title screen or menus), Shift+F5 starts at the 3D view's camera, Ctrl+F5 starts at the title screen.", "Controls"));
         help.DropDownItems.Add("What Is Saved When", null, (_, _) => MessageBox.Show(this, SavingHelp, "What is saved when"));
         help.DropDownItems.Add("Take the Tour (for beginners)", null, (_, _) => StartTour());
         help.DropDownItems.Add("File Format Notes (docs)", null, (_, _) => OpenDocs());
@@ -677,8 +680,10 @@ public sealed partial class MainForm : Form
         dup.Enabled = o.Kind == SceneObjectKind.Scenery;
         dup.ToolTipText = "Adds a new scenery instance (copy of this one, 2 units along X). Verified in Xenia.";
         var cp = new ToolStripMenuItem("Copy", null, (_, _) => { _view.Select(o); CopySelection(); }) { ShortcutKeyDisplayString = "Ctrl+C", Enabled = o.Kind == SceneObjectKind.Scenery };
-        var cu = new ToolStripMenuItem("Cut", null, async (_, _) => { _view.Select(o); await CutSelection(); }) { ShortcutKeyDisplayString = "Ctrl+X", Enabled = o.Kind == SceneObjectKind.Scenery };
-        var pa = new ToolStripMenuItem(_clip.Count > 0 ? "Paste " + MenuText(_clip[0].Name) + " Here" : "Paste", null, async (_, _) => await PasteClipboard(_menuPoint)) { ShortcutKeyDisplayString = "Ctrl+V", Enabled = _clip.Count > 0 };
+        var cu = new ToolStripMenuItem("Cut (lift)", null, (_, _) => { if (!_view.IsSelected(o)) _view.Select(o); LiftSelection(); }) { ShortcutKeyDisplayString = "Ctrl+X", Enabled = Liftable(o) };
+        var pa = _lifted.Count > 0
+            ? new ToolStripMenuItem("Put " + MenuText(_lifted[0].Name) + (_lifted.Count > 1 ? $" (+{_lifted.Count - 1})" : "") + " Down Here", null, (_, _) => PlaceLifted(_menuPoint)) { ShortcutKeyDisplayString = "Ctrl+V" }
+            : new ToolStripMenuItem(_clip.Count > 0 ? "Paste " + MenuText(_clip[0].Name) + " Here" : "Paste", null, async (_, _) => await PasteClipboard(_menuPoint)) { ShortcutKeyDisplayString = "Ctrl+V", Enabled = _clip.Count > 0 };
         _objMenu.Items.Add(cp); _objMenu.Items.Add(cu); _objMenu.Items.Add(pa);
         var del = new ToolStripMenuItem("Delete", null, async (_, _) => await DeleteObject(o, confirm: false)) { ShortcutKeyDisplayString = "Del" };
         _objMenu.Items.Add(del);
@@ -1144,7 +1149,7 @@ public sealed partial class MainForm : Form
                 NB.Core.IO.FileLinks.LinkCopy(cleanDir, dir, copies, new Progress<(string Text, double Fraction)>(p => BeginInvoke(() => SetProgress(p.Text, 0.4 * p.Fraction))));
                 ModStack.Apply(new[] { mod }, dir, new Progress<(string Text, double Fraction)>(p => BeginInvoke(() => SetProgress(p.Text, 0.4 + 0.6 * p.Fraction))), s => BeginInvoke(() => Log(s)));
             });
-            Process.Start(new ProcessStartInfo(exe, $"\"{Path.Combine(dir, "default.xex")}\"") { WorkingDirectory = Path.GetDirectoryName(exe)!, UseShellExecute = false });
+            StartGame(new ProcessStartInfo(exe, $"\"{Path.Combine(dir, "default.xex")}\"") { WorkingDirectory = Path.GetDirectoryName(exe)!, UseShellExecute = false });
             Log($"Started {mod.Manifest.Name} in {Path.GetFileName(exe)} from the test copy {dir}.");
         }
         catch (Exception e) { Error("Could not start the test copy", e); }
@@ -1294,13 +1299,6 @@ public sealed partial class MainForm : Form
         return true;
     }
 
-    async Task CutSelection()
-    {
-        var sel = _view.SelectedObjects.ToList();
-        if (sel.Count == 0) { Log("Cut: select an object first."); return; }
-        if (CopySelection()) await DeleteObjects(sel, confirm: false, verb: "Cut");
-    }
-
     async Task DeleteSelection()
     {
         var sel = _view.SelectedObjects.ToList();
@@ -1421,10 +1419,14 @@ public sealed partial class MainForm : Form
                 CopySelection(); return true;
             case Keys.Control | Keys.X:
                 if (typing || !SceneKeysActive(f)) return false;
-                _ = CutSelection(); return true;
+                LiftSelection(); return true;   // lift: Ctrl+V puts it down where the mouse points (MainForm.Lift.cs)
             case Keys.Control | Keys.V:
                 if (typing || !SceneKeysActive(f)) return false;
-                _ = PasteClipboard(); return true;
+                if (_lifted.Count > 0) PlaceLifted(); else _ = PasteClipboard();
+                return true;
+            case Keys.Escape:
+                if (_lifted.Count == 0 || typing || !SceneKeysActive(f) || _view.Transforming) return false;
+                PutBackLifted("Esc"); return true;
             case Keys.Delete:
                 if (typing || !SceneKeysActive(f)) return false;
                 if (_view.Transforming) return false;
@@ -1777,6 +1779,7 @@ public sealed partial class MainForm : Form
         // undo history and any unsaved transform edits
         bool reload = _scene != null && _sceneEntry == w && _sceneAct == act;
         if (!reload && !AskSavePending($"opening {act?.Display ?? w.Display}")) return;   // Save / Don't save / Cancel
+        if (_lifted.Count > 0) PutBackLifted("the world was opened again");   // MainForm.Lift.cs
         // another world: its collision edits go; the same world reloaded: unsaved collision edits stay (as transforms do)
         if (!reload) { _soups.Clear(); _soupWhy.Clear(); _soupMesh.Clear(); }
         else foreach (var k in _soups.Where(kv => kv.Value?.Dirty != true).Select(kv => kv.Key).ToList()) { _soups.Remove(k); _soupMesh.Remove(k); _soupWhy.Remove(k); }
@@ -2285,7 +2288,7 @@ public sealed partial class MainForm : Form
         if (exe == null || !File.Exists(exe)) { PickXenia(); exe = _settings.XeniaPath; }
         if (exe == null || !File.Exists(exe)) return;
         ApplyExeMods(askForXenia: true);
-        Process.Start(new ProcessStartInfo(exe, $"\"{_ws.Game.Xex}\"") { WorkingDirectory = Path.GetDirectoryName(exe)!, UseShellExecute = false });
+        StartGame(new ProcessStartInfo(exe, $"\"{_ws.Game.Xex}\"") { WorkingDirectory = Path.GetDirectoryName(exe)!, UseShellExecute = false });
         Log($"Launched {Path.GetFileName(exe)} with {_ws.Game.Xex}");
     }
 
@@ -2321,13 +2324,7 @@ public sealed partial class MainForm : Form
         if (_ws == null) { Log("Test in Xenia: open a workspace first."); return; }
         if (_busy) { Log("Test in Xenia: NB Studio is busy, try again in a moment."); return; }
         var t = QuickTarget();
-        if (PendingEdits() is { Count: > 0 } pending)
-        {
-            var ans = _scripted ? DialogResult.Yes : MessageBox.Show(this, $"There are unsaved changes ({string.Join(", ", pending)}). Save them first, so the test shows them?\n\nYes: save all and test   No: test the last saved state", "Test in Xenia", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
-            if (ans == DialogResult.Cancel) return;
-            if (ans == DialogResult.Yes) SaveAll();
-            if (PendingEdits() is { Count: > 0 } left) Log($"Note: unsaved changes are not in the test: {string.Join(", ", left)}.");
-        }
+        if (!AskTestPending()) return;   // MainForm.Saving.cs: what F5 does with unsaved changes (also the Vehicle Editor's)
         if (_qtProcess is { HasExited: false } old)
         {
             if (!_scripted && MessageBox.Show(this, "The test game NB Studio started is still running. Close it and start the new test?", "Test in Xenia", MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK) return;
@@ -2390,7 +2387,7 @@ public sealed partial class MainForm : Form
             }
             foreach (var a in (Environment.GetEnvironmentVariable("NB_STUDIO_XENIA_EXTRA") ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries)) psi.ArgumentList.Add(a);
             psi.ArgumentList.Add(xex);
-            _qtProcess = Process.Start(psi); _live.PreferPid = _qtProcess?.Id;
+            _qtProcess = StartGame(psi); _live.PreferPid = _qtProcess?.Id;
             if (_qtProcess != null) TestSaves.Watch(_qtProcess, ws, isFork ? Path.Combine(dir, "xenia", "content") : Path.Combine(dir, "content"), _settings, s => Log("  " + s));
         }
         catch (Exception e) { Error("Could not start Xenia", e); return; }
@@ -2681,6 +2678,7 @@ public sealed partial class MainForm : Form
                     case "--quicktest-intros": QuickTest.KeepWorldIntros = Next() == "on"; L($"script: test games keep the world intros: {QuickTest.KeepWorldIntros}"); break;
                     case "--live-wait-cam": { var v = Next().Split(',').Select(x => float.Parse(x, System.Globalization.CultureInfo.InvariantCulture)).ToArray(); L("script: live wait camera: " + await _live.ScriptWaitCam(v[0], v[1], v[2], v[3])); break; }
                     case "--live-camtrace": { float sec = float.Parse(Next(), System.Globalization.CultureInfo.InvariantCulture); L("script: live camera trace" + await _live.ScriptCamTrace(sec, 100)); break; }
+                    case "--log-find": { var q = Next(); foreach (var line in _log.Lines.Where(x => x.Contains(q, StringComparison.OrdinalIgnoreCase))) L("script: log: " + line.Trim()); break; }
                     case "--live-dump": { var ex = Next(); int n = Convert.ToInt32(Next(), 16); L("script: live dump " + _live.ScriptDump(ex, n)); break; }
                     case "--live-probe": L("script: live probe " + _live.ScriptProbe()); break;
                     case "--live-fall": { float h = float.Parse(Next(), System.Globalization.CultureInfo.InvariantCulture); L("script: live fall " + await _live.ScriptFall(h)); break; }
@@ -2874,13 +2872,14 @@ public sealed partial class MainForm : Form
                     }
                     case "--texlib-close": _texLib?.Close(); break;
                     case "--copy": L($"script: copy {(CopySelection() ? "ok: " + _clip[0].Name : "refused")}"); break;
-                    case "--cut": { var n = _view.Selected?.Name; await CutSelection(); L($"script: cut {n}; selected {_view.Selected?.Name ?? "-"}; clipboard {(_clip.Count > 0 ? _clip[0].Name : "-")}"); break; }
+                    case "--cut": { var n = _view.Selected?.Name; LiftSelection(); L($"script: cut (lifted) {n}: {string.Join(", ", _lifted.Select(x => $"{x.Name} at {Fmt(x.Transform.Translation)}"))}"); break; }
+                    case "--cut-cancel": PutBackLifted("Esc"); L($"script: lift cancelled; selected {_view.Selected?.Name ?? "-"}"); break;
                     case "--del": { var n = _view.Selected?.Name; await DeleteSelection(); L($"script: delete {n}; selected {_view.Selected?.Name ?? "-"}"); break; }
                     case "--paste":
                     {
                         // --paste X,Y (3D-view pixel) or --paste - (mouse / view centre)
                         var v = Next(); Point? at = v == "-" ? null : new Point(int.Parse(v.Split(',')[0]), int.Parse(v.Split(',')[1]));
-                        var o = await PasteClipboard(at);
+                        var o = _lifted.Count > 0 ? PlaceLifted(at) : await PasteClipboard(at);
                         L($"script: paste -> {(o == null ? "nothing" : $"{o.Name} (instance {o.Instance?.Index}) at {Fmt(o.Transform.Translation)}")}; history {_history.Count}: {_history.UndoLabel}"); break;
                     }
                     case "--quicktest": { bool cam = i + 1 < a.Count && a[i + 1] == "camera"; if (cam) i++; await QuickTestXenia(cam); L($"script: quick test finished: pid {_qtProcess?.Id}"); break; }
@@ -2945,6 +2944,7 @@ public sealed partial class MainForm : Form
                     case "--screen":
                     {
                         // real screen pixels of the window (DrawToBitmap paints overlapping children in the wrong order)
+                        if (NB.Core.IO.QuietLaunch.Enabled) { using var q = Background.Capture(this); q.Save(Next()); L("script: window captured without bringing it to the front"); break; }
                         Activate(); BringToFront(); Application.DoEvents(); await Task.Delay(600); Application.DoEvents();
                         using var b = new Bitmap(Width, Height); using (var g = Graphics.FromImage(b)) g.CopyFromScreen(Location, Point.Empty, Size);
                         b.Save(Next()); L($"script: screen captured (start page visible: {_start.Visible}, bounds {_start.Bounds})"); break;

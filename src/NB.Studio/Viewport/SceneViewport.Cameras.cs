@@ -80,7 +80,7 @@ public sealed partial class SceneViewport
     void DrawCutscenePaths(Matrix4x4 vp)
     {
         if (!_showCameras || Scene == null) return;
-        if (_cutPaths.Count > 0)
+        if (_cutPaths.Count > 0 && _showAllCut)
         {
             if (_cutBatch == null || _cutBatchVersion != _cutVersion)
             {
@@ -120,50 +120,134 @@ public sealed partial class SceneViewport
     }
 
     readonly Dictionary<string, Renderer.Overlay> _cameraLabels = new();
+    readonly Renderer.Overlay _cameraIcon = new();
 
-    /// <summary>"Warp camera: Theater District" (etc.) above every visible camera within 600 units.</summary>
+    /// <summary>Full camera labels within this distance (or when the camera is selected or hovered); beyond it only a small
+    /// camera icon, up to <see cref="CameraIconDistance"/>. 1.18 drew every label within 400 units, which cluttered the town.</summary>
+    const float CameraLabelDistance = 70, CameraIconDistance = 450;
+
+    /// <summary>Camera labels: a small icon from far away, the name ("Warp camera: Theater District") when near, hovered or
+    /// selected. Cut-scene keys: only the selected key and every fifth one get a name.</summary>
     void DrawCameraLabels(int W, int H)
     {
         if (Scene == null || !_showCameras) return;
+        if (_cameraIcon.Key != "camicon") using (var ib = DrawCameraIcon()) _r.UpdateOverlay(_cameraIcon, ib, "camicon");
         foreach (var o in Scene.Objects)
         {
             if (!o.Visible || CameraPoints.Label(o) is not { } text) continue;
+            bool focus = IsSelected(o) || o == _tipFor;
             if (o.Kind == SceneObjectKind.CutsceneKey)
             {
-                // a cut-scene's keys: the selected one and every fifth, not all 30 of a path
-                if (!IsSelected(o) && o.CutsceneFrame % (5 * CutsceneKeys.Spacing) != 0) continue;
+                if (!focus && o.CutsceneFrame % (5 * CutsceneKeys.Spacing) != 0) continue;
                 text = o.Name;   // "animatedsequence1_shot3 key 4 (4.0 s)"
             }
-            var top = o.Transform.Translation + Vector3.UnitY * 1.6f;
-            if (Vector3.Dot(top - _camPos, Forward()) < 0.5f || Vector3.Distance(top, _camPos) > 400) continue;
+            var top = o.Transform.Translation + Vector3.UnitY * 1.4f;
+            float dist = Vector3.Distance(top, _camPos);
+            if (Vector3.Dot(top - _camPos, Forward()) < 0.5f || dist > CameraIconDistance) continue;
             if (ToScreen(top) is not { } sp) continue;
-            if (!_cameraLabels.TryGetValue(text, out var ov))
+            Renderer.Overlay ov;
+            if (focus || dist < CameraLabelDistance)
             {
-                _cameraLabels[text] = ov = new Renderer.Overlay();
-                using var bmp = DrawCameraLabel(text);
-                _r.UpdateOverlay(ov, bmp, text);
+                if (!_cameraLabels.TryGetValue(text, out ov!))
+                {
+                    _cameraLabels[text] = ov = new Renderer.Overlay();
+                    using var bmp = DrawCameraLabel(text);
+                    _r.UpdateOverlay(ov, bmp, text);
+                }
             }
+            else ov = _cameraIcon;
             int x2 = (int)sp.X - ov.W / 2, y2 = (int)sp.Y - ov.H - 2;
             if (x2 > W || y2 > H || x2 + ov.W < 0 || y2 + ov.H < 0) continue;
             _r.DrawOverlay(ov, x2, y2, W, H);
         }
     }
 
+    static readonly Color CameraEdge = Color.FromArgb(255, 40, 150, 200);
+
+    /// <summary>A compact label: 7.5 pt text on a light chip with a tiny camera.</summary>
     static Bitmap DrawCameraLabel(string text)
     {
-        using var font = new Font("Segoe UI Semibold", 9f);
+        using var font = new Font("Segoe UI", 7.5f);
         using var probe = new Bitmap(1, 1); using var pg = Graphics.FromImage(probe);
         var sz = pg.MeasureString(text, font);
-        int w = (int)Math.Ceiling(sz.Width) + 28, h = (int)Math.Ceiling(sz.Height) + 6;
+        int w = (int)Math.Ceiling(sz.Width) + 17, h = (int)Math.Ceiling(sz.Height) + 2;
         var bmp = new Bitmap(w, h, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
         using var g = Graphics.FromImage(bmp);
         g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias; g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
         g.Clear(Color.Transparent);
-        var edge = Color.FromArgb(255, 40, 150, 200);
-        using (var p = Rounded(new Rectangle(0, 0, w - 1, h - 1), 5)) using (var b = new SolidBrush(Color.FromArgb(235, 246, 248, 250))) using (var e = new Pen(edge, 1.5f)) { g.FillPath(b, p); g.DrawPath(e, p); }
-        // a little camera
-        using (var cb = new SolidBrush(edge)) { g.FillRectangle(cb, 5, h / 2 - 4, 10, 8); g.FillPolygon(cb, new[] { new PointF(15, h / 2f), new PointF(21, h / 2f - 4), new PointF(21, h / 2f + 4) }); }
-        using (var tb = new SolidBrush(Color.FromArgb(255, 32, 35, 42))) g.DrawString(text, font, tb, 23, 2);
+        using (var p = Rounded(new Rectangle(0, 0, w - 1, h - 1), 3)) using (var b = new SolidBrush(Color.FromArgb(215, 246, 248, 250))) using (var e = new Pen(CameraEdge, 1f)) { g.FillPath(b, p); g.DrawPath(e, p); }
+        using (var cb = new SolidBrush(CameraEdge)) { g.FillRectangle(cb, 3, h / 2 - 3, 7, 6); g.FillPolygon(cb, new[] { new PointF(10, h / 2f), new PointF(14, h / 2f - 3), new PointF(14, h / 2f + 3) }); }
+        using (var tb = new SolidBrush(Color.FromArgb(255, 32, 35, 42))) g.DrawString(text, font, tb, 15, 1);
         return bmp;
+    }
+
+    /// <summary>The far-away marker of a camera: a tiny camera glyph, no text.</summary>
+    static Bitmap DrawCameraIcon()
+    {
+        var bmp = new Bitmap(16, 11, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+        using var g = Graphics.FromImage(bmp);
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        g.Clear(Color.Transparent);
+        using (var b = new SolidBrush(Color.FromArgb(200, 246, 248, 250))) g.FillRectangle(b, 0, 0, 16, 11);
+        using (var cb = new SolidBrush(CameraEdge)) { g.FillRectangle(cb, 2, 2, 8, 7); g.FillPolygon(cb, new[] { new PointF(10, 5.5f), new PointF(15, 2), new PointF(15, 9) }); }
+        return bmp;
+    }
+
+    // ------------------------------------------------------------------ cut-scene paths: which are shown, hover, click
+
+    /// <summary>Show menu "Cut-scene camera paths (all)": every cut-scene path of the world (off by default; 1.18 always drew
+    /// all 125 of Showdown Town). Without it only the cut-scenes opened for editing are drawn.</summary>
+    public bool ShowAllCutscenePaths { get => _showAllCut; set { if (_showAllCut != value) { _showAllCut = value; _gl.Invalidate(); } } }
+    bool _showAllCut;
+
+    /// <summary>A click on a cut-scene path (when all paths are shown): MainForm opens its keys.</summary>
+    public event Action<CutsceneCamera>? CutscenePathClicked;
+    /// <summary>Esc in the 3D view with no transform running (the view takes Esc itself, so the form never sees it).</summary>
+    public event Action? EscapePressed;
+    CutsceneCamera? _tipPath;
+
+    /// <summary>The cut-scene path within 6 pixels of a view point (every path when all are shown, else the open ones).</summary>
+    CutsceneCamera? CutscenePathAt(Point p)
+    {
+        if (!_showCameras || Scene == null) return null;
+        var open = Scene.Objects.Where(o => o.Cutscene != null).Select(o => o.Cutscene!).ToHashSet();
+        var cams = _showAllCut ? _cutPaths : _cutPaths.Where(open.Contains).ToList();
+        CutsceneCamera? best = null; float bestD = 6;
+        var m = new Vector2(p.X, p.Y);
+        foreach (var c in cams)
+        {
+            Vector2? prev = null;
+            for (int f = 0; f < c.Positions.Length; f += 3)
+            {
+                var s = ToScreen(c.Positions[f]);
+                if (s is { } b && prev is { } a2 && Vector2.DistanceSquared(a2, b) < 250000)
+                {
+                    var ab = b - a2; float t = Math.Clamp(Vector2.Dot(m - a2, ab) / Math.Max(1e-3f, ab.LengthSquared()), 0, 1);
+                    float d = Vector2.Distance(m, a2 + ab * t);
+                    if (d < bestD) { bestD = d; best = c; }
+                }
+                prev = s;
+            }
+        }
+        return best;
+    }
+
+    /// <summary>Hover over a cut-scene path: its name (drawn like the other tooltips).</summary>
+    void HoverCutscenePath()
+    {
+        if (CutscenePathAt(_mouse) is not { } c) return;
+        _tipPath = c; _tipAt = new Point(_mouse.X + 14, _mouse.Y + 18);
+        _gl.Invalidate();
+    }
+
+    void DrawPathTip(int W, int H)
+    {
+        if (_tipPath == null || _tipFor != null) return;
+        string key = "path|" + _tipPath.Asset + "|" + _tipPath.CameraName;
+        if (_tipOv.Key != key)
+            using (var bmp = DrawHud("Cut-scene camera path", Wrap($"{_tipPath.Asset} ({_tipPath.Duration:0.0} s, camera {_tipPath.CameraName}). The camera of an in-game cut-scene: click the path to show its keys and edit it.", 70), CameraEdge))
+                _r.UpdateOverlay(_tipOv, bmp, key);
+        int x = Math.Min(_tipAt.X, Math.Max(0, W - _tipOv.W - 4)), y = Math.Min(_tipAt.Y, Math.Max(0, H - _tipOv.H - 4));
+        _r.DrawOverlay(_tipOv, x, y, W, H);
     }
 }

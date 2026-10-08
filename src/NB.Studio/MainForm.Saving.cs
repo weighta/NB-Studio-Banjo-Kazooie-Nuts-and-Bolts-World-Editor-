@@ -107,6 +107,46 @@ public sealed partial class MainForm
         return true;
     }
 
+    /// <summary>What F5 / Test in Xenia asks the rest of NB Studio: a panel with unsaved changes the test could use (the
+    /// Vehicle Editor's vehicle, …) adds them, with a way to save them, when the user picks "Save all and test".</summary>
+    public sealed class TestPendingArgs
+    {
+        public List<(string What, Func<bool> Save)> Items { get; } = new();
+    }
+
+    /// <summary>Raised by F5 before a test starts (see <see cref="TestPendingArgs"/>).</summary>
+    public event Action<TestPendingArgs>? QuickTestPending;
+
+    /// <summary>
+    /// F5 with unsaved changes: Save all and test / Test the last saved state / Cancel. The test plays the workspace's
+    /// files, so unsaved world edits are not in it unless saved; the choice is written to the status bar and the log
+    /// ("Testing with your changes saved: …" / "Testing the last saved state — not in this test: …"). False on Cancel.
+    /// </summary>
+    bool AskTestPending()
+    {
+        var extra = new TestPendingArgs();
+        try { QuickTestPending?.Invoke(extra); } catch (Exception e) { Log("Test in Xenia: " + e.Message); }
+        var pending = PendingEdits().Concat(extra.Items.Select(i => i.What)).ToList();
+        if (pending.Count == 0) { _status.Text = "Testing the workspace as saved (no unsaved changes)."; return true; }
+        var ans = _scripted ? DialogResult.Yes : MessageBox.Show(this,
+            $"There are unsaved changes: {string.Join(", ", pending)}.\n\nThe test plays the workspace's files, so it shows these changes only when they are saved.\n\n" +
+            "Yes: save all and test\nNo: test the last saved state (your changes stay unsaved in NB Studio)\nCancel: don't test",
+            "Test in Xenia", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+        if (ans == DialogResult.Cancel) return false;
+        if (ans == DialogResult.Yes)
+        {
+            SaveAll();
+            foreach (var (what, save) in extra.Items)
+                try { if (!save()) Log($"Test in Xenia: {what} was not saved."); } catch (Exception e) { Log($"Test in Xenia: saving {what} failed: {e.Message}"); }
+        }
+        var left = PendingEdits();
+        string msg = ans == DialogResult.Yes
+            ? (left.Count == 0 ? $"Testing with your changes saved ({string.Join(", ", pending)})." : $"Testing with your changes saved, except: {string.Join(", ", left)} (see the log).")
+            : $"Testing the last saved state — not in this test: {string.Join(", ", pending)}.";
+        _status.Text = msg; Log("Test in Xenia: " + msg);
+        return true;
+    }
+
     /// <summary>"Don't save": unsaved edits that would otherwise linger (the Atmosphere tab and the Tag Editor keep theirs in
     /// the shared bundle objects; Dialogue and Text edits are dropped with their lists). World edits go with the world.</summary>
     void DiscardPending()

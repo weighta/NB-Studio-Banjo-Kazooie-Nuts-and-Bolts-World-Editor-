@@ -100,6 +100,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        if (NB.Core.IO.QuietLaunch.Enabled) ShowActivated = false;   // background test runs: open behind, keep the user's focus
         SourceInitialized += (_, _) =>
         {
             // dark title bar (Windows 10 2004+ / 11)

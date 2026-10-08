@@ -167,10 +167,19 @@ public static class GameLauncher
         var inParams = cls.GetMethodParameters("Create");
         inParams["CommandLine"] = cmd;
         inParams["CurrentDirectory"] = workingDir;
+        if (NB.Core.IO.QuietLaunch.Enabled)
+        {
+            // background test runs: the game window opens behind the others without taking the focus
+            using var startup = new System.Management.ManagementClass("Win32_ProcessStartup").CreateInstance();
+            startup["ShowWindow"] = (ushort)4;   // SW_SHOWNOACTIVATE
+            inParams["ProcessStartupInformation"] = startup;
+        }
         var result = cls.InvokeMethod("Create", inParams, null);
         uint rc = (uint)result["ReturnValue"];
         if (rc != 0) throw new InvalidOperationException($"Windows could not start {Path.GetFileName(exe)} (WMI error {rc}).");
-        return Process.GetProcessById((int)(uint)result["ProcessId"]);
+        var started = Process.GetProcessById((int)(uint)result["ProcessId"]);
+        if (NB.Core.IO.QuietLaunch.Enabled) NB.Core.IO.QuietLaunch.KeepBehind(started);
+        return started;
     }
 
     /// <summary>Windows command-line quoting for one argument.</summary>

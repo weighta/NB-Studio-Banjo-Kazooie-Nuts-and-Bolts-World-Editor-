@@ -38,8 +38,21 @@ public static class BlueprintVault
 
     static Dictionary<string, Entry> Load()
     {
-        try { return JsonSerializer.Deserialize<Dictionary<string, Entry>>(File.ReadAllText(IndexFile)) ?? new(); }
+        Dictionary<string, Entry> v;
+        try { v = JsonSerializer.Deserialize<Dictionary<string, Entry>>(File.ReadAllText(IndexFile)) ?? new(); }
         catch (Exception) { return new(); }
+        // names written before 2.3 were read as UTF-16BE only ("SalvyBob" -> "卡汶祂潢"): read them again from the files
+        foreach (var e in v.Values)
+            try
+            {
+                var f = Path.Combine(Dir, e.Hash + ".bp");
+                if (!File.Exists(f)) continue;
+                var head = new byte[8 + 0x60];
+                using (var s = File.OpenRead(f)) if (s.Read(head, 0, head.Length) < head.Length) continue;
+                e.Name = ReadName(head);
+            }
+            catch (IOException) { }
+        return v;
     }
     static void Store(Dictionary<string, Entry> v)
     {
@@ -79,7 +92,7 @@ public static class BlueprintVault
                         var header = Path.Combine(prof, Title, "Headers", SaveType, Path.GetFileName(pkg) + ".header");
                         if (!File.Exists(data)) continue;
                         var bytes = File.ReadAllBytes(data);
-                        if (bytes.Length < 8 + 0x7C) continue;
+                        if (!NB.Core.Project.VehicleVault.LooksLikeBlueprint(bytes)) continue;
                         var hash = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
                         present.Add(hash);
                         if (!v.TryGetValue(hash, out var e))
@@ -146,10 +159,5 @@ public static class BlueprintVault
         return restored;
     }
 
-    static string ReadName(byte[] b)
-    {
-        var sb = new System.Text.StringBuilder();
-        for (int o = 8 + 0x20; o + 1 < Math.Min(b.Length, 8 + 0x60); o += 2) { char c = (char)(b[o] << 8 | b[o + 1]); if (c == 0) break; sb.Append(c); }
-        return sb.ToString();
-    }
+    static string ReadName(byte[] b) => NB.Core.Project.VehicleVault.ReadName(b);   // UTF-16BE or ASCII ("SalvyBob")
 }

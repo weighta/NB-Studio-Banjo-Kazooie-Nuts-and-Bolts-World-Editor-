@@ -115,20 +115,32 @@ public sealed class Blueprint
     /// "SalvyBob"); saved vehicles hold UTF-16BE.</summary>
     public bool NameIsAscii => Header[NameOffset] != 0 && Header[NameOffset + 1] != 0;
 
+    /// <summary>
+    /// The text of a blueprint name field (0x40 bytes): 8-bit text when its first two bytes are both set (the game's own
+    /// vehicles carry an ASCII creator tag such as "SalvyBob", and the game shows it as such in Your Blueprints), else
+    /// UTF-16BE (vehicles saved in the game). Ends at the first NUL or control character (some saves have junk after the
+    /// name). Every reader of vehicle names uses this: read as UTF-16BE, "SalvyBob" became "卡汶祂潢".
+    /// </summary>
+    public static string DecodeName(ReadOnlySpan<byte> f)
+    {
+        var sb = new StringBuilder();
+        if (f.Length >= 2 && f[0] != 0 && f[1] != 0)
+        {
+            foreach (byte b in f) { if (b < 0x20) break; sb.Append((char)b); }
+            return sb.ToString().TrimEnd();
+        }
+        for (int o = 0; o + 1 < f.Length; o += 2)
+        {
+            char c = (char)(f[o] << 8 | f[o + 1]);
+            if (c < 0x20 || c >= 0xD800) break;
+            sb.Append(c);
+        }
+        return sb.ToString().TrimEnd();
+    }
+
     public string Name
     {
-        get
-        {
-            if (NameIsAscii) return BE.CStr(Header, NameOffset, NameBytes);
-            var sb = new StringBuilder();
-            for (int o = NameOffset; o + 1 < NameOffset + NameBytes; o += 2)
-            {
-                char c = (char)(Header[o] << 8 | Header[o + 1]);
-                if (c == 0) break;
-                sb.Append(c);
-            }
-            return sb.ToString();
-        }
+        get => DecodeName(Header.AsSpan(NameOffset, NameBytes));
         set
         {
             Array.Clear(Header, NameOffset, NameBytes);

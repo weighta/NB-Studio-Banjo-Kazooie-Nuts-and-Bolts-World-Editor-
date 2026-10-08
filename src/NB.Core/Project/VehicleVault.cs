@@ -53,8 +53,11 @@ public static class VehicleVault
 
     public static Dictionary<string, Entry> Load(string dir)
     {
-        try { return JsonSerializer.Deserialize<Dictionary<string, Entry>>(File.ReadAllText(IndexFile(dir))) ?? new(); }
+        Dictionary<string, Entry> v;
+        try { v = JsonSerializer.Deserialize<Dictionary<string, Entry>>(File.ReadAllText(IndexFile(dir))) ?? new(); }
         catch (Exception) { return new(); }
+        RefreshNames(dir, v);
+        return v;
     }
 
     static void Store(string dir, Dictionary<string, Entry> v)
@@ -88,12 +91,31 @@ public static class VehicleVault
 
     static string Hash(byte[] b) => Convert.ToHexString(SHA256.HashData(b)).ToLowerInvariant();
 
-    /// <summary>The vehicle's name (UTF-16BE at 8 + 0x20 of the blueprint file).</summary>
-    public static string ReadName(byte[] b)
+    /// <summary>The vehicle's name (the name field at 8 + 0x20 of the blueprint file: UTF-16BE, or ASCII for the game's own
+    /// vehicles; see <see cref="NB.Core.Vehicles.Blueprint.DecodeName"/>).</summary>
+    public static string ReadName(byte[] b) => b.Length < 8 + 0x60 ? "" : NB.Core.Vehicles.Blueprint.DecodeName(b.AsSpan(8 + 0x20, 0x40));
+
+    /// <summary>A vehicle file: long enough for the blueprint header, and not another kind of file that was put in a
+    /// package folder (a profile's XDBF settings file reached a vault as a "vehicle" once).</summary>
+    public static bool LooksLikeBlueprint(byte[] b) => b.Length >= 8 + 0x7C && !(b[0] == 'X' && b[1] == 'D' && b[2] == 'B' && b[3] == 'F');
+
+    /// <summary>The names stored in the index read again from the vehicle files (indexes written before 1.20 hold
+    /// "卡汶祂潢" for ASCII names such as "SalvyBob").</summary>
+    static void RefreshNames(string dir, Dictionary<string, Entry> v)
     {
-        var sb = new StringBuilder();
-        for (int o = 8 + 0x20; o + 1 < Math.Min(b.Length, 8 + 0x60); o += 2) { char c = (char)(b[o] << 8 | b[o + 1]); if (c == 0) break; sb.Append(c); }
-        return sb.ToString();
+        foreach (var e in v.Values)
+        {
+            try
+            {
+                var f = Path.Combine(dir, e.Hash + ".bp");
+                if (!File.Exists(f)) continue;
+                var head = new byte[8 + 0x60];
+                using (var s = File.OpenRead(f)) { int n = s.Read(head, 0, head.Length); if (n < head.Length) continue; }
+                var name = ReadName(head);
+                if (name != e.Name) e.Name = name;
+            }
+            catch (IOException) { }
+        }
     }
 
     /// <summary>
@@ -122,7 +144,7 @@ public static class VehicleVault
                     if (!File.Exists(data)) continue;
                     byte[] bytes;
                     try { bytes = File.ReadAllBytes(data); } catch (IOException) { continue; }   // still being written
-                    if (bytes.Length < 8 + 0x7C) continue;
+                    if (!LooksLikeBlueprint(bytes)) continue;
                     var hash = Hash(bytes);
                     present.Add(hash);
                     if (!v.TryGetValue(hash, out var e))
