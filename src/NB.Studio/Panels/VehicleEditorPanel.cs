@@ -45,6 +45,7 @@ public sealed class VehicleEditorPanel : UserControl
     /// from the workspace cache when nothing changed), so the Game Vehicles window opens at once.</summary>
     List<PregameVehicle>? _gameCat;
     Task? _gameTask;
+    Task<List<PregameVehicle>>? _gameBuild;   // the background build itself (_gameTask = its continuation on the UI thread)
     string _gameState = "";
     readonly GameVehiclePicker _picker = new();
     static List<VehicleDocument.Part> _clip = new();
@@ -419,24 +420,25 @@ public sealed class VehicleEditorPanel : UserControl
             try { acts = NB.Core.Project.ActCatalog.Build(ws, idx); } catch { acts = new(); }
             var load = PregameVehicles.ReadOnlyLoader(ws);
             _gameState = "Listing the game's vehicles…";
-            _gameTask = Task.Run(() => PregameVehicles.Catalog(ws, idx, acts, load)).ContinueWith(t =>
+            // back on the UI thread through its synchronization context, not through this panel's handle: the panel has
+            // no handle until the Vehicle Editor tab is first shown, and the finished list was dropped before (the picker
+            // then said "Listing the game's vehicles…" for ever)
+            var ui = SynchronizationContext.Current != null ? TaskScheduler.FromCurrentSynchronizationContext() : TaskScheduler.Default;
+            _gameBuild = Task.Run(() => PregameVehicles.Catalog(ws, idx, acts, load));
+            _gameTask = _gameBuild.ContinueWith(t =>
             {
-                if (IsDisposed || !IsHandleCreated) return;
-                BeginInvoke(() =>
+                if (IsDisposed || !ReferenceEquals(ws, _ws)) return;
+                _gameTask = null;
+                if (t.Status == TaskStatus.RanToCompletion)
                 {
-                    if (!ReferenceEquals(ws, _ws)) return;
-                    _gameTask = null;
-                    if (t.Status == TaskStatus.RanToCompletion)
-                    {
-                        _gameCat = t.Result;
-                        _gameState = $"{t.Result.Count} vehicles (listed in {sw.ElapsedMilliseconds} ms, cached for next time)";
-                        PregameVehicles.SaveCache(ws, key, t.Result);
-                    }
-                    else _gameState = "The list could not be built in the background: " + t.Exception?.GetBaseException().Message;
-                    RefreshPicker();
-                    UpdateSourceLabel(); UpdateVehicleInfo();
-                });
-            });
+                    _gameCat = t.Result;
+                    _gameState = $"{t.Result.Count} vehicles (listed in {sw.ElapsedMilliseconds} ms, cached for next time)";
+                    try { PregameVehicles.SaveCache(ws, key, t.Result); } catch (Exception) { }
+                }
+                else _gameState = "The list could not be built in the background: " + t.Exception?.GetBaseException().Message;
+                RefreshPicker();
+                UpdateSourceLabel(); UpdateVehicleInfo();
+            }, ui);
         }
         catch (Exception e) { _gameState = "Game vehicles: " + e.Message; }
     }
@@ -445,7 +447,11 @@ public sealed class VehicleEditorPanel : UserControl
     List<PregameVehicle>? GameCatalog()
     {
         if (_gameCat != null || _ws == null) return _gameCat;
-        if (_gameTask != null) { try { _gameTask.Wait(60000); } catch { } Application.DoEvents(); if (_gameCat != null) return _gameCat; }
+        if (_gameTask != null && _gameBuild != null)
+        {
+            // wait for the build itself (its continuation needs this thread, so waiting on that would block)
+            try { if (_gameBuild.Wait(60000) && _gameBuild.Status == TaskStatus.RanToCompletion) { _gameCat = _gameBuild.Result; _gameState = $"{_gameCat.Count} vehicles"; return _gameCat; } } catch { }
+        }
         var cur = Cursor.Current;
         Cursor.Current = Cursors.WaitCursor;
         try { _idx ??= AssetIndex.LoadOrBuild(_ws); _gameCat = PregameVehicles.Catalog(_ws, _idx); _gameState = $"{_gameCat.Count} vehicles"; }

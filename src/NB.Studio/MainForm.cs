@@ -263,6 +263,7 @@ public sealed partial class MainForm : Form
         {
             // Save / Don't save / Cancel for everything unsaved (test runs end without questions unless --prompts on)
             if (!AskSavePending("quitting")) e.Cancel = true;
+            else RememberCamera();
         };
     }
 
@@ -822,6 +823,7 @@ public sealed partial class MainForm : Form
         var root = _ws.Root;
         _view.CollisionMode = false;
         _soups.Clear(); _soupWhy.Clear(); _soupMesh.Clear(); _collSel.Clear(); _collAt.Clear(); _collProxy = null; _collClip = null;
+        RememberCamera();
         _view.SetScene(null);
         _scene = null; _sceneEntry = null; _sceneAct = null; _acts = new();
         _tree.Nodes.Clear(); _worlds.Items.Clear();
@@ -1782,6 +1784,7 @@ public sealed partial class MainForm : Form
         bool reload = _scene != null && _sceneEntry == w && _sceneAct == act;
         if (!reload && !AskSavePending($"opening {act?.Display ?? w.Display}")) return;   // Save / Don't save / Cancel
         if (_lifted.Count > 0) PutBackLifted("the world was opened again");   // MainForm.Lift.cs
+        if (!reload) RememberCamera();   // where the camera was in the world being left (MainForm.CameraMemory.cs)
         // another world: its collision edits go; the same world reloaded: unsaved collision edits stay (as transforms do)
         if (!reload) { _soups.Clear(); _soupWhy.Clear(); _soupMesh.Clear(); }
         else foreach (var k in _soups.Where(kv => kv.Value?.Dirty != true).Select(kv => kv.Key).ToList()) { _soups.Remove(k); _soupMesh.Remove(k); _soupWhy.Remove(k); }
@@ -1829,6 +1832,7 @@ public sealed partial class MainForm : Form
             _atmosPending = (w.Bundle, act?.Display ?? w.Display, act?.ActBundle ?? 0);
             if (_scripted) ApplyAtmosphere(); else if (_center.SelectedTab?.Controls.Contains(_atmos) == true) BeginInvoke(ApplyAtmosphere);
             using (Viewport.Prof.Time("open:   view SetScene")) _view.SetScene(scene, keepCamera: reload);
+            if (!reload && RestoreCamera(w, act)) Log("  Camera: back where it was when you last left this world.");
             using (Viewport.Prof.Time("open:   tree")) FillTree();
             LoadCutscenes(scene);   // cut-scene camera paths, in the background (MainForm.Cutscenes.cs)
             if (selKey != null && scene.Objects.FirstOrDefault(o => UndoHistory.KeyOf(o) == selKey) is { } sel) _view.Select(sel);
@@ -2920,6 +2924,11 @@ public sealed partial class MainForm : Form
                         L($"script: look drag ({dx},{dy}): yaw {b0.Yaw:F3} -> {b1.Yaw:F3}, pitch {b0.Pitch:F3} -> {b1.Pitch:F3}"); break;
                     }
                     case "--focus": if (_view.Selected != null) _view.Focus(_view.Selected); break;
+                    case "--camera-get":
+                    {
+                        var p = _view.CameraPosition; var (yaw, pitch) = _view.LookAngles;
+                        L(FormattableString.Invariant($"script: camera {p.X:F2},{p.Y:F2},{p.Z:F2} yaw {yaw * 180 / MathF.PI:F1} pitch {pitch * 180 / MathF.PI:F1}")); break;
+                    }
                     case "--camera":
                     {
                         var v = Next().Split(',').Select(x => float.Parse(x, System.Globalization.CultureInfo.InvariantCulture)).ToArray();
