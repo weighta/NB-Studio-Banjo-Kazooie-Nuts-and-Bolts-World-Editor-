@@ -56,7 +56,7 @@ public sealed partial class SceneViewport : UserControl
 
     /// <summary>Whether an object is drawn with its model this frame (terrain / scenery / marker objects toggles, scenery
     /// hidden by the tool unless selected).</summary>
-    bool DrawsModel(SceneObject o, bool keepSelected = true) => o.Visible && o.Model != null && o.Kind switch
+    bool DrawsModel(SceneObject o, bool keepSelected = true) => o.Visible && o.Model != null && !o.IsSkyDome && o.Kind switch
     {
         SceneObjectKind.Terrain => ShowTerrain,
         SceneObjectKind.Water => WaterShown,   // SceneViewport.Visgroups.cs
@@ -455,6 +455,7 @@ public sealed partial class SceneViewport : UserControl
         _r.InvalidateShadow();
         if (Scene != null) StartGrass();   // the grass shadow textures follow the time of day
         _gl.Invalidate();
+        UpdateSkyObject();   // the dome as a selectable object (SceneViewport.Sky.cs)
         LightApplied?.Invoke(LightingName);
     }
 
@@ -1033,7 +1034,7 @@ public sealed partial class SceneViewport : UserControl
     {
         var cr = VisRect;   // the bar bitmap starts with the "Show" button (SceneViewport.Visgroups.cs)
         bool showLight = _viewMode == ViewMode.Rendered;
-        string barKey = $"{_viewMode}|{_hoverBar}|{(showLight ? LightingName : "")}|{_showColl}|{_showColl && _allColl == null}";
+        string barKey = $"{_viewMode}|{_hoverBar}|{(showLight ? LightingName : "")}|{_showColl}|{_showColl && _allColl == null}|{SpeedLabel}|{_hoverSpeed}";
         if (_barOv.Key != barKey)
             using (var bmp = DrawBar(showLight)) _r.UpdateOverlay(_barOv, bmp, barKey);
         _r.DrawOverlay(_barOv, cr.X, cr.Y, W, H);
@@ -1041,6 +1042,7 @@ public sealed partial class SceneViewport : UserControl
         DrawCameraLabels(W, H);
         DrawCollisionRect(W, H);
         DrawHiddenNote(W, H);
+        DrawSpeedReadout(W, H);
         DrawTip(W, H);
         var hud = HudText();
         if (hud != null)
@@ -1594,8 +1596,10 @@ public sealed partial class SceneViewport : UserControl
     void TickCore(float steps = 1f)
     {
         if (_keys.Count == 0 || _xf != XfKind.None) return;
-        float speed = (_keys.Contains(Keys.ShiftKey) ? 4f : 1f) * 1.2f * steps;
-        if (_keys.Contains(Keys.ControlKey)) return;
+        // camera speed (view bar / wheel while right-dragging): Shift ×4, Ctrl ×0.25 while flying with the right button
+        // (without it Ctrl is for shortcuts and stops the fly keys, as before) — SceneViewport.Speed.cs
+        if (_keys.Contains(Keys.ControlKey) && !_looking) return;
+        float speed = FlySpeedMultiplier() * 1.2f * steps;
         var f = Forward(); var r = Right(); var d = Vector3.Zero;
         // S is Scale while something is selected (Blender), but while flying (right button held, other fly keys held,
         // or flying a moment ago) S flies backwards
@@ -1658,7 +1662,8 @@ public sealed partial class SceneViewport : UserControl
     void OnWheel(object? s, MouseEventArgs e)
     {
         if (_xf != XfKind.None) return;
-        _camPos += Forward() * (e.Delta / 120f) * 8f * (_keys.Contains(Keys.ShiftKey) ? 4 : 1); _gl.Invalidate();
+        if (_looking) { WheelSpeed(e.Delta); return; }   // while flying the wheel sets the camera speed (Unreal / Hammer)
+        _camPos += Forward() * (e.Delta / 120f) * 8f * FlySpeedMultiplier(); _gl.Invalidate();
     }
 
     void OnMouseDown(object? s, MouseEventArgs e)
@@ -1684,7 +1689,7 @@ public sealed partial class SceneViewport : UserControl
             int bh = BarHit(e.Location);
             if (bh is >= 0 and <= 3) { ViewMode = (ViewMode)bh; return; }
             if (bh == 4) { ShowCollision = !ShowCollision; return; }
-            if (bh == VisHit) { ShowVisgroupsMenu(); return; }
+            if (bh == VisHit) { OnVisBarClick(e.Location); return; }
             if (_viewMode == ViewMode.Rendered && LightRect.Contains(e.Location)) { NextLight(); return; }
         }
         if (e.Button == MouseButtons.Right) { _looking = true; _dragMoved = false; }
@@ -1828,6 +1833,7 @@ public sealed partial class SceneViewport : UserControl
             if (!o.Visible) continue;
             if (o.Kind == SceneObjectKind.Terrain && !ShowTerrain) continue;
             if (o.Kind == SceneObjectKind.Water && !WaterShown) continue;
+            if (o.IsSkyDome) continue;   // the sky: only when nothing else is hit (below)
             if (o.Kind == SceneObjectKind.Scenery && !ShowScenery) continue;
             bool asModel = o.Model != null && (o.Kind != SceneObjectKind.Marker || _showObjects);   // marker objects: their mesh
             if (o.Kind == SceneObjectKind.Marker && !asModel && !ShowMarkers) continue;
@@ -1841,6 +1847,7 @@ public sealed partial class SceneViewport : UserControl
                     if (Matrix4x4.Invert(cl, out var ci)) t = MathF.Min(t, RayMesh(Vector3.Transform(lo, ci), Vector3.TransformNormal(ld, ci), cm, bestT));
             if (t < bestT) { bestT = t; best = o; }
         }
+        if (best == null && PickableSky is { } sky) return (sky, 1e6f);
         return (best, bestT);
     }
 

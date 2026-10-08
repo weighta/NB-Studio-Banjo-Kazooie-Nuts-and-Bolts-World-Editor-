@@ -136,6 +136,7 @@ public sealed partial class SceneViewport
                     if (t == "rmb+") { OnMouseDown(null, new MouseEventArgs(MouseButtons.Right, 1, 300, 300, 0)); OnMouseMove(null, new MouseEventArgs(MouseButtons.Right, 0, 320, 300, 0)); continue; }
                     if (t == "rmb-") { OnMouseUp(null, new MouseEventArgs(MouseButtons.Right, 1, 320, 300, 0)); continue; }
                     if (t.StartsWith("sleep")) { Thread.Sleep(int.Parse(t[5..])); continue; }
+                    if (t.StartsWith("wheel")) { OnWheel(null, new MouseEventArgs(MouseButtons.None, 0, 300, 300, int.Parse(t[5..]))); log2.Add($"{t}:speed {SpeedLabel}"); continue; }
                     var key = Enum.Parse<Keys>(t[1..], true);
                     if (t[0] == '+') { bool fresh = _keys.Add(key); OnKey(new KeyEventArgs(key), fresh); }
                     else { _keys.Remove(key); if (key == Keys.S) _sFlies = false; }
@@ -306,6 +307,15 @@ public sealed partial class SceneViewport
             case "--idle-poses": IdlePoses = next() == "on"; log($"script: idle poses {(IdlePoses ? "on" : "off")}"); return true;
             case "--idle-info": log("script: idle poses: " + IdlePoseInfo + "; posed " + string.Join(", ", _posed.Keys.Select(o => o.Name))); return true;
 
+            case "--fly-speed": FlySpeed = F(next()); log($"script: camera speed {SpeedLabel}"); return true;
+            case "--speed-menu-shot":
+            {
+                var file = next(); ShowSpeedMenu(); Application.DoEvents();
+                using var v = Capture();
+                using (var g = Graphics.FromImage(v)) using (var m = new Bitmap(_speedMenu.Width, _speedMenu.Height))
+                { _speedMenu.DrawToBitmap(m, new Rectangle(0, 0, m.Width, m.Height)); var at = _gl.PointToClient(_speedMenu.Bounds.Location); g.DrawImage(m, at.X, at.Y); }
+                _speedMenu.Close(); v.Save(file); log("script: speed menu captured"); return true;
+            }
             case "--deselect": Select(null); log("script: selection cleared"); return true;
             case "--xlate-audit":
             {

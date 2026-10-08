@@ -1375,3 +1375,16 @@ The camera of an `aid_cutscene_*` main record (the part that is not an "animatio
 - `aid_cutcam_*` (13 small "award jiggy" assets of 60-byte keys, likely relative to Banjo).
 - Camera volumes / triggers: no camera-specific volume type was found; type 7 volumes link to each other.
 
+
+## 18. Joint scale and the outer collision shell (NB Studio 1.19, 2026-10-07) **[verified in Xenia]**
+
+### 18.1. Joint scale in animations
+- Animations scale joints (Thomas 1.25, Mr. Fit 1.42, Klungo up to 1.24, Boggy 0.86–1.15). The scale follows Maya segment scale compensation: `local = S(joint) · R · S(parent)⁻¹ · T`.
+- A parent's scale moves its children (their offsets grow) but does not scale their geometry again. FBX `InheritType 2` is the same rule.
+- Scaling each joint's geometry while keeping the bind-pose bone lengths gives oversized hands and props, and rigid props (glasses, medals) sink into the body.
+
+### 18.2. The outer collision shell (Nutty Acres)
+- The terrain collision has an invisible outer box: 12 triangles of a ±982-unit box in `aid_havok_…_nuttyacres_default`, plus the outer-wall triangles in `…_defaultchunk2`.
+- Deleting those triangles makes the game draw black sky with stars in those directions; the black area turns with the camera.
+- Deleting an ordinary collision triangle does not cause this.
+- The engine mechanism is not traced; the likely explanation is that the outer box sets the draw distance or the visibility bounds.

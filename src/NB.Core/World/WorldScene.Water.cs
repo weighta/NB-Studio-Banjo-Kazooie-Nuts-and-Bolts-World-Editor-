@@ -14,6 +14,12 @@ public sealed partial class SceneObject
     public Vector3[] WaterPlane = Array.Empty<Vector3>();
     /// <summary>Other regions carrying the same sea plane (they get this object's plane when it is saved).</summary>
     public List<int> WaterPlaneShared = new();
+    /// <summary>The sky dome the 3D view draws (a <see cref="SceneObjectKind.Terrain"/>-kind stand-in added by the viewport:
+    /// selectable, its textures editable; it has no stored transform).</summary>
+    public bool IsSkyDome;
+    /// <summary>Sky dome: true when the level script centres it on the camera (Showdown Town), false when it stands at the
+    /// world origin (Nutty Acres' bluesky, Spiral Mountain).</summary>
+    public bool SkyFollowsCamera;
 }
 
 /// <summary>

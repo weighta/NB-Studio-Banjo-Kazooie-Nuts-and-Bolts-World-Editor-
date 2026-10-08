@@ -56,8 +56,8 @@ public sealed partial class SceneViewport
 
     // ------------------------------------------------------------------ "Show ▾" button and menu
 
-    const int VisW = 70;
-    /// <summary>The visibility-groups button, left of the Collision toggle.</summary>
+    const int ShowW = 70, VisW = SpeedW + 4 + ShowW;
+    /// <summary>The camera-speed and visibility-groups buttons, left of the Collision toggle (one bar element).</summary>
     Rectangle VisRect => new(CollRect.X - CollGap - VisW, BarMargin, VisW, BarH);
     const int VisHit = 5;
 
@@ -78,17 +78,20 @@ public sealed partial class SceneViewport
         _visMenu.Items.Add(new ToolStripSeparator());
         _visMenu.Items.Add("Show all", null, (_, _) => { foreach (var (g, _) in VisgroupLabels) if (g != Visgroup.Collision) SetVisible(g, true); });
         _visMenu.AutoClose = true;
-        var p = at ?? new Point(VisRect.X, VisRect.Bottom + 2);
+        var p = at ?? new Point(VisRect.X + SpeedW + 4, VisRect.Bottom + 2);
         _visMenu.Show(_gl, p);
     }
 
     /// <summary>The "Show ▾" button, drawn at the left of the bar bitmap (see DrawBar).</summary>
     void DrawVisButton(Graphics g, Font font, Brush bg, Pen edge)
     {
-        using var cp = Rounded(new Rectangle(0, 0, VisW - 1, BarH - 1), 4);
+        DrawSpeedButton(g, font, bg, edge);   // SceneViewport.Speed.cs
+        var st = g.Save();
+        g.TranslateTransform(SpeedW + 4, 0);
+        using var cp = Rounded(new Rectangle(0, 0, ShowW - 1, BarH - 1), 4);
         g.FillPath(bg, cp); g.DrawPath(edge, cp);
-        var r = new Rectangle(3, 3, VisW - 6, BarH - 7);
-        bool hover = _hoverBar == VisHit || _visMenu.Visible;
+        var r = new Rectangle(3, 3, ShowW - 6, BarH - 7);
+        bool hover = (_hoverBar == VisHit && !_hoverSpeed) || _visMenu.Visible;
         if (hover) { using var p2 = Rounded(r, 3); using var b2 = new SolidBrush(BarHover); g.FillPath(b2, p2); }
         // an eye
         using (var pen = new Pen(IconFg, 1.3f))
@@ -103,6 +106,13 @@ public sealed partial class SceneViewport
         }
         using var tb = new SolidBrush(BarText);
         g.DrawString("Show ▾", font, tb, r.X + 23, r.Y + 2);
+        g.Restore(st);
+    }
+
+    /// <summary>A click on the speed / show element of the bar.</summary>
+    void OnVisBarClick(Point p)
+    {
+        if (p.X < VisRect.X + SpeedW) ShowSpeedMenu(); else ShowVisgroupsMenu();
     }
 
     // ------------------------------------------------------------------ water

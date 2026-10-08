@@ -135,21 +135,29 @@ public sealed class CharacterAnims
         });
     }
 
-    /// <summary>Model-space joint matrices. Scale keys are not inherited by child joints (segment scale compensation):
-    /// Mr. Fit's animations scale every joint by 1.42, which inherited down the 8-deep chains blew him up to ~16×; a joint's
-    /// scale only acts on what it skins, the children follow its rotation and translation.</summary>
+    /// <summary>Model-space joint matrices with segment scale compensation (Maya's rule, which the animations were made
+    /// with): local = S(joint) · R · S(parent)⁻¹ · T, global = local · global(parent). A parent's scale moves its children
+    /// (their offsets grow with it) but does not scale their geometry a second time.
+    /// The game's characters scale every joint in every animation (Thomas 1.25, Mr. Fit 1.42, Boggy 0.86–1.15 for squash
+    /// and stretch): with SSC the whole figure grows evenly. Studio 1.17 applied each joint's scale about the joint but
+    /// kept the bind-pose bone lengths, which made hands and glasses too big, put Thomas's glasses into his face and his
+    /// medal into his chest; before 1.17 the scales compounded down the chains (Mr. Fit ~16×).</summary>
     static Matrix4x4[] Globals(IReadOnlyList<Joint> joints, Func<int, (Quaternion R, Vector3 T, Vector3 S)> local)
     {
-        var u = new Matrix4x4[joints.Count]; var g = new Matrix4x4[joints.Count]; var done = new bool[joints.Count];
+        var g = new Matrix4x4[joints.Count]; var sc = new Vector3[joints.Count]; var done = new bool[joints.Count];
         Matrix4x4 Get(int k, int depth)
         {
-            if (done[k]) return u[k];
+            if (done[k]) return g[k];
             var (r, t, s) = local(k);
-            var m = Matrix4x4.CreateFromQuaternion(Quaternion.Normalize(r)) * Matrix4x4.CreateTranslation(t);
+            sc[k] = s;
             int p = joints[k].Parent;
-            u[k] = p >= 0 && p < joints.Count && depth < 256 ? m * Get(p, depth + 1) : m;
-            g[k] = Matrix4x4.CreateScale(s) * u[k];
-            done[k] = true; return u[k];
+            bool hasParent = p >= 0 && p < joints.Count && depth < 256;
+            var parent = hasParent ? Get(p, depth + 1) : Matrix4x4.Identity;
+            var ps = hasParent ? sc[p] : Vector3.One;
+            var inv = new Vector3(ps.X != 0 ? 1 / ps.X : 1, ps.Y != 0 ? 1 / ps.Y : 1, ps.Z != 0 ? 1 / ps.Z : 1);
+            var m = Matrix4x4.CreateScale(s) * Matrix4x4.CreateFromQuaternion(Quaternion.Normalize(r)) * Matrix4x4.CreateScale(inv) * Matrix4x4.CreateTranslation(t);
+            g[k] = hasParent ? m * parent : m;
+            done[k] = true; return g[k];
         }
         for (int k = 0; k < joints.Count; k++) Get(k, 0);
         return g;

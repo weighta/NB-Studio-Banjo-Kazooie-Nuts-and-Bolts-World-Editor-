@@ -264,6 +264,7 @@ public sealed partial class MainForm
         int n = _collSel.Values.Sum(x => x.Count);
         if (n == 0) { Log("Delete collision: select collision first (Edit Collision, click a piece)."); return; }
         var sel = _collSel.ToDictionary(kv => kv.Key, kv => kv.Value.ToHashSet());
+        if (!ConfirmShellDelete(sel)) return;   // the world's outer collision box (MainForm.Shell.cs)
         CollisionEdit($"delete {n:N0} triangle(s)", sel.Keys, (a, s) => s.Delete(sel[a]), keepSelection: false);
     }
 

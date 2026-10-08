@@ -85,7 +85,12 @@ public sealed class TransformPanel : UserControl
             Set(_pos, t); Set(_rot, e); Set(_scl, s);
             if (InfoFor?.Invoke(_obj) is string special) { _info.Text = special; return; }
             if (_obj.Marker is { Type: 22 } pm) _link.Value = Math.Clamp(pm.Link, 0, 65535);
-            _info.Text = _obj.Kind == SceneObjectKind.Terrain
+            _info.Text = _obj.IsSkyDome
+                ? $"Sky dome {AssetIds.DisplayName(_obj.ModelName)}: the level script draws it " + (_obj.SkyFollowsCamera
+                    ? "centred on the camera, so it always surrounds the view: the game stores no position, size or rotation for it and it cannot be moved. "
+                    : "at the world's origin at its own size: the game stores no transform for it (the model itself would have to change), so it cannot be moved here. ") +
+                  "Its textures can be replaced: right-click > Textures…, or the Atmosphere tab (Sky textures, and which dome each time of day / Act uses)."
+                : _obj.Kind == SceneObjectKind.Terrain
                 ? "Terrain is the background model's own geometry; it is not movable here. Use the Tag Editor for its data."
                 : _obj.Kind == SceneObjectKind.Water
                 ? $"Water region {_obj.WaterRegion + 1} of the background model (chunk 38): its surface triangles{(_obj.WaterPlane.Length == 4 ? " and the open-sea plane around the world" : "")}. " +

@@ -1387,6 +1387,8 @@ public sealed partial class MainForm : Form
 
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
     {
+        // flying with the right button held: Ctrl is the slow modifier, not Ctrl+S / Ctrl+A … (SceneViewport.Speed.cs)
+        if (_view.MouseFlying && (keyData & Keys.Control) != 0) return false;
         if ((msg.Msg == 0x100 || msg.Msg == 0x104) && HandleEditKey(keyData)) return true;
         return base.ProcessCmdKey(ref msg, keyData);
     }
@@ -2792,6 +2794,18 @@ public sealed partial class MainForm : Form
                     case "--unhide": _view.UnhideAll(); L("script: unhide all"); break;
                     case "--close-workspace": await CloseWorkspace(); L($"script: workspace closed; start page visible {_start.Visible}; title {Text}"); break;
                     case "--history": L($"script: history {_history.Count} step(s); undo: {_history.UndoLabel ?? "-"}; redo: {_history.RedoLabel ?? "-"}"); break;
+                    case "--obj-menu-shot":
+                    {
+                        // the 3D view's right-click menu for the object under a view pixel, drawn into a picture (studio19 r5)
+                        var v = Next().Split(',').Select(int.Parse).ToArray(); var file = Next();
+                        var hit = _view.Pick(new Point(v[0], v[1])).Obj;
+                        if (hit == null) { L("script: nothing under the mouse"); break; }
+                        _view.Select(hit); BuildObjectMenu(hit); _objMenu.Show(_view, new Point(v[0], v[1])); Application.DoEvents(); await Task.Delay(300);
+                        using (var bmp = new Bitmap(_objMenu.Width, _objMenu.Height)) { _objMenu.DrawToBitmap(bmp, new Rectangle(0, 0, bmp.Width, bmp.Height)); bmp.Save(file); }
+                        L($"script: object menu of {hit.Name}: " + string.Join(" | ", _objMenu.Items.OfType<ToolStripItem>().Where(i => i.Enabled && i is ToolStripMenuItem).Select(i => i.Text)));
+                        _objMenu.Close(); break;
+                    }
+                    case "--shell-check": L($"script: collision selection holds {ShellTriangles(_collSel.ToDictionary(kv => kv.Key, kv => kv.Value.ToHashSet()))} outer-shell triangle(s)"); break;
                     case "--menu-shot":
                     {
                         var name = Next(); var file = Next();
