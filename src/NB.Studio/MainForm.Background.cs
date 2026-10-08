@@ -11,6 +11,14 @@ namespace NB.Studio;
 /// </summary>
 public partial class MainForm
 {
+    /// <summary>"NB Studio 1.21.1 — Nuts & Bolts Mod Tool": the window title starts with the version.</summary>
+    static readonly string AppTitle = $"NB Studio {AppVersion} — Nuts & Bolts Mod Tool";
+
+    /// <summary>The version from NB.Studio.csproj (without the "+commit" suffix the build adds).</summary>
+    internal static string AppVersion =>
+        (typeof(MainForm).Assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+            .OfType<System.Reflection.AssemblyInformationalVersionAttribute>().FirstOrDefault()?.InformationalVersion ?? Application.ProductVersion).Split('+')[0];
+
     protected override bool ShowWithoutActivation => QuietLaunch.Enabled || base.ShowWithoutActivation;
 
     protected override CreateParams CreateParams

@@ -60,7 +60,7 @@ public sealed partial class MainForm : Form
 
     public MainForm()
     {
-        Text = "Nuts & Bolts Mod Tool";
+        Text = AppTitle;
         Width = 1600; Height = 950;
         StartPosition = FormStartPosition.CenterScreen;
         try { Icon = LoadIcon(); } catch { }
@@ -2087,7 +2087,7 @@ public sealed partial class MainForm : Form
     void UpdateTitle()
     {
         _unsaved.Text = PendingText();   // the status bar's "Unsaved: …" (MainForm.Saving.cs)
-        Text = "Nuts & Bolts Mod Tool" + (_ws != null ? $" — {Path.GetFileName(_ws.Root)}" : "") + (_scene != null ? $" — {WorldCatalog.DisplayNames.GetValueOrDefault(_scene.Background.View.Name.Replace("aid_model_banjox_background_", "").Replace("_default", ""), "")} [{_scene.Bundle:x6}]" : "") + (_unsaved.Text.Length > 0 ? " *" : "");
+        Text = AppTitle + (_ws != null ? $" — {Path.GetFileName(_ws.Root)}" : "") + (_scene != null ? $" — {WorldCatalog.DisplayNames.GetValueOrDefault(_scene.Background.View.Name.Replace("aid_model_banjox_background_", "").Replace("_default", ""), "")} [{_scene.Bundle:x6}]" : "") + (_unsaved.Text.Length > 0 ? " *" : "");
     }
 
     // ------------------------------------------------------------------ export
