@@ -222,6 +222,8 @@ public sealed partial class MainForm : Form
         _vehicles.Log = Log;
         _vehicles.WorldBundles = () => _scene?.LoadSet;
         _vehicles.WorldLabel = () => _sceneAct?.Display ?? _sceneEntry?.Display;
+        _vehicles.WorldAct = () => _sceneAct != null ? (_sceneAct.World, _sceneAct.Act) : _sceneEntry != null ? (_sceneEntry.World, "") : null;
+        QuickTestPending += a => { if (_vehicles.HasUnsaved) a.Items.Add((_vehicles.UnsavedLabel, _vehicles.SaveForTest)); };   // F5: the Vehicle Editor's unsaved game vehicle
         _vehicles.VehicleSavesDir = () => TestSaves.VaultDir(_settings);
         _audio.VgmstreamPath = FindUp(Path.Combine("thirdparty", "vgmstream", "vgmstream-cli.exe"));
         _tags.Changed += () => UpdateTitle();
@@ -2891,6 +2893,7 @@ public sealed partial class MainForm : Form
                         for (int k = 0; k < 600 && _qtBoot == null; k++) await Task.Delay(100);
                         L($"script: quick test started: pid {_qtProcess?.Id}"); break;
                     }
+                    case "--quicktest-pending": { bool go = AskTestPending(); L($"script: F5 unsaved-changes step -> {(go ? "test" : "cancelled")}: {_status.Text}"); break; }   // without starting the game
                     case "--quicktest-reset": await ResetTestSave(); L("script: test save reset"); break;
                     case "--quicktest-fullsave": _settings.QuickTestFullSave = Next() == "on"; L($"script: full save {_settings.QuickTestFullSave}"); break;
                     case "--vehicle-saves": { var v = Next(); _settings.VehicleSaves = v == "default" ? null : v; L($"script: vehicle saves {TestSaves.VaultDir(_settings) ?? "per workspace"}"); break; }

@@ -36,6 +36,16 @@ public sealed class PartInfo
     public int StoreOrder, Tier;
     /// <summary>A seat the game's AI drivers use (secondaryseats_large / _small: variants passengerlargeai / passengersmallai).</summary>
     public bool IsAiSeat => Class == "objDefId_vehicleBlockSeat" && Variant.EndsWith("ai");
+    /// <summary>One of the versions the game's AI vehicles use: *_ai_* engines and jets, the AI spring, the AI seats.</summary>
+    public bool IsAiVariant => IsAiSeat || Key.Contains("_ai_") || Key == "gadgets_springai";
+    /// <summary>The AI version of a player part (Medium Engine → Medium Engine (AI)), 0 when there is none.</summary>
+    public uint AiVersion;
+    /// <summary>Wheels: how far the wheel hangs below its rest pose when the suspension is fully extended (objparams +0x400:
+    /// standard 0.5, high grip 0.64, super 0.54, monster 0.945; the editor shows <see cref="PartCatalog.WheelTravel"/> of it).</summary>
+    public float SuspensionTravel;
+    /// <summary>The orientation a new part of this kind gets: the one the game's own vehicles use for parts with a "bottom"
+    /// (springs: 85 of the 105 springs in the 274 game blueprints face down, o2 / o14 / o23; o2 is the most common).</summary>
+    public int DefaultOrientation;
     public string SizeText { get { var (x, y, z) = Size; return $"{x}×{y}×{z}"; } }
 
     public bool IsWheel => Class == "objDefId_vehicleBlockWheel";
@@ -102,7 +112,18 @@ public sealed class PartCatalog
             p.Modded = shipped != null && !shipped.Contains(p.Id);
             if (cat.FirstData(p.AttachId) is { } ad) try { p.Attach = AttachData.Parse(ad); } catch { }
             p.Switches = PartModelView.SwitchesOf(p, d);
+            if (p.IsWheel) { float t = BE.F32(d, 0x400); if (t is > 0 and < 5) p.SuspensionTravel = t; }
+            if (p.Class == "objDefId_vehicleBlockSpring") p.DefaultOrientation = 2;
             cat.Parts[p.Id] = p;
+        }
+        // player part → AI version (the game's AI racers use these: engines and jets +25 % power, the AI spring 6× stiffer)
+        var byKey = cat.Parts.Values.GroupBy(x => x.Key).ToDictionary(g => g.Key, g => g.First());
+        foreach (var p in cat.Parts.Values)
+        {
+            string? ai = p.Key.StartsWith("propulsion_engines_") && !p.Key.Contains("_ai_") ? p.Key.Replace("propulsion_engines_", "propulsion_engines_ai_")
+                : p.Key.StartsWith("propulsion_jets_") && !p.Key.Contains("_ai_") ? p.Key.Replace("propulsion_jets_", "propulsion_jets_ai_")
+                : p.Key == "gadgets_spring" ? "gadgets_springai" : null;
+            if (ai != null && byKey.TryGetValue(ai, out var v)) p.AiVersion = v.Id;
         }
         var store = cat.StoreParts();
         foreach (var p in cat.Parts.Values)
@@ -304,15 +325,20 @@ public sealed class PartCatalog
 
     /// <summary>The part's model as the game shows it on a vehicle: level-0 detail, the part's switch options only
     /// (<see cref="PartModelView"/>). A filtered copy of the stored model (same draws), cached per model and switches.</summary>
+    /// <summary>How far the wheels hang out of their bind pose (fork pushed up), as a share of their suspension travel: 0.6
+    /// matches Mumbo's garage by eye (a gap of about a third of the tyre under the part above); 0 = the bind pose.</summary>
+    public static float WheelTravel = 0.6f;
+
     public ModelAsset? Model(PartInfo p)
     {
-        string key = p.ModelId.ToString("X8") + "|" + string.Join(",", p.Switches.OrderBy(k => k.Key).Select(k => $"{k.Key}={k.Value}"));
+        string key = p.ModelId.ToString("X8") + "|" + string.Join(",", p.Switches.OrderBy(k => k.Key).Select(k => $"{k.Key}={k.Value}")) + "|" + p.SuspensionTravel * WheelTravel;
         if (_shown.TryGetValue(key, out var shown)) return shown;
         var m = RawModel(p.ModelId);
         if (m == null) return _shown[key] = null;
         if (!_views.TryGetValue(p.ModelId, out var view)) _views[p.ModelId] = view = PartModelView.Of(m);
         var draws = m.Draws.Where((d, i) => view.Visible(i, p.Switches)).ToList();
         if (draws.Count == 0) draws = m.Draws.Where(d => !m.LodOnlyNodes.Contains(d.Node)).ToList();
+        if (WheelTravel > 0 && p.SuspensionTravel > 0) draws = PartModelView.Extended(m, draws, p.SuspensionTravel * WheelTravel);
         shown = new ModelAsset { View = m.View, Chunks = m.Chunks, Nodes = m.Nodes, Draws = draws, TextureTable = m.TextureTable, TextureByIndex = m.TextureByIndex };
         return _shown[key] = shown;
     }

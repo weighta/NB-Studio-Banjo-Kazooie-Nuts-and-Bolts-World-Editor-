@@ -176,4 +176,28 @@ public sealed class VehicleDocument
             res.Add(new($"{Parts.Count(q => q.B.Group != 0)} part(s) have a group byte (+3) set: the game does not spawn them.", p, false));
         return res;
     }
+
+    /// <summary>
+    /// Checks for an AI driver's vehicle (a game vehicle with an AI driver, or one with an AI seat): the AI drives from an AI
+    /// seat (secondaryseats_small / _large: every AI racer of the game has one); player parts that have an AI version
+    /// (engines, jets, spring) work — a player-built car with player engines raced in Burnin' Rubber — but the game's racers
+    /// use the AI versions, which are stronger (objparams: engines and jets +25 % power / thrust, the AI spring 6.4× stiffer).
+    /// </summary>
+    public List<Issue> ValidateAi(PartCatalog cat)
+    {
+        var res = new List<Issue>();
+        if (Parts.Count == 0) return res;
+        if (!Parts.Any(p => cat[p.B.Part]?.IsAiSeat == true))
+            res.Add(new("AI driver's vehicle without an AI seat: the game's AI racers all drive from Large / Small Taxi Seat (AI driver) — add one (Seats).", null, false));
+        // engines and jets: the game's racers use the AI versions (one mixes in a player Small Engine); springs: the game's
+        // racers use both, so they are not listed here ("Use AI parts" still offers them)
+        var player = Parts.Where(p => cat[p.B.Part] is { AiVersion: > 0 } i && i.Class != "objDefId_vehicleBlockSpring").ToList();
+        if (player.Count > 0)
+        {
+            var names = player.GroupBy(p => cat[p.B.Part]!.Name).Select(g => $"{(g.Count() > 1 ? $"{g.Count()}× " : "")}{g.Key} → {cat[cat[g.First().B.Part]!.AiVersion]!.Name}");
+            res.Add(new($"AI vehicle: {player.Count} player part(s) have the AI version the game's racers use: {string.Join(", ", names.Take(6))}{(names.Count() > 6 ? " …" : "")}. " +
+                        "The AI drives player parts too, the AI versions are stronger (+25 % power). \"Use AI parts\" (note in the view) swaps them.", player[0], false));
+        }
+        return res;
+    }
 }

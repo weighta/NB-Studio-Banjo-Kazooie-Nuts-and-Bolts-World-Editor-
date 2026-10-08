@@ -194,9 +194,18 @@ public sealed class VehicleRenderer : IDisposable
         return t;
     }
 
+    /// <summary>A pixel shader constant: the lit pass's when it sets it, else the draw's own.</summary>
+    static Vector4? Const(MeshDraw d, int reg) =>
+        d.Passes.Length > 0 && d.Passes[0].Constants.TryGetValue(reg, out var v) ? v : d.PixelConstants.TryGetValue(reg, out var w) ? w : null;
+
     static Vector3 UntexturedColour(MeshDraw d)
     {
         var c = d.Passes.Length > 0 ? d.Passes[0].Constants : d.PixelConstants;
+        // liquids (the fuel inside the tanks' windows: untextured, c5 = the liquid's colour, e.g. green 0.31 0.78 0): a
+        // clearly coloured c5 is the colour, not a specular level
+        static bool Coloured(Vector4 l) => Math.Max(l.X, Math.Max(l.Y, l.Z)) - Math.Min(l.X, Math.Min(l.Y, l.Z)) > 0.3f;
+        foreach (var src in d.Passes.Select(p => p.Constants).Append(d.PixelConstants))
+            if (src.TryGetValue(5, out var l) && Coloured(l)) return new Vector3(l.X, l.Y, l.Z);
         if (c.TryGetValue(6, out var v) && v.X is > 0.05f and <= 1.5f && MathF.Abs(v.X - v.Y) < 0.3f && MathF.Abs(v.Y - v.Z) < 0.3f) return new Vector3(v.X, v.Y, v.Z) * 0.85f;
         return new Vector3(0.7f);
     }
@@ -238,6 +247,8 @@ public sealed class VehicleRenderer : IDisposable
                 Tint = m.Base != null ? Vector3.One : UntexturedColour(d0), SpecCol = new Vector3(0.35f), SpecPow = m.SpecPower > 0 ? m.SpecPower : 24,
             };
             if (m.Blend == BlendKind.Multiply) continue;                 // contact shadows: not needed in the editor
+            // glass (the fuel tanks' windows: blended, no colour map, c5.w = 0): see-through, so the green fuel inside shows
+            if (m.Blend == BlendKind.Blend && m.Base == null && (Const(d0, 5) is { W: 0 } || d0.PixelConstants.TryGetValue(5, out var g5) && g5.W == 0)) bt.Opacity = 0.25f;
             var buf = new List<float>(); var idx = new List<uint>();
             foreach (var d in g)
             {
@@ -266,6 +277,14 @@ public sealed class VehicleRenderer : IDisposable
             list.Add(bt);
         }
         return _batches[model] = list.ToArray();
+    }
+
+    /// <summary>Scripted tests: how the batches of a model are drawn (after its first frame).</summary>
+    public IEnumerable<string> DescribeBatches(ModelAsset model)
+    {
+        if (!_batches.TryGetValue(model, out var bs)) yield break;
+        foreach (var b in bs)
+            yield return $"{b.Count / 3} tris base {b.Base?.Split("_0x")[0].Replace("aid_texture_banjox_shared_materials_", "") ?? "-"} edit {(b.Edit != null ? "yes" : "no")} blend {b.Blend} maybe {b.MaybeBlend} cutout {b.Cutout} op {b.Opacity:0.##} tint {b.Tint}";
     }
 
     void Resolve(Batch b)

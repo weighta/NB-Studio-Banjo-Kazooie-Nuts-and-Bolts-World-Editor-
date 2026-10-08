@@ -1,3 +1,5 @@
+using System.Text.Json;
+using NB.Core.Compression;
 using NB.Core.Formats;
 using NB.Core.IO;
 using NB.Core.Project;
@@ -23,11 +25,15 @@ public sealed class PregameVehicle
     public List<VehiclePlace> Places = new();
     /// <summary>For vehicles outside the worlds: "Shop blueprints", "Demo vehicles", "Test vehicles", …</summary>
     public string Section = "";
+    /// <summary>The game's name for it, when it has one: loctext "vehicle__" + the blueprint's name field
+    /// (humba_truck1 → "Humba Truck 1", mpsumo → "Rikishi", trolley4 → "Trolley Mk. 4: Spring"); else a readable name
+    /// field ("Red Baron"); empty for creator tags (SalvyBob, y0mper, …).</summary>
+    public string Friendly = "";
 
     public string Short => Asset.Replace("aid_vehicle_banjox_", "");
     public string Label => Owner.Length > 0 ? $"{Owner}'s vehicle ({Short})" : Short;
     /// <summary>"Mr. Fit's vehicle" for an AI vehicle, else the asset's short name.</summary>
-    public string Title => Owner.Length > 0 ? $"{Owner}{(Owner.EndsWith('s') ? "'" : "'s")} vehicle" : Short;
+    public string Title => Owner.Length > 0 ? $"{Owner}{(Owner.EndsWith('s') ? "'" : "'s")} vehicle" : Friendly.Length > 0 ? Friendly : Short;
     /// <summary>"World of Sports › Act 2 Burnin' Rubber" (the first place), or the section.</summary>
     public string Where => Places.Count > 0 ? Places[0].ToString() : Section;
     /// <summary>"World of Sports › Act 2 Burnin' Rubber › Mr. Fit's vehicle".</summary>
@@ -70,7 +76,7 @@ public static class PregameVehicles
     {
         var all = All(idx).ToDictionary(v => v.Id);
         var res = new Dictionary<uint, PregameVehicle>();
-        ScanMarkers(ws, bundles, all, Names(idx), res);
+        ScanMarkers(ws.LoadResident, bundles, all, Names(idx), res);
         foreach (var v in res.Values)
             try { v.Parts = Load(ws, v).Blocks.Count; } catch { }
         return res.Values.OrderBy(v => v.Owner.Length > 0 ? 0 : 1).ThenBy(v => v.Owner).ThenBy(v => v.Asset).ToList();
@@ -85,13 +91,13 @@ public static class PregameVehicles
 
     /// <summary>The vehicles resident in <paramref name="bundles"/> and those their markers (type 21) place, with drivers
     /// and the world / Act of the marker asset (aid_marker_banjox_&lt;world&gt;_&lt;act&gt;_…).</summary>
-    static void ScanMarkers(Workspace ws, IEnumerable<uint> bundles, Dictionary<uint, PregameVehicle> all, Dictionary<uint, string> names, Dictionary<uint, PregameVehicle> res)
+    static void ScanMarkers(Func<uint, CaffFile> load, IEnumerable<uint> bundles, Dictionary<uint, PregameVehicle> all, Dictionary<uint, string> names, Dictionary<uint, PregameVehicle> res)
     {
         foreach (var b in bundles.Select(b => b & 0xFFFFFF).Distinct())
         {
             foreach (var v in all.Values.Where(v => v.Bundles.Contains(b))) res.TryAdd(v.Id, v);
             CaffFile caff;
-            try { caff = ws.LoadResident(b); } catch { continue; }
+            try { caff = load(b); } catch { continue; }
             for (int s = 1; s <= caff.Symbols.Count; s++)
             {
                 if (!caff.Symbols[s - 1].StartsWith("aid_marker_")) continue;
@@ -130,17 +136,18 @@ public static class PregameVehicles
     /// "Burnin' Rubber"). Vehicles outside the worlds get a <see cref="PregameVehicle.Section"/> (shop blueprints, demo, …).
     /// Parts are counted for the vehicles the Acts use.
     /// </summary>
-    public static List<PregameVehicle> Catalog(Workspace ws, AssetIndex idx)
+    public static List<PregameVehicle> Catalog(Workspace ws, AssetIndex idx, List<ActEntry>? acts = null, Func<uint, CaffFile>? load = null)
     {
+        load ??= ws.LoadResident;
         var list = All(idx);
         var all = list.ToDictionary(v => v.Id);
-        List<ActEntry> acts;
-        try { acts = ActCatalog.Build(ws, idx); } catch { acts = new(); }
+        if (acts == null) try { acts = ActCatalog.Build(ws, idx); } catch { acts = new(); }
         var used = new Dictionary<uint, PregameVehicle>();
-        ScanMarkers(ws, acts.Select(a => a.ActBundle).Concat(acts.Select(a => a.WorldBundle)).Where(b => b != 0), all, Names(idx), used);
+        ScanMarkers(load, acts.Select(a => a.ActBundle).Concat(acts.Select(a => a.WorldBundle)).Where(b => b != 0), all, Names(idx), used);
         var actOf = acts.GroupBy(a => a.ActBundle & 0xFFFFFF).ToDictionary(g => g.Key, g => g.First());
         var worldOf = WorldCatalog.FromIndex(idx).GroupBy(w => w.Bundle & 0xFFFFFF).ToDictionary(g => g.Key, g => g.First().World);
-        var challenges = Challenges(PartCatalog.LoadText(ws, "challenge__"));
+        var text = PartCatalog.LoadText(ws, "challenge__", "vehicle__");
+        var challenges = Challenges(text.Where(t => t.Key.StartsWith("challenge__")).ToDictionary(t => t.Key, t => t.Value));
         foreach (var v in list)
         {
             if (v.Places.Count == 0) foreach (var b in v.Bundles) if (actOf.TryGetValue(b, out var a)) AddPlace(v, a.World, a.Act);
@@ -159,9 +166,96 @@ public static class PregameVehicles
                     v.Places.Add(new VehiclePlace(lc.World, "live", lc.Name));
             }
         }
-        foreach (var v in used.Values)
-            try { v.Parts = Load(ws, v).Blocks.Count; } catch { }
+        // every blueprint: its parts and the game's name for it
+        foreach (var v in list)
+            try
+            {
+                var bp = Load(load, v);
+                v.Parts = bp.Blocks.Count;
+                var n = bp.Name;
+                if (text.TryGetValue("vehicle__" + n.ToLowerInvariant(), out var f)) v.Friendly = f;
+                else if (n.Length > 2 && char.IsUpper(n[0]) && n.Contains(' ')) v.Friendly = n;   // "Red Baron", "Boat Chassis"
+            }
+            catch { }
         return list;
+    }
+
+    /// <summary>Reads resident bundles without touching the workspace's caches (for a build on another thread): the
+    /// decompressed copy NB Studio keeps when it is there and complete, else the bundle file decompressed in memory. Each
+    /// bundle is read once per loader.</summary>
+    public static Func<uint, CaffFile> ReadOnlyLoader(Workspace ws)
+    {
+        var seen = new Dictionary<uint, CaffFile>();
+        return b =>
+        {
+            b &= 0xFFFFFF;
+            if (seen.TryGetValue(b, out var c)) return c;
+            var path = ws.Game.ResidentPath(b);
+            var raw = File.ReadAllBytes(path);
+            if (XCompressFile.IsCompressed(raw))
+            {
+                var cache = System.IO.Path.Combine(ws.CacheDir, "4f", b.ToString("x6"));
+                c = null;
+                try { if (File.Exists(cache) && File.GetLastWriteTimeUtc(cache) >= File.GetLastWriteTimeUtc(path)) c = CaffFile.Read(File.ReadAllBytes(cache)); }
+                catch { c = null; }   // being written by NB Studio right now: decompress it ourselves
+                c ??= CaffFile.Read(XCompressFile.Decompress(raw));
+            }
+            else c = CaffFile.Read(raw);
+            return seen[b] = c;
+        };
+    }
+
+    const int CacheVersion = 1;
+    static readonly JsonSerializerOptions CacheJson = new() { IncludeFields = true };
+    sealed class CacheFile { public int Version; public string Key = ""; public List<PregameVehicle> Vehicles = new(); }
+
+    static string CachePath(Workspace ws) => System.IO.Path.Combine(ws.CacheDir, "vehicle-catalog.json");
+
+    /// <summary>The cache key of <see cref="Catalog"/>: size and time of every resident bundle that holds a vehicle or a
+    /// marker, the common bundle (Act scripts) and the game text — any edit to them builds the list again.</summary>
+    public static string CacheKey(Workspace ws, AssetIndex idx)
+    {
+        var sb = new System.Text.StringBuilder($"v{CacheVersion};");
+        var bundles = idx.Entries.Where(e => !e.Streamed && (e.Type == "vehicle" || e.Name.StartsWith("aid_marker_"))).Select(e => e.Bundle & 0xFFFFFF)
+            .Append(TestMode.CommonBundle & 0xFFFFFF).Distinct().OrderBy(b => b);
+        foreach (var b in bundles)
+        {
+            var fi = new FileInfo(ws.Game.ResidentPath(b));
+            sb.Append(b.ToString("x6")).Append(':').Append(fi.Exists ? fi.Length : -1).Append(':').Append(fi.Exists ? fi.LastWriteTimeUtc.Ticks : 0).Append(';');
+        }
+        var text = System.IO.Path.Combine(ws.Game.Root, "Debug", "11");
+        if (Directory.Exists(text))
+            foreach (var f in Directory.EnumerateFiles(text, "*", SearchOption.AllDirectories).OrderBy(f => f, StringComparer.Ordinal))
+            {
+                var fi = new FileInfo(f);
+                sb.Append(fi.Length).Append(':').Append(fi.LastWriteTimeUtc.Ticks).Append(';');
+            }
+        return Convert.ToHexString(System.Security.Cryptography.SHA1.HashData(System.Text.Encoding.UTF8.GetBytes(sb.ToString())));
+    }
+
+    /// <summary>The list saved by <see cref="SaveCache"/> when its key still matches, else null.</summary>
+    public static List<PregameVehicle>? LoadCache(Workspace ws, string key)
+    {
+        try
+        {
+            var p = CachePath(ws);
+            if (!File.Exists(p)) return null;
+            var c = JsonSerializer.Deserialize<CacheFile>(File.ReadAllText(p), CacheJson);
+            return c != null && c.Version == CacheVersion && c.Key == key && c.Vehicles.Count > 0 ? c.Vehicles : null;
+        }
+        catch { return null; }
+    }
+
+    public static void SaveCache(Workspace ws, string key, List<PregameVehicle> list)
+    {
+        try
+        {
+            Directory.CreateDirectory(ws.CacheDir);
+            var p = CachePath(ws);
+            File.WriteAllText(p + ".tmp", JsonSerializer.Serialize(new CacheFile { Version = CacheVersion, Key = key, Vehicles = list }, CacheJson));
+            File.Move(p + ".tmp", p, true);
+        }
+        catch { }
     }
 
     static string SectionOf(string prefix) => prefix switch
@@ -222,11 +316,13 @@ public static class PregameVehicles
     static int SymbolOf(CaffFile c, string asset) => c.Symbols.FindIndex(s => s == asset || AssetIds.DisplayName(s) == asset) + 1;
 
     /// <summary>Reads the blueprint (from the first bundle that holds it).</summary>
-    public static Blueprint Load(Workspace ws, PregameVehicle v)
+    public static Blueprint Load(Workspace ws, PregameVehicle v) => Load(ws.LoadResident, v);
+
+    public static Blueprint Load(Func<uint, CaffFile> load, PregameVehicle v)
     {
         foreach (var b in v.Bundles)
         {
-            var c = ws.LoadResident(b);
+            var c = load(b);
             int s = SymbolOf(c, v.Asset);
             if (s > 0) return Blueprint.Parse(DataOf(c, s));
         }

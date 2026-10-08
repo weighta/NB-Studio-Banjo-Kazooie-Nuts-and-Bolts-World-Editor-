@@ -1317,6 +1317,22 @@ positions of all three blueprints change during the race; one loose part fell of
   live challenges `challenge__<world>live<name>`. Vehicle assets carry the challenge in their name
   (worldofsport_burninrubber_racer1); the markers (type 21) of `aid_marker_banjox_<world>_<act>_main` place them.
 
+### Round 4 facts
+
+* Blueprint name field of the game's vehicles = loctext key: `vehicle__<name>` gives the game's name (humba_truck1 →
+  "Humba Truck 1", mpsumo → "Rikishi", trolley4 → "Trolley Mk. 4: Spring"); other assets carry a creator tag (SalvyBob,
+  y0mper, jpegg, build64…) or a plain name ("Red Baron").
+* AI versions (objparams diff): engines_ai_* +0x3FC power ×1.25 (large 80 → 100, small 40 → 50), +0x3BC flags 0x818 → 0x18,
+  no +0x120 description; jets_ai_* thrust +0x3C4 10000 → 12500, +0x460 120 → 150; springai +0x4B8 15596 → 100000;
+  AI seats variant *ai, +0x194 50 → 16. The AI drives player parts too (round 1: player engines raced in Burnin' Rubber);
+  the game's racers mix them (cpu_laphappy: player Small Engine + AI Medium Engine; racer2/3: player Springs).
+* Wheels: skinned to BASE / WHEELFORKROTATE / WHEELFORKTRAVEL / WHEELCOGROTATE / WHEELROTATE (pose object in the model);
+  bind pose = fork pushed up. objparams +0x400 = suspension travel (standard 0.5, high grip 0.64, super 0.54, monster
+  0.945), +0x3C8 / +0x3CC radius / width (0.5 / 0.5; monster 1.5 / 1). The garage shows them hanging about 0.6 × travel down.
+* Springs: model up is the pad side; the game mounts 85 of 105 upside down (o2 / o14 / o23).
+* Fuel tanks: the liquid is an untextured draw with c5 (draw constants, not the lit pass) = (0.31, 0.78, 0) green; the
+  window is a blended untextured draw with c5.w = 0 (glass).
+
 ## 17. Cameras: fixed camera points, warp-pad cameras, cut-scene cameras (NB Studio 1.18, 2026-10-07) **[verified in Xenia]**
 
 

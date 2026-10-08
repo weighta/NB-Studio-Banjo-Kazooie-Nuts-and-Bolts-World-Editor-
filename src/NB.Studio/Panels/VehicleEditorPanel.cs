@@ -29,6 +29,8 @@ public sealed class VehicleEditorPanel : UserControl
     /// <summary>Bundles loaded by the open world / act (act, world, companions, common), for the pregame list and validation.</summary>
     public Func<IReadOnlyList<uint>?>? WorldBundles;
     public Func<string?>? WorldLabel;
+    /// <summary>The open world and Act ("worldofsport", "act2"; Act "" for a world without Act), null when none is open.</summary>
+    public Func<(string World, string Act)?>? WorldAct;
     /// <summary>The shared vehicle saves folder (TestSaves.VaultDir), null when vehicles are kept per workspace.</summary>
     public Func<string?>? VehicleSavesDir;
 
@@ -39,12 +41,16 @@ public sealed class VehicleEditorPanel : UserControl
     VehicleFile? _file;
     PregameVehicle? _game;
     VehiclePlace? _gamePlace;
-    /// <summary>Every game vehicle with its world / Act / challenge (built on first use per workspace).</summary>
+    /// <summary>Every game vehicle with its world / Act / challenge: built in the background when the workspace opens (or read
+    /// from the workspace cache when nothing changed), so the Game Vehicles window opens at once.</summary>
     List<PregameVehicle>? _gameCat;
+    Task? _gameTask;
+    string _gameState = "";
+    readonly GameVehiclePicker _picker = new();
     static List<VehicleDocument.Part> _clip = new();
 
     readonly VehicleViewport _view = new() { Dock = DockStyle.Fill };
-    readonly ToolStrip _bar = new() { GripStyle = ToolStripGripStyle.Hidden, Dock = DockStyle.Top };
+    readonly ToolStrip _bar = new() { GripStyle = ToolStripGripStyle.Hidden, Dock = DockStyle.Top, LayoutStyle = ToolStripLayoutStyle.Flow };
     readonly StatusStrip _statusStrip = new();
     readonly ToolStripStatusLabel _status = new() { Spring = true, TextAlign = ContentAlignment.MiddleLeft };
     readonly ToolStripStatusLabel _source = new() { TextAlign = ContentAlignment.MiddleRight };
@@ -72,14 +78,22 @@ public sealed class VehicleEditorPanel : UserControl
     readonly Button _colourBtn = new() { Text = "Colour…", Width = 90 };
     readonly Panel _colourShow = new() { Width = 40, Height = 23, BorderStyle = BorderStyle.FixedSingle };
     readonly FlowLayoutPanel _palette = new() { Width = 255, Height = 50, FlowDirection = FlowDirection.LeftToRight };
+    /// <summary>Recent colours picked with Colour… (last 8, kept in NB Studio's data folder).</summary>
+    readonly FlowLayoutPanel _recent = new() { Width = 255, Height = 26, FlowDirection = FlowDirection.LeftToRight };
+    readonly List<uint> _recentColours = new();
+    const int RecentMax = 8;
+    /// <summary>Corner note over the 3D view when the vehicle is an AI driver's vehicle.</summary>
+    readonly Panel _aiNote = new() { Visible = false, BackColor = Color.FromArgb(255, 244, 214), BorderStyle = BorderStyle.FixedSingle, Width = 360, Height = 96, Padding = new Padding(6) };
+    readonly Label _aiText = new() { Dock = DockStyle.Fill, ForeColor = Color.FromArgb(90, 60, 0) };
+    readonly LinkLabel _aiSwap = new() { Dock = DockStyle.Bottom, Height = 18, Text = "" };
     readonly ComboBox _setting = new() { Width = 150, DropDownStyle = ComboBoxStyle.DropDownList };
     readonly CheckBox[] _act1 = new CheckBox[3], _act2 = new CheckBox[3];
     readonly NumericUpDown _groupByte = new() { Width = 60, Minimum = 0, Maximum = 255 };
     readonly TextBox _name = new() { Width = 200, MaxLength = Blueprint.MaxNameChars };
     readonly Label _vehInfo = new() { AutoSize = true, MaximumSize = new Size(255, 0) };
     readonly ListBox _issues = new() { Dock = DockStyle.Fill, IntegralHeight = false, HorizontalScrollbar = true };
-    readonly ToolStripButton _tSel, _tPlace, _tPaint, _undoBtn, _redoBtn, _saveGame;
-    readonly ToolStripDropDownButton _pregameBtn;
+    readonly ToolStripButton _tSel, _tPlace, _tPaint, _undoBtn, _redoBtn, _saveGame, _each;
+    readonly ToolStripButton _pregameBtn;
     bool _syncing;
     SplitContainer _inner = null!, _outer = null!;
 
@@ -90,9 +104,9 @@ public sealed class VehicleEditorPanel : UserControl
         // ---- toolbar
         _bar.Items.Add(new ToolStripButton("New", null, (_, _) => New()) { ToolTipText = "Start an empty vehicle" });
         _bar.Items.Add(new ToolStripButton("Open…", null, (_, _) => OpenDialog()) { ToolTipText = "Open an Xbox 360 vehicle save (package 0x0000000N or its extracted content file) or a blueprint .bin. You can also drop files here." });
-        _pregameBtn = new ToolStripDropDownButton("Game Vehicles") { ToolTipText = "The game's own vehicles by world › Act › challenge (AI racers with their drivers, challenge and prize vehicles), shop blueprints and the rest" };
-        _pregameBtn.DropDownOpening += (_, _) => FillPregameMenu();
-        _pregameBtn.DropDownItems.Add("(open a workspace)");
+        _pregameBtn = new ToolStripButton("Game Vehicles ▾") { ToolTipText = "The game's own vehicles: the open world's first, then World › Act › challenge (AI racers with their drivers, challenge and prize vehicles), then Other / templates (shop blueprints, demo, test, live). Search box, part counts." };
+        _pregameBtn.Click += (_, _) => ShowPicker();
+        _picker.Picked += (v, p) => OpenPregame(v, p);
         _bar.Items.Add(_pregameBtn);
         _bar.Items.Add(new ToolStripSeparator());
         _bar.Items.Add(new ToolStripButton("Save", null, (_, _) => Save()) { ToolTipText = "Save back where the vehicle came from: its 360 package / content file / blueprint, or into the game (game vehicles)" });
@@ -111,14 +125,18 @@ public sealed class VehicleEditorPanel : UserControl
         _redoBtn = new ToolStripButton("Redo", null, (_, _) => DoRedo()) { ToolTipText = "Ctrl+Y" };
         _bar.Items.Add(_undoBtn); _bar.Items.Add(_redoBtn);
         _bar.Items.Add(new ToolStripSeparator());
-        _tSel = new ToolStripButton("Select", null, (_, _) => SetTool(VehicleTool.Select)) { CheckOnClick = false, ToolTipText = "Click parts to select (Ctrl/Shift: add); drag selected parts to move them in the plane facing you, cell by cell (looking down: across the ground; from the side or front: up / down and sideways; Shift: up / down only). S" };
-        _tPlace = new ToolStripButton("Place", null, (_, _) => SetTool(VehicleTool.Place)) { ToolTipText = "Place the part chosen in the library on the face under the mouse. P / Esc" };
-        _tPaint = new ToolStripButton("Paint", null, (_, _) => SetTool(VehicleTool.Paint)) { ToolTipText = "Click parts to paint them (Alt+click: pick a part's colour). B" };
+        _tSel = new ToolStripButton("Select (1)", null, (_, _) => SetTool(VehicleTool.Select)) { CheckOnClick = false, ToolTipText = "1 (or S): click parts to select (Ctrl/Shift: add); drag selected parts to move them in the plane facing you, cell by cell (looking down: across the ground; from the side or front: up / down and sideways; Shift: up / down only)" };
+        _tPlace = new ToolStripButton("Place (2)", null, (_, _) => SetTool(VehicleTool.Place)) { ToolTipText = "2 (or P): place the part chosen in the library on the face under the mouse (R or a right click turns it first). You can also drag a part from the library into the view. Esc: back to Select" };
+        _tPaint = new ToolStripButton("Paint (3)", null, (_, _) => SetTool(VehicleTool.Paint)) { ToolTipText = "3 (or B): click parts to paint them (Alt+click: pick a part's colour)" };
         _bar.Items.Add(_tSel); _bar.Items.Add(_tPlace); _bar.Items.Add(_tPaint);
         _bar.Items.Add(new ToolStripSeparator());
         _bar.Items.Add(new ToolStripButton("⟳R", null, (_, _) => RotateView(false)) { ToolTipText = "R: rotate 90° clockwise as you see it, about the world axis closest to the view direction (looking down: turns left / right; from the side or front: rolls). Shift+R: the other way" });
         foreach (var (t, ax) in new[] { ("⟲X", 0), ("⟲Y", 1), ("⟲Z", 2) })
             _bar.Items.Add(new ToolStripButton(t, null, (_, _) => Rotate(ax, 1)) { ToolTipText = $"Rotate 90° about the world {"XYZ"[ax]} axis (key {"XYZ"[ax]}; Shift: the other way)" });
+        _each = new ToolStripButton("Each") { CheckOnClick = true, ToolTipText = "Rotate each selected part about its own cell (on), or the whole selection about its centre (off: \"Group\")" };
+        _each.CheckedChanged += (_, _) => { _each.Text = _each.Checked ? "Each" : "Group"; SaveEditorSettings(); };
+        _each.Text = "Group";
+        _bar.Items.Add(_each);
         _bar.Items.Add(new ToolStripButton("Delete", null, (_, _) => DeleteSel()) { ToolTipText = "Del" });
         _bar.Items.Add(new ToolStripButton("Copy", null, (_, _) => CopySel()) { ToolTipText = "Ctrl+C" });
         _bar.Items.Add(new ToolStripButton("Paste", null, (_, _) => Paste()) { ToolTipText = "Ctrl+V: pastes next to the copied parts and selects them" });
@@ -146,6 +164,22 @@ public sealed class VehicleEditorPanel : UserControl
         _thumbTimer.Tick += (_, _) => ThumbStep();
         _lib.SelectedIndexChanged += (_, _) => LibrarySelected();
         _lib.DoubleClick += (_, _) => { if (LibPart() != null) SetTool(VehicleTool.Place); };
+        // drag a part into the 3D view: ghost on the face under the mouse, placed on drop
+        _lib.ItemDrag += (_, e) =>
+        {
+            if (e.Item is ListViewItem { Tag: PartInfo p })
+            {
+                _lib.SelectedItems.Clear(); ((ListViewItem)e.Item).Selected = true;
+                _lib.DoDragDrop(new DataObject(VehicleViewport.PartFormat, p.Id.ToString("X8")), DragDropEffects.Copy);
+            }
+        };
+        // the view's keys work while the library has the focus (after picking a part: R turns it, 1 / 2 / 3 switch tools)
+        _lib.KeyDown += (_, e) =>
+        {
+            var k = e.KeyCode;
+            if (k is Keys.R or Keys.X or Keys.Y or Keys.Z or Keys.D1 or Keys.D2 or Keys.D3 or Keys.NumPad1 or Keys.NumPad2 or Keys.NumPad3 or Keys.Escape && !e.Control && !e.Alt)
+                if (HandleKey(e.KeyData, false)) { e.Handled = true; e.SuppressKeyPress = true; }
+        };
 
         // ---- properties (right)
         var props = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, Padding = new Padding(4) };
@@ -166,6 +200,8 @@ public sealed class VehicleEditorPanel : UserControl
         props.Controls.Add(_painted);
         props.Controls.Add(Row(_colourShow, _colourBtn, MkBtn("Default", () => PaintSel(null), "Back to the part's own colour (unpainted)")));
         props.Controls.Add(_palette);
+        props.Controls.Add(new Label { Text = "Recent", AutoSize = true, ForeColor = SystemColors.GrayText, Margin = new Padding(0, 2, 0, 0) });
+        props.Controls.Add(_recent);
         props.Controls.Add(H("Settings"));
         props.Controls.Add(Row(new Label { Text = "Wheels / props", AutoSize = true, Padding = new Padding(0, 5, 0, 0) }, _setting));
         var a1 = new FlowLayoutPanel { AutoSize = true }; var a2 = new FlowLayoutPanel { AutoSize = true };
@@ -188,6 +224,15 @@ public sealed class VehicleEditorPanel : UserControl
         issuesBox.Controls.Add(_issues);
         var viewHost = new Panel { Dock = DockStyle.Fill };
         viewHost.Controls.Add(_view); viewHost.Controls.Add(_where); viewHost.Controls.Add(issuesBox);
+        _aiNote.Controls.Add(_aiText); _aiNote.Controls.Add(_aiSwap);
+        viewHost.Controls.Add(_aiNote);
+        _aiNote.BringToFront();
+        void PlaceNote() { _aiNote.Location = new Point(8, _where.Bottom + 8); }
+        viewHost.Layout += (_, _) => PlaceNote();
+        _aiSwap.LinkClicked += (_, _) => SwapToAi();
+        // a click on the note hides it until another vehicle opens
+        _aiText.Click += (_, _) => { _aiNoteHidden = true; _aiNote.Visible = false; };
+        new ToolTip().SetToolTip(_aiText, "Click to hide this note (it comes back with the next AI vehicle)");
         var outer = _outer = new SplitContainer { Dock = DockStyle.Fill, FixedPanel = FixedPanel.Panel1 };
         outer.Panel1.Controls.Add(side);
         outer.Panel2.Controls.Add(viewHost);
@@ -212,8 +257,14 @@ public sealed class VehicleEditorPanel : UserControl
         _painted.CheckedChanged += (_, _) => { if (!_syncing) Edit(_painted.Checked ? "paint" : "unpaint", p => { if (_painted.Checked) { p.B.Painted = 1; } else { p.B.Painted = 0; p.B.Paint = _cat?[p.B.Part]?.DefaultPaint ?? p.B.Paint; } }); };
         _colourBtn.Click += (_, _) =>
         {
-            using var cd = new ColorDialog { FullOpen = true, Color = Rgb(_view.PaintColour), AnyColor = true };
-            if (cd.ShowDialog(this) == DialogResult.OK) { _view.PaintColour = Rgba(cd.Color); _colourShow.BackColor = cd.Color; if (_doc.Selection.Count > 0) PaintSel(_view.PaintColour); }
+            // the dialog's Custom colours start with the recent ones (0x00BBGGRR); whatever the user adds there comes back too
+            using var cd = new ColorDialog { FullOpen = true, Color = Rgb(_view.PaintColour), AnyColor = true, CustomColors = _recentColours.Select(c => (int)((c >> 8 & 0xFF) << 16 | (c >> 16 & 0xFF) << 8 | c >> 24)).ToArray() };
+            if (cd.ShowDialog(this) == DialogResult.OK)
+            {
+                _view.PaintColour = Rgba(cd.Color); _colourShow.BackColor = cd.Color;
+                AddRecent(_view.PaintColour);
+                if (_doc.Selection.Count > 0) PaintSel(_view.PaintColour);
+            }
         };
         _colourShow.BackColor = Rgb(_view.PaintColour);
         _setting.SelectedIndexChanged += (_, _) => { if (!_syncing && _setting.SelectedItem is SettingItem si) Edit("part setting", p => { if (_cat?[p.B.Part]?.Settings.Count > 0) p.B.Setting = si.Value; }); };
@@ -225,6 +276,8 @@ public sealed class VehicleEditorPanel : UserControl
         _view.Status += s => _status.Text = s;
         _view.KeyPressed += e => { if (HandleKey(e.KeyData, false)) e.Handled = true; };
         _view.PlaceRequested += (x, y, z) => PlaceAt(x, y, z);
+        _view.RotateGhostRequested += () => RotateView((ModifierKeys & Keys.Shift) != 0);
+        _view.FilesDropped += f => BeginInvoke(() => Drop(f));
         _view.PaintClicked += (p, pick) =>
         {
             if (pick)
@@ -247,6 +300,64 @@ public sealed class VehicleEditorPanel : UserControl
         Attach(new VehicleDocument());
         SetTool(VehicleTool.Select);
         UpdateSourceLabel();
+        LoadEditorSettings();
+    }
+
+    // ------------------------------------------------------------------ editor settings (recent colours, rotate mode)
+
+    sealed class EditorSettings { public List<uint> RecentColours { get; set; } = new(); public bool RotateEach { get; set; } }
+    static string SettingsPath => Path.Combine(NB.Core.Project.ProjectRegistry.DataDir, "vehicle-editor.json");
+    bool _loadingSettings;
+
+    void LoadEditorSettings()
+    {
+        _loadingSettings = true;
+        try
+        {
+            if (File.Exists(SettingsPath) && System.Text.Json.JsonSerializer.Deserialize<EditorSettings>(File.ReadAllText(SettingsPath)) is { } s)
+            {
+                _recentColours.Clear(); _recentColours.AddRange(s.RecentColours.Take(RecentMax));
+                _each.Checked = s.RotateEach;
+            }
+        }
+        catch { }
+        finally { _loadingSettings = false; }
+        FillRecent();
+    }
+
+    void SaveEditorSettings()
+    {
+        if (_loadingSettings) return;
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath)!);
+            File.WriteAllText(SettingsPath, System.Text.Json.JsonSerializer.Serialize(new EditorSettings { RecentColours = _recentColours.ToList(), RotateEach = _each.Checked }));
+        }
+        catch { }
+    }
+
+    /// <summary>A colour picked with Colour… goes to the front of the Recent row (last 8, no duplicates).</summary>
+    void AddRecent(uint rgba)
+    {
+        rgba |= 0xFF;
+        _recentColours.Remove(rgba);
+        _recentColours.Insert(0, rgba);
+        if (_recentColours.Count > RecentMax) _recentColours.RemoveRange(RecentMax, _recentColours.Count - RecentMax);
+        FillRecent();
+        SaveEditorSettings();
+    }
+
+    void FillRecent()
+    {
+        _recent.Controls.Clear();
+        if (_recentColours.Count == 0) { _recent.Controls.Add(new Label { Text = "(colours you pick with Colour… show here)", AutoSize = true, ForeColor = SystemColors.GrayText, Margin = new Padding(0, 4, 0, 0) }); return; }
+        foreach (var c in _recentColours)
+        {
+            var b = new Button { Width = 20, Height = 20, BackColor = Rgb(c), FlatStyle = FlatStyle.Flat, Margin = new Padding(1), Tag = c };
+            new ToolTip().SetToolTip(b, $"#{c >> 8:X6} (recent colour)");
+            b.Click += (_, _) => { _view.PaintColour = (uint)b.Tag!; _colourShow.BackColor = b.BackColor; if (_doc.Selection.Count > 0) PaintSel(_view.PaintColour); };
+            _recent.Controls.Add(b);
+        }
     }
 
     static Button MkBtn(string t, Action a, string tip)
@@ -277,9 +388,92 @@ public sealed class VehicleEditorPanel : UserControl
         if (ReferenceEquals(ws, _ws)) return;
         _ws = ws; _idx = idx; _cat = null; _tex = null;
         _view.Catalog = null; _view.ResetGpu();
-        _lib.Items.Clear(); _lib.Groups.Clear(); _category.Items.Clear(); _thumbQueue.Clear(); _thumbTimer.Stop(); _gameCat = null;
+        _lib.Items.Clear(); _lib.Groups.Clear(); _category.Items.Clear(); _thumbQueue.Clear(); _thumbTimer.Stop(); _gameCat = null; _gameTask = null;
         if (_target == Target.Game) { _target = Target.None; _game = null; _gamePlace = null; }
         UpdateSourceLabel();
+        StartGameCatalog();
+    }
+
+    /// <summary>
+    /// The Game Vehicles list of the workspace: read from its cache when the bundles and the game text are unchanged (the
+    /// key is their sizes and times), else built on another thread — it reads the bundles without touching NB Studio's
+    /// caches (<see cref="PregameVehicles.ReadOnlyLoader"/>) — and cached for the next time.
+    /// </summary>
+    void StartGameCatalog()
+    {
+        var ws = _ws;
+        if (ws == null || _gameCat != null || _gameTask != null) return;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            _idx ??= AssetIndex.LoadOrBuild(ws);
+            var idx = _idx;
+            string key = PregameVehicles.CacheKey(ws, idx);
+            if (PregameVehicles.LoadCache(ws, key) is { } cached)
+            {
+                _gameCat = cached; _gameState = $"{cached.Count} vehicles (from the workspace cache, {sw.ElapsedMilliseconds} ms)";
+                RefreshPicker();
+                return;
+            }
+            List<NB.Core.Project.ActEntry> acts;
+            try { acts = NB.Core.Project.ActCatalog.Build(ws, idx); } catch { acts = new(); }
+            var load = PregameVehicles.ReadOnlyLoader(ws);
+            _gameState = "Listing the game's vehicles…";
+            _gameTask = Task.Run(() => PregameVehicles.Catalog(ws, idx, acts, load)).ContinueWith(t =>
+            {
+                if (IsDisposed || !IsHandleCreated) return;
+                BeginInvoke(() =>
+                {
+                    if (!ReferenceEquals(ws, _ws)) return;
+                    _gameTask = null;
+                    if (t.Status == TaskStatus.RanToCompletion)
+                    {
+                        _gameCat = t.Result;
+                        _gameState = $"{t.Result.Count} vehicles (listed in {sw.ElapsedMilliseconds} ms, cached for next time)";
+                        PregameVehicles.SaveCache(ws, key, t.Result);
+                    }
+                    else _gameState = "The list could not be built in the background: " + t.Exception?.GetBaseException().Message;
+                    RefreshPicker();
+                    UpdateSourceLabel(); UpdateVehicleInfo();
+                });
+            });
+        }
+        catch (Exception e) { _gameState = "Game vehicles: " + e.Message; }
+    }
+
+    /// <summary>The list now (built here, with a wait cursor, when the background build could not run).</summary>
+    List<PregameVehicle>? GameCatalog()
+    {
+        if (_gameCat != null || _ws == null) return _gameCat;
+        if (_gameTask != null) { try { _gameTask.Wait(60000); } catch { } Application.DoEvents(); if (_gameCat != null) return _gameCat; }
+        var cur = Cursor.Current;
+        Cursor.Current = Cursors.WaitCursor;
+        try { _idx ??= AssetIndex.LoadOrBuild(_ws); _gameCat = PregameVehicles.Catalog(_ws, _idx); _gameState = $"{_gameCat.Count} vehicles"; }
+        catch (Exception e) { Log?.Invoke("Vehicle Editor: game vehicles could not be listed: " + e.Message); }
+        finally { Cursor.Current = cur; }
+        return _gameCat;
+    }
+
+    void RefreshPicker()
+    {
+        var here = WorldAct?.Invoke();
+        _picker.SetData(_gameCat, here, WorldLabel?.Invoke() ?? "", _gameCat == null ? _gameState : _gameState);
+    }
+
+    /// <summary>Game Vehicles: the navigator window under the button.</summary>
+    void ShowPicker()
+    {
+        if (_ws == null) { _status.Text = "Open a workspace first."; return; }
+        StartGameCatalog();
+        RefreshPicker();
+        var f = FindForm();
+        if (f != null && _picker.Owner != f) _picker.Owner = f;
+        var b = _pregameBtn.Bounds;
+        var at = _bar.PointToScreen(new Point(b.Left, b.Bottom));
+        var scr = Screen.FromPoint(at).WorkingArea;
+        _picker.Location = new Point(Math.Min(at.X, scr.Right - _picker.Width), Math.Min(at.Y, scr.Bottom - _picker.Height));
+        _picker.Show();
+        _picker.Activate();
     }
 
     /// <summary>Loads the part catalog (first use after a workspace opened).</summary>
@@ -314,6 +508,7 @@ public sealed class VehicleEditorPanel : UserControl
             _category.Items.Clear();
             _category.Items.Add(new CategoryItem("All categories", _cat.Parts.Count));
             foreach (var g in Ordered(_cat.Parts.Values).GroupBy(p => p.StoreCategory)) _category.Items.Add(new CategoryItem(g.Key, g.Count()));
+            _category.Items.Add(new CategoryItem(AiPartsCategory, _cat.Parts.Values.Count(p => p.IsAiVariant)));
             _category.SelectedIndex = 0;
             _partType.Items.Clear();
             foreach (var p in Ordered(_cat.Parts.Values)) _partType.Items.Add(p);
@@ -366,6 +561,7 @@ public sealed class VehicleEditorPanel : UserControl
     }
 
     static string Cap(string s) => s.Length > 0 ? char.ToUpperInvariant(s[0]) + s[1..] : s;
+    const string AiPartsCategory = "AI parts (for AI drivers' vehicles)";
 
     void FillLibrary()
     {
@@ -378,7 +574,7 @@ public sealed class VehicleEditorPanel : UserControl
         var groups = new Dictionary<string, ListViewGroup>();
         foreach (var p in Ordered(_cat.Parts.Values))
         {
-            if (cat != "All categories" && p.StoreCategory != cat) continue;
+            if (cat == AiPartsCategory ? !p.IsAiVariant : cat != "All categories" && p.StoreCategory != cat) continue;
             if (q.Length > 0 && !(p.Name.Contains(q, StringComparison.OrdinalIgnoreCase) || p.Key.Contains(q, StringComparison.OrdinalIgnoreCase)
                 || p.StoreCategory.Contains(q, StringComparison.OrdinalIgnoreCase) || p.Class.Contains(q, StringComparison.OrdinalIgnoreCase))) continue;
             if (!groups.TryGetValue(p.StoreCategory, out var grp)) _lib.Groups.Add(groups[p.StoreCategory] = grp = new ListViewGroup(p.StoreCategory, p.StoreCategory));
@@ -396,9 +592,11 @@ public sealed class VehicleEditorPanel : UserControl
     {
         var p = LibPart();
         if (p == null) return;
-        _libInfo.Text = $"{p.Name}{(p.Modded ? " (modded)" : "")} — {p.StoreCategory}\nSize: {p.SizeText} cells, {p.Weight:0.#} kg, colour {p.ColourName.Replace("colour_", "")}" +
-            (p.IsAiSeat ? "\nAI DRIVER SEAT: the seat the game's AI racers drive from (players use the other seats)." : "") +
-            $"\n{p.Description}\n{p.Key}";
+        _libInfo.Text = $"{p.Name}{(p.Modded ? " (modded)" : "")} — {p.StoreCategory}\nSize: {p.SizeText} cells, {p.Weight:0.#} kg, colour {(p.ColourName.Length > 0 ? p.ColourName.Replace("colour_", "") : "none")}" +
+            (p.IsAiSeat ? "\nAI DRIVER SEAT: the seat the game's AI racers drive from (players use the other seats)." : p.IsAiVariant ? "\nAI version: what the game's AI vehicles use (stronger than the player's)." : "") +
+            (p.Description.Length > 0 ? $"\n{p.Description}" : "") + $"\n{p.Key}";
+        // a new part starts the way the game's vehicles use it (springs face down)
+        if (_view.PlacePart != p) _view.PlaceOrientation = p.DefaultOrientation;
         _view.PlacePart = p;
         if (_view.Tool == VehicleTool.Place) _view.Redraw();
     }
@@ -504,8 +702,71 @@ public sealed class VehicleEditorPanel : UserControl
         _issues.Items.Clear();
         IEnumerable<uint>? load = _target == Target.Game && _game != null ? (WorldBundles?.Invoke() is { Count: > 0 } wb && _game.Bundles.Any(wb.Contains) ? wb : _game.Bundles.Append(0x685374u)) : null;
         foreach (var i in _doc.Validate(_cat, load)) _issues.Items.Add(new IssueItem(i));
+        bool ai = IsAiVehicle();
+        if (ai && _cat != null) foreach (var i in _doc.ValidateAi(_cat)) _issues.Items.Add(new IssueItem(i));
         if (_issues.Items.Count == 0) _issues.Items.Add("✔ No problems found.");
         _issues.EndUpdate();
+        UpdateAiNote(ai);
+    }
+
+    /// <summary>An AI driver's vehicle: a game vehicle an AI drives (a marker gives it a driver) or one with an AI seat.</summary>
+    bool IsAiVehicle()
+    {
+        if (_cat != null && _doc.Parts.Any(p => _cat[p.B.Part]?.IsAiSeat == true)) return true;
+        if (_target != Target.Game || _game == null) return false;
+        var owner = _game.Owner.Length > 0 ? _game.Owner : _gameCat?.FirstOrDefault(x => x.Id == _game.Id)?.Owner ?? "";
+        return owner.Length > 0;
+    }
+
+    /// <summary>The corner note over the view for AI drivers' vehicles, with "Use AI parts" when player parts that have an AI
+    /// version are on it.</summary>
+    bool _aiNoteHidden;
+
+    void UpdateAiNote(bool ai)
+    {
+        if (!ai || _cat == null || _aiNoteHidden) { _aiNote.Visible = false; return; }
+        var owner = _game?.Owner is { Length: > 0 } o ? o : _game != null ? _gameCat?.FirstOrDefault(x => x.Id == _game.Id)?.Owner ?? "" : "";
+        int swaps = _doc.Parts.Count(p => _cat[p.B.Part]?.AiVersion is > 0);
+        _aiText.Text = $"AI driver's vehicle{(owner.Length > 0 ? $" ({owner})" : "")}: the AI drives from the AI seat. The game's racers mostly use " +
+                       "AI parts — Engine (AI), Jet (AI), Spring (AI) — stronger than the player's (+25 % power). Player parts are driven too.";
+        _aiSwap.Text = swaps > 0 ? $"Use AI parts: swap {swaps} player part(s) for their AI versions" : "All parts with an AI version use it.";
+        _aiSwap.Enabled = swaps > 0;
+        _aiNote.Visible = true;
+        _aiNote.BringToFront();
+    }
+
+    /// <summary>"Use AI parts": every player part that has an AI version gets it (one undo step).</summary>
+    void SwapToAi()
+    {
+        if (_cat == null) return;
+        var todo = _doc.Parts.Where(p => _cat[p.B.Part]?.AiVersion is > 0).ToList();
+        if (todo.Count == 0) return;
+        _doc.Begin($"use AI parts ({todo.Count})");
+        foreach (var p in todo)
+        {
+            var ai = _cat[_cat[p.B.Part]!.AiVersion]!;
+            p.B.Part = ai.Id; p.B.Category = (byte)(ai.Category + 1);
+            if (p.B.Painted == 0) p.B.Paint = ai.DefaultPaint;
+        }
+        _doc.Commit();
+        _status.Text = $"{todo.Count} part(s) now use their AI versions (Ctrl+Z undoes).";
+    }
+
+    // ------------------------------------------------------------------ Test in Xenia (MainForm.QuickTestPending)
+
+    /// <summary>Unsaved edits of a game vehicle: the test plays the workspace, so F5 lists them in its "Save all and test /
+    /// Test the last saved state / Cancel" question. (A 360 package or a new vehicle is not part of the workspace: Save /
+    /// Save As.)</summary>
+    public bool HasUnsaved => _target == Target.Game && _game != null && _doc.Dirty;
+    public string UnsavedLabel => $"Vehicle Editor: {(_game != null ? GamePath() : "game vehicle")}";
+
+    /// <summary>"Save all and test": the open game vehicle into the game (every bundle holding it). False when it was not
+    /// saved (errors the user did not want to save, or the write failed).</summary>
+    public bool SaveForTest()
+    {
+        if (!HasUnsaved) return true;
+        SaveToGame();
+        return !_doc.Dirty;
     }
 
     void UpdateSourceLabel()
@@ -566,22 +827,28 @@ public sealed class VehicleEditorPanel : UserControl
 
     void Rotate(int axis, int dir)
     {
-        if (_view.Tool == VehicleTool.Place && _doc.Selection.Count == 0)
+        // the Place tool turns the part being placed (its ghost), whatever is selected
+        if (_view.Tool == VehicleTool.Place)
         {
             _view.PlaceOrientation = Orientations.Turn(_view.PlaceOrientation, axis, dir);
             _view.Redraw();
             return;
         }
         if (_doc.Selection.Count == 0) { _view.PlaceOrientation = Orientations.Turn(_view.PlaceOrientation, axis, dir); _view.Redraw(); return; }
-        _doc.Begin($"rotate about {"XYZ"[axis]}");
+        bool each = _each.Checked;
+        _doc.Begin($"rotate {(each ? "each part" : "")} about {"XYZ"[axis]}".Replace("  ", " "));
         var sel = _doc.Selection.ToList();
-        // rotate positions about the selection's centre cell (a single part turns in place)
+        // Group: positions turn about the selection's centre cell (a single part turns in place); Each: every part turns
+        // about its own cell
         int cx = (int)Math.Round(sel.Average(p => p.X)), cy = (int)Math.Round(sel.Average(p => p.Y)), cz = (int)Math.Round(sel.Average(p => p.Z));
         var turn = Orientations.Turn(0, axis, dir);
         foreach (var p in sel)
         {
-            var (rx, ry, rz) = Orientations.Apply(turn, p.X - cx, p.Y - cy, p.Z - cz);
-            p.X = cx + rx; p.Y = cy + ry; p.Z = cz + rz;
+            if (!each)
+            {
+                var (rx, ry, rz) = Orientations.Apply(turn, p.X - cx, p.Y - cy, p.Z - cz);
+                p.X = cx + rx; p.Y = cy + ry; p.Z = cz + rz;
+            }
             p.B.Orientation = Orientations.Turn(p.Orientation, axis, dir);
         }
         _doc.Commit();
@@ -593,7 +860,7 @@ public sealed class VehicleEditorPanel : UserControl
         var (ax, cw) = _view.ViewAxis();
         Rotate(ax, reverse ? -cw : cw);
         string how = ax == 1 ? "turned left / right (about the vertical Y axis: you look down or up)" : $"rolled about the {"XYZ"[ax]} axis (the one you look along)";
-        _status.Text = $"{(_doc.Selection.Count > 0 ? "Selection" : "Part to place")} {how}, 90° {(reverse ? "anticlockwise" : "clockwise")} as you see it. Shift+R turns the other way; X / Y / Z turn about a fixed axis.";
+        _status.Text = $"{(_doc.Selection.Count > 0 && _view.Tool != VehicleTool.Place ? (_each.Checked && _doc.Selection.Count > 1 ? "Each selected part" : "Selection") : "Part to place")} {how}, 90° {(reverse ? "anticlockwise" : "clockwise")} as you see it. Shift+R turns the other way; X / Y / Z turn about a fixed axis.";
     }
 
     void Move(int dx, int dy, int dz)
@@ -675,9 +942,9 @@ public sealed class VehicleEditorPanel : UserControl
             case Keys.F: _view.FocusSelection(); return true;
             case Keys.Home: _view.FrameAll(false); return true;
             case Keys.Escape: if (_view.Tool != VehicleTool.Select) SetTool(VehicleTool.Select); else { _doc.Selection.Clear(); SyncSelection(); _view.Redraw(); } return true;
-            case Keys.P: SetTool(VehicleTool.Place); return true;
-            case Keys.B: SetTool(VehicleTool.Paint); return true;
-            case Keys.S: SetTool(VehicleTool.Select); return true;
+            case Keys.P: case Keys.D2: case Keys.NumPad2: SetTool(VehicleTool.Place); return true;
+            case Keys.B: case Keys.D3: case Keys.NumPad3: SetTool(VehicleTool.Paint); return true;
+            case Keys.S: case Keys.D1: case Keys.NumPad1: SetTool(VehicleTool.Select); return true;
         }
         return false;
     }
@@ -734,6 +1001,8 @@ public sealed class VehicleEditorPanel : UserControl
         var f = files.FirstOrDefault();
         if (f == null) return;
         if (_target != Target.Game) { OpenFiles(new[] { f }); return; }
+        if (!_scripted && _doc.Dirty && MessageBox.Show(this, $"Replace the vehicle shown with {Path.GetFileName(f)}?\n\nIt has unsaved changes. (Ctrl+Z after the drop brings them back.)",
+                "Vehicle Editor", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
         try
         {
             var v = VehicleFile.Open(f);
@@ -788,82 +1057,6 @@ public sealed class VehicleEditorPanel : UserControl
             (raised > 0 ? $"; {raised} moved up to make room for it" : "") + " (Ctrl+Z undoes the drop and the seat swap together).";
     }
 
-    /// <summary>Every game vehicle with its world / Act / challenge, built once per workspace (about a second: the Acts'
-    /// markers are read for the AI drivers).</summary>
-    List<PregameVehicle>? GameCatalog()
-    {
-        if (_gameCat != null || _ws == null || _idx == null) return _gameCat;
-        var cur = Cursor.Current;
-        Cursor.Current = Cursors.WaitCursor;
-        try { _gameCat = PregameVehicles.Catalog(_ws, _idx); }
-        catch (Exception e) { Log?.Invoke("Vehicle Editor: game vehicles could not be listed: " + e.Message); }
-        finally { Cursor.Current = cur; }
-        return _gameCat;
-    }
-
-    /// <summary>The game's order of the worlds (hub first), then the rest by name.</summary>
-    static readonly string[] WorldOrder = { "spiralmountain", "showdowntown", "nuttyacres", "cpu", "banjoland", "terrorium", "worldofsport" };
-    static int ActSort(string act) => act.StartsWith("act") && int.TryParse(act[3..], out int n) ? n : act == "actww" ? 50 : act == "live" ? 70 : 60;
-
-    static string MenuText(PregameVehicle v, VehiclePlace? p)
-    {
-        string rest = v.Owner.Length > 0 ? $"  ({v.Short})" : "";
-        return $"{(p != null && p.Challenge.Length > 0 ? p.Challenge + " › " : "")}{v.Title}{rest}{(v.Parts > 0 ? $" — {v.Parts} parts" : "")}";
-    }
-
-    void FillPregameMenu()
-    {
-        _pregameBtn.DropDownItems.Clear();
-        if (_ws == null || _idx == null) { _pregameBtn.DropDownItems.Add("(open a workspace)"); return; }
-        var cat = GameCatalog() ?? new List<PregameVehicle>();
-        var byId = cat.ToDictionary(v => v.Id);
-        var wb = WorldBundles?.Invoke();
-        if (wb is { Count: > 0 })
-        {
-            _pregameBtn.DropDownItems.Add(new ToolStripMenuItem($"Vehicles of {WorldLabel?.Invoke() ?? "the open world"}:") { Enabled = false });
-            try
-            {
-                foreach (var v in PregameVehicles.ForBundles(_ws, _idx, wb))
-                {
-                    var full = byId.GetValueOrDefault(v.Id) ?? v;
-                    var place = full.Places.FirstOrDefault();
-                    var vv = v;
-                    var it = new ToolStripMenuItem((place != null ? place + " › " : "") + MenuText(v, null), null, (_, _) => OpenPregame(vv, place))
-                    { ToolTipText = string.Join("\n", v.Users.DefaultIfEmpty("resident in " + string.Join(", ", v.Bundles.Select(b => b.ToString("x6"))))) };
-                    _pregameBtn.DropDownItems.Add(it);
-                }
-            }
-            catch (Exception e) { _pregameBtn.DropDownItems.Add("error: " + e.Message); }
-            _pregameBtn.DropDownItems.Add(new ToolStripSeparator());
-        }
-        else _pregameBtn.DropDownItems.Add(new ToolStripMenuItem("(open a world / Act to list its vehicles first)") { Enabled = false });
-        // every vehicle: world › Act › challenge › vehicle
-        foreach (var w in cat.SelectMany(v => v.Places.Select(p => (V: v, P: p))).GroupBy(x => x.P.World)
-                     .OrderBy(g => Array.IndexOf(WorldOrder, g.Key) is int k && k >= 0 ? k : 99).ThenBy(g => g.First().P.WorldName))
-        {
-            var wm = new ToolStripMenuItem(w.First().P.WorldName);
-            foreach (var a in w.GroupBy(x => x.P.Act).OrderBy(g => ActSort(g.Key)))
-            {
-                var first = a.First().P;
-                var am = new ToolStripMenuItem(a.Key.Length == 0 ? "Not in an Act" : first.ActName);
-                foreach (var (v, pl) in a.OrderBy(x => x.P.Challenge.Length == 0 ? 1 : 0).ThenBy(x => x.P.Challenge).ThenBy(x => x.V.Title))
-                {
-                    var vv = v; var pp = pl;
-                    am.DropDownItems.Add(new ToolStripMenuItem(MenuText(v, pl), null, (_, _) => OpenPregame(vv, pp)) { ToolTipText = $"{v.Asset}\n{string.Join("\n", v.Users)}" });
-                }
-                wm.DropDownItems.Add(am);
-            }
-            _pregameBtn.DropDownItems.Add(wm);
-        }
-        _pregameBtn.DropDownItems.Add(new ToolStripSeparator());
-        foreach (var g in cat.Where(v => v.Places.Count == 0).GroupBy(v => v.Section).OrderBy(g => g.Key))
-        {
-            var sm = new ToolStripMenuItem($"{g.Key} ({g.Count()})");
-            foreach (var v in g.OrderBy(v => v.Short)) { var vv = v; sm.DropDownItems.Add(new ToolStripMenuItem(v.Short, null, (_, _) => OpenPregame(vv, null)) { ToolTipText = v.Asset }); }
-            _pregameBtn.DropDownItems.Add(sm);
-        }
-    }
-
     /// <summary>Opens one of the game's vehicles (Save to Game writes it back into every bundle holding it).</summary>
     public void OpenPregame(PregameVehicle v, VehiclePlace? place = null)
     {
@@ -871,9 +1064,8 @@ public sealed class VehicleEditorPanel : UserControl
         try
         {
             EnsureCatalog();
-            GameCatalog();
             var bp = PregameVehicles.Load(_ws, v);
-            _target = Target.Game; _game = v; _gamePlace = place; _file = null;
+            _target = Target.Game; _game = v; _gamePlace = place; _file = null; _aiNoteHidden = false;
             Attach(VehicleDocument.From(bp));
             Log?.Invoke($"Vehicle Editor: game vehicle {GamePath()} ({v.Short}), {bp.Blocks.Count} parts (in {string.Join(", ", v.Bundles.Select(b => b.ToString("x6")))}). Drop an Xbox 360 vehicle here to replace it.");
             _status.Text = "Game vehicle: drop an Xbox 360 vehicle (package or content file) onto the editor to replace it, edit, then Save to Game.";
@@ -886,10 +1078,8 @@ public sealed class VehicleEditorPanel : UserControl
     public bool OpenPregameAsset(string name)
     {
         if (_idx == null) return false;
-        var bundles = WorldBundles?.Invoke();
-        PregameVehicle? v = null;
-        if (bundles is { Count: > 0 } && _ws != null)
-            try { v = PregameVehicles.ForBundles(_ws, _idx, bundles).FirstOrDefault(x => x.Asset == name || x.Short == name); } catch { }
+        // the listed vehicle (driver, World / Act) when the list is ready; else the bare asset (the header fills in later)
+        PregameVehicle? v = _gameCat?.FirstOrDefault(x => x.Asset == name || x.Short == name);
         v ??= PregameVehicles.All(_idx).FirstOrDefault(x => x.Asset == name || x.Short == name);
         if (v == null) return false;
         OpenPregame(v);
@@ -898,10 +1088,18 @@ public sealed class VehicleEditorPanel : UserControl
 
     // ------------------------------------------------------------------ save
 
-    Blueprint? CurrentBlueprint()
+    /// <summary>The blueprint to save. <paramref name="player"/>: for a player's save (360 package, content file, vehicle
+    /// saves, Xenia): a name field holding a game asset's 8-bit creator tag ("SalvyBob") is written as UTF-16BE, the way
+    /// the game saves vehicles (readers that assumed UTF-16 showed "卡汝…"; Blueprint.DecodeName now reads both).</summary>
+    Blueprint? CurrentBlueprint(bool player = false)
     {
         if (!_syncing && _name.Text != _doc.Name) { _doc.Begin("rename"); _doc.Name = _name.Text; _doc.Commit(); }
-        try { return _doc.ToBlueprint(_cat); }
+        try
+        {
+            var bp = _doc.ToBlueprint(_cat);
+            if (player && bp.NameIsAscii) { bp = bp.Clone(); bp.Name = bp.Name; }
+            return bp;
+        }
         catch (InvalidDataException e) { MessageBox.Show(this, e.Message, "Vehicle Editor", MessageBoxButtons.OK, MessageBoxIcon.Warning); return null; }
     }
 
@@ -927,7 +1125,7 @@ public sealed class VehicleEditorPanel : UserControl
             case Target.Game: SaveToGame(); return;
             case Target.File when _file?.Path != null:
                 if (!ConfirmIssues(false)) return;
-                var bp = CurrentBlueprint(); if (bp == null) return;
+                var bp = CurrentBlueprint(player: _file?.Kind != VehicleFileKind.Blueprint); if (bp == null) return;
                 try
                 {
                     byte[] bytes = _file.Kind switch
@@ -963,7 +1161,7 @@ public sealed class VehicleEditorPanel : UserControl
     void SaveAsPackage()
     {
         if (!ConfirmIssues(false)) return;
-        var bp = CurrentBlueprint(); if (bp == null) return;
+        var bp = CurrentBlueprint(player: true); if (bp == null) return;
         string dir = _file?.Path != null ? Path.GetDirectoryName(_file.Path)! : Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
         string suggested = _file?.Kind == VehicleFileKind.Package && _file.Path != null ? Path.GetFileName(_file.Path) : VehicleFile.NextFreePackageName(dir);
         using var d = new SaveFileDialog { Title = "Save as an Xbox 360 vehicle package (name it 0x0000000N, the lowest number not used on the console)", InitialDirectory = dir, FileName = suggested, Filter = "Xbox 360 package|*.*" };
@@ -995,7 +1193,7 @@ public sealed class VehicleEditorPanel : UserControl
     void SaveAsFile(VehicleFileKind kind)
     {
         if (!ConfirmIssues(false)) return;
-        var bp = CurrentBlueprint(); if (bp == null) return;
+        var bp = CurrentBlueprint(player: kind == VehicleFileKind.Content); if (bp == null) return;
         using var d = new SaveFileDialog { Title = kind == VehicleFileKind.Content ? "Save the vehicle's content file (what a package holds / what Xenia keeps)" : "Save the bare blueprint (aid_vehicle .data)", FileName = kind == VehicleFileKind.Content ? "00000001" : bp.Name + ".bin", Filter = "All files|*.*" };
         if (d.ShowDialog(this) != DialogResult.OK) return;
         var src = _file ?? new VehicleFile { Blueprint = bp };
@@ -1009,7 +1207,7 @@ public sealed class VehicleEditorPanel : UserControl
         var dir = VehicleSavesDir?.Invoke();
         if (dir == null) { MessageBox.Show(this, "Vehicle saves are kept per workspace (File > Settings > vehicle saves): choose a shared folder first.", "Vehicle Editor"); return; }
         if (!ConfirmIssues(false)) return;
-        var bp = CurrentBlueprint(); if (bp == null) return;
+        var bp = CurrentBlueprint(player: true); if (bp == null) return;
         var src = _file ?? new VehicleFile { Blueprint = bp };
         var tmp = Path.Combine(Path.GetTempPath(), "nbvehicle_" + Environment.ProcessId, "0x00000001");
         Directory.CreateDirectory(Path.GetDirectoryName(tmp)!);
@@ -1024,7 +1222,7 @@ public sealed class VehicleEditorPanel : UserControl
     void SaveIntoXenia()
     {
         if (!ConfirmIssues(false)) return;
-        var bp = CurrentBlueprint(); if (bp == null) return;
+        var bp = CurrentBlueprint(player: true); if (bp == null) return;
         using var d = new FolderBrowserDialog { Description = "A Xenia profile folder: …\\content\\<profile id> (16 hex digits)", UseDescriptionForTitle = true };
         if (d.ShowDialog(this) != DialogResult.OK) return;
         var prof = d.SelectedPath;
@@ -1065,6 +1263,7 @@ public sealed class VehicleEditorPanel : UserControl
         var bp = _doc.ToBlueprint(_cat);
         if (packagePath != null)
         {
+            if (bp.NameIsAscii) { bp = bp.Clone(); bp.Name = bp.Name; }
             var src = _file ?? new VehicleFile { Blueprint = bp };
             File.WriteAllBytes(packagePath, src.ToPackage(bp, Path.GetFileName(packagePath), thumbnailPng: src.Package?.Thumbnail == null ? _view.Thumbnail() : null));
             return "package " + packagePath;
@@ -1107,7 +1306,7 @@ public sealed class VehicleEditorPanel : UserControl
                 await Task.Delay(300); Application.DoEvents();
                 using (var b = _view.Capture()) b.Save(f);
                 var form = FindForm();
-                if (form != null) { using var whole = new Bitmap(form.Width, form.Height); form.DrawToBitmap(whole, new Rectangle(0, 0, form.Width, form.Height)); using var g = Graphics.FromImage(whole); using var v = _view.Capture(); g.DrawImage(v, form.RectangleToClient(_view.RectangleToScreen(_view.ClientRectangle)).Location + new Size(form.Width - form.ClientSize.Width - 8, form.Height - form.ClientSize.Height - 8)); whole.Save(Path.ChangeExtension(f, null) + "_ui.png"); }
+                if (form != null) { using var whole = new Bitmap(form.Width, form.Height); form.DrawToBitmap(whole, new Rectangle(0, 0, form.Width, form.Height)); using var g = Graphics.FromImage(whole); using var v = _view.Capture(); var off = new Size(form.Width - form.ClientSize.Width - 8, form.Height - form.ClientSize.Height - 8); g.DrawImage(v, form.RectangleToClient(_view.RectangleToScreen(_view.ClientRectangle)).Location + off); if (_aiNote.Visible) { using var nb = new Bitmap(_aiNote.Width, _aiNote.Height); _aiNote.DrawToBitmap(nb, new Rectangle(0, 0, nb.Width, nb.Height)); g.DrawImage(nb, form.RectangleToClient(_aiNote.RectangleToScreen(_aiNote.ClientRectangle)).Location + off); } whole.Save(Path.ChangeExtension(f, null) + "_ui.png"); }
                 log($"script: vehicle shot {f}"); break;
             }
             case "--vehicle-paint-all": { var c = Col(next()); SelectAll(); PaintSel(c); log($"script: painted {_doc.Parts.Count} parts #{c >> 8:X6}"); break; }
@@ -1201,36 +1400,58 @@ public sealed class VehicleEditorPanel : UserControl
                 foreach (ListViewGroup g in _lib.Groups) log($"script: library {g.Header}: {string.Join(" | ", g.Items.Cast<ListViewItem>().Select(i => $"{i.Text} [{i.SubItems[1].Text}; {i.SubItems[2].Text}]"))}");
                 break;
             case "--vehicle-parttypes": log("script: part types: " + string.Join(" | ", _partType.Items.Cast<PartInfo>().Select(pi => _partType.GetItemText(pi)))); break;
-            case "--vehicle-gamemenu":
+            case "--vehicle-picker":
             {
-                FillPregameMenu();
-                void Dump(ToolStripItemCollection items, string ind) { foreach (ToolStripItem it in items) { if (it is ToolStripSeparator) continue; log("script: menu " + ind + it.Text); if (it is ToolStripMenuItem mi && mi.DropDownItems.Count > 0) Dump(mi.DropDownItems, ind + "  "); } }
-                Dump(_pregameBtn.DropDownItems, "");
+                // --vehicle-picker [SEARCH|-]: waits for the game vehicle list, opens the navigator, logs its tree
+                var q = next();
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                while (_gameCat == null && _gameTask != null && sw.ElapsedMilliseconds < 120000) { await Task.Delay(50); Application.DoEvents(); }
+                ShowPicker(); _picker.SearchText = q == "-" ? "" : q; await Task.Delay(200); Application.DoEvents();
+                log($"script: picker ({_gameState}; waited {sw.ElapsedMilliseconds} ms)");
+                foreach (var l in _picker.Dump().Take(400)) log("script: picker " + l);
                 break;
             }
-            case "--vehicle-gamemenu-shot":
+            case "--vehicle-picker-shot":
             {
-                // --vehicle-gamemenu-shot PNG WORLD ACT: opens the menu down to WORLD › ACT and saves a picture of the open menus
-                var f = next(); string wn = next(), an = next();
-                FillPregameMenu();
-                _pregameBtn.ShowDropDown(); await Task.Delay(200); Application.DoEvents();
-                var chain = new List<ToolStripDropDown> { _pregameBtn.DropDown };
-                if (_pregameBtn.DropDownItems.Cast<ToolStripItem>().OfType<ToolStripMenuItem>().FirstOrDefault(i => i.Text == wn) is { } wmi)
-                {
-                    wmi.ShowDropDown(); await Task.Delay(200); Application.DoEvents(); chain.Add(wmi.DropDown);
-                    if (wmi.DropDownItems.Cast<ToolStripItem>().OfType<ToolStripMenuItem>().FirstOrDefault(i => i.Text == an) is { } ami) { ami.ShowDropDown(); await Task.Delay(200); Application.DoEvents(); chain.Add(ami.DropDown); }
-                }
-                var rects = chain.Select(d => d.Bounds).ToList();
-                var all = rects.Aggregate(Rectangle.Union);
-                using (var bmp = new Bitmap(all.Width, all.Height))
-                {
-                    using (var g = Graphics.FromImage(bmp)) g.Clear(Color.White);
-                    foreach (var d in chain) { using var one = new Bitmap(d.Width, d.Height); d.DrawToBitmap(one, new Rectangle(0, 0, d.Width, d.Height)); using var g = Graphics.FromImage(bmp); g.DrawImage(one, d.Bounds.X - all.X, d.Bounds.Y - all.Y); }
-                    bmp.Save(f);
-                }
-                _pregameBtn.HideDropDown();
-                log("script: game vehicles menu shot " + f); break;
+                // --vehicle-picker-shot PNG [VEHICLE]: selects VEHICLE (asset / title) in the open navigator and saves a picture of it
+                var f = next(); var sel = next();
+                if (sel != "-") log("script: picker select " + sel + " -> " + _picker.SelectVehicle(sel));
+                await Task.Delay(200); Application.DoEvents();
+                using (var b = new Bitmap(_picker.Width, _picker.Height)) { _picker.DrawToBitmap(b, new Rectangle(0, 0, _picker.Width, _picker.Height)); b.Save(f); }
+                log("script: picker shot " + f); break;
             }
+            case "--vehicle-picker-open": { var sel = next(); bool ok = _picker.SelectVehicle(sel); if (ok) _picker.ChooseSelected(); await Task.Delay(100); Application.DoEvents(); log($"script: picker open {sel}: {ok}; header {_where.Text}; ai note {(_aiNote.Visible ? _aiText.Text + " | " + _aiSwap.Text : "-")}"); break; }
+            case "--vehicle-catalog-reset": { _gameCat = null; _gameTask = null; var sw = System.Diagnostics.Stopwatch.StartNew(); StartGameCatalog(); log($"script: catalog restart: {_gameState} ({sw.ElapsedMilliseconds} ms on the UI thread)"); break; }
+            case "--vehicle-part-drag":
+            {
+                // --vehicle-part-drag KEY FX FY [drop]: a library part dragged over the view at that fraction of it (dropped with "drop")
+                var k = next(); float fx = float.Parse(next(), CultureInfo.InvariantCulture), fy = float.Parse(next(), CultureInfo.InvariantCulture); bool drop = next() == "drop";
+                var info = _cat?.Parts.Values.FirstOrDefault(p => p.Key == k);
+                if (info == null) { log("script: no part " + k); break; }
+                foreach (ListViewItem it in _lib.Items) if (it.Tag == info) it.Selected = true;
+                var sz = _view.ViewSize;
+                var (c, o, st) = _view.SimulatePartDrag(info, new Point((int)(sz.Width * fx), (int)(sz.Height * fy)), drop);
+                log($"script: part drag {k} at {fx},{fy}: cell {c} orientation {o} {OrientName(o)} status {st}{(drop ? $"; placed -> {_doc.Parts.Count} parts, undo: {_doc.UndoLabel}" : "")}");
+                break;
+            }
+            case "--vehicle-recent": { var c = uint.Parse(next().TrimStart('#'), NumberStyles.HexNumber) << 8 | 0xFF; AddRecent(c); log($"script: recent colours {string.Join(" ", _recentColours.Select(x => "#" + (x >> 8).ToString("X6")))} (saved in {SettingsPath})"); break; }
+            case "--vehicle-each": { _each.Checked = next() == "1"; log("script: rotate mode " + _each.Text); break; }
+            case "--vehicle-ai-swap": { SwapToAi(); log($"script: {_status.Text}; checks: {string.Join(" | ", _issues.Items.Cast<object>().Select(o => o.ToString()))}"); break; }
+            case "--vehicle-batches": { var k = next(); var info = _cat?.Parts.Values.FirstOrDefault(p => p.Key == k); if (info != null) foreach (var l in _view.DescribePart(info)) log($"script: batch {k}: {l}"); break; }
+            case "--vehicle-wheel-travel": { PartCatalog.WheelTravel = float.Parse(next(), CultureInfo.InvariantCulture); _view.ResetGpu(); log("script: wheel travel " + PartCatalog.WheelTravel); break; }
+            case "--vehicle-mouse-rclick": { float fx = float.Parse(next(), CultureInfo.InvariantCulture), fy = float.Parse(next(), CultureInfo.InvariantCulture); var sz = _view.ViewSize; int o0 = _view.PlaceOrientation; _view.PostRightClick(new Point((int)(sz.Width * fx), (int)(sz.Height * fy))); await Task.Delay(50); Application.DoEvents(); log($"script: right click: ghost orientation {o0} -> {_view.PlaceOrientation} ({OrientName(_view.PlaceOrientation)}); status: {_status.Text}"); break; }
+            case "--vehicle-lib-key":
+            {
+                // --vehicle-lib-key KEY: a key message to the parts library (the focus after picking a part there)
+                [System.Runtime.InteropServices.DllImport("user32.dll")] static extern bool PostMessage(IntPtr h, int msg, IntPtr w, IntPtr l);
+                var key = (Keys)Enum.Parse(typeof(Keys), next(), true); int o0 = _view.PlaceOrientation; var t0 = _view.Tool;
+                _lib.Focus(); PostMessage(_lib.Handle, 0x100, (IntPtr)(int)key, (IntPtr)1); Application.DoEvents(); PostMessage(_lib.Handle, 0x101, (IntPtr)(int)key, unchecked((IntPtr)(int)0xC0000001)); Application.DoEvents();
+                await Task.Delay(50); Application.DoEvents();
+                log($"script: library key {key}: tool {t0} -> {_view.Tool}, ghost orientation {o0} -> {_view.PlaceOrientation}; library selection {LibPart()?.Key}");
+                break;
+            }
+            case "--vehicle-state": log($"script: tool {_view.Tool}, place part {_view.PlacePart?.Key} o{_view.PlaceOrientation} ({OrientName(_view.PlaceOrientation)}), rotate {_each.Text}, selection {string.Join(", ", _doc.Selection.Select(p => $"{_cat?[p.B.Part]?.Key}@{p.X},{p.Y},{p.Z} o{p.Orientation}"))}, buttons: {_tSel.Text} / {_tPlace.Text} / {_tPaint.Text}"); break;
+            case "--vehicle-unsaved": log($"script: unsaved for Save All: {HasUnsaved} {(HasUnsaved ? UnsavedLabel : "")}; dirty {_doc.Dirty}"); break;
             case "--vehicle-game-path": { var n = next(); var v = GameCatalog()?.FirstOrDefault(x => x.Short == n || x.Asset == n); if (v != null) OpenPregame(v, v.Places.FirstOrDefault()); log($"script: game vehicle {n}: {(v == null ? "not found" : _doc.Parts.Count + " parts; header: " + _where.Text + "; status: " + _source.Text)}"); break; }
             case "--vehicle-name": { _doc.Begin("rename"); _doc.Name = next(); _doc.Commit(); _syncing = true; _name.Text = _doc.Name; _syncing = false; break; }
             case "--vehicle-tool": { SetTool(next() switch { "place" => VehicleTool.Place, "paint" => VehicleTool.Paint, _ => VehicleTool.Select }); break; }

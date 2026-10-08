@@ -44,8 +44,14 @@ public sealed class VehicleViewport : UserControl
 
     /// <summary>A part was clicked with the Paint tool (Alt: pick its colour instead).</summary>
     public event Action<VehicleDocument.Part, bool>? PaintClicked;
-    /// <summary>The Place tool wants a part at this cell.</summary>
+    /// <summary>The Place tool (or a part dragged from the library and dropped) wants a part at this cell.</summary>
     public event Action<int, int, int>? PlaceRequested;
+    /// <summary>A right click (no drag) with the Place tool: turn the part being placed (as R does).</summary>
+    public event Action? RotateGhostRequested;
+    /// <summary>Vehicle files dropped on the view.</summary>
+    public event Action<string[]>? FilesDropped;
+    /// <summary>Drag-and-drop format of a library part (its objparams id as hex text).</summary>
+    public const string PartFormat = "NB.VehiclePart";
     /// <summary>Selection changed by a click.</summary>
     public event Action? SelectionChanged;
     /// <summary>Selected parts moved by a drag (cell delta, applied already; one undo step was begun).</summary>
@@ -70,6 +76,11 @@ public sealed class VehicleViewport : UserControl
         _gl.PreviewKeyDown += (_, e) => e.IsInputKey = !e.Control && !e.Alt && e.KeyCode is not (>= Keys.F1 and <= Keys.F24) and not Keys.Delete;
         _gl.KeyDown += (_, e) => KeyPressed?.Invoke(e);
         _gl.MouseLeave += (_, _) => { _hover = null; _gl.Invalidate(); };
+        _gl.AllowDrop = true;
+        _gl.DragEnter += (_, e) => PartDragOver(e, true);
+        _gl.DragOver += (_, e) => PartDragOver(e, false);
+        _gl.DragLeave += (_, _) => { if (_partDrag) { _partDrag = false; _hover = null; _gl.Invalidate(); } };
+        _gl.DragDrop += (_, e) => PartDragDrop(e);
     }
 
     public Func<string, (byte[] Rgba, int W, int H)?>? TextureSource { get => _r.TextureSource; set => _r.TextureSource = value; }
@@ -335,6 +346,104 @@ public sealed class VehicleViewport : UserControl
         return (c, VehicleConnectivity.PlacementStatus(Document, probe, Catalog, Connectivity));
     }
 
+    // ------------------------------------------------------------------ parts dragged from the library
+
+    bool _partDrag; int _dragNatural; PartInfo? _dragPart;
+
+    /// <summary>A part from the library is dragged over the view: the ghost follows the face under the mouse, turned so an
+    /// attachable face meets it (<see cref="PredictOrientation"/>), coloured by its attachment status.</summary>
+    void PartDragOver(DragEventArgs e, bool enter)
+    {
+        if (e.Data?.GetDataPresent(PartFormat) == true && Catalog != null && Document != null
+            && uint.TryParse(e.Data.GetData(PartFormat) as string, System.Globalization.NumberStyles.HexNumber, null, out var id) && Catalog[id] is { } part)
+        {
+            // the part's own orientation (springs face down), or the one R gave it when it was already the part to place
+            if (enter || !_partDrag || _dragPart != part) { _dragNatural = PlacePart == part ? PlaceOrientation : part.DefaultOrientation; _dragPart = part; PlacePart = part; }
+            _partDrag = true;
+            var pt = _gl.PointToClient(new Point(e.X, e.Y));
+            PlaceOrientation = PredictOrientation(pt, _dragNatural);
+            var c = PlaceCell(pt);
+            e.Effect = c != null ? DragDropEffects.Copy : DragDropEffects.None;
+            if (c != _hover)
+            {
+                _hover = c;
+                if (c is { } pc) Status?.Invoke($"{part.Name} at ({pc.X}, {pc.Y}, {pc.Z}), orientation {PlaceOrientation}: " + StatusWords(GhostAt(pc)) + " — drop to place it");
+            }
+            _gl.Invalidate();
+        }
+        else e.Effect = e.Data?.GetDataPresent(DataFormats.FileDrop) == true ? DragDropEffects.Copy : DragDropEffects.None;
+    }
+
+    void PartDragDrop(DragEventArgs e)
+    {
+        if (_partDrag)
+        {
+            _partDrag = false;
+            var pt = _gl.PointToClient(new Point(e.X, e.Y));
+            PlaceOrientation = PredictOrientation(pt, _dragNatural);
+            if (PlaceCell(pt) is { } c) PlaceRequested?.Invoke(c.X, c.Y, c.Z);
+            _hover = null; _gl.Invalidate();
+            return;
+        }
+        if (e.Data?.GetData(DataFormats.FileDrop) is string[] f) FilesDropped?.Invoke(f);
+    }
+
+    int GhostAt((int X, int Y, int Z) c)
+    {
+        if (Document == null || PlacePart == null) return -1;
+        var probe = new VehicleDocument.Part { X = c.X, Y = c.Y, Z = c.Z, B = new BlueprintBlock { Part = PlacePart.Id } };
+        probe.B.Orientation = PlaceOrientation;
+        return VehicleConnectivity.PlacementStatus(Document, probe, Catalog, Connectivity);
+    }
+
+    static string StatusWords(int st) => st == 0 ? "attaches here (green)" : st == 1 ? "floating here (orange)" : st == 2 ? "blocked (red)" : "";
+
+    /// <summary>
+    /// The orientation a part dropped at view point <paramref name="p"/> should get: <paramref name="natural"/> (the part's
+    /// own default, e.g. springs facing down, or what R made it) when an attachable face of it then meets the surface under
+    /// the mouse; else the orientation closest to it (same "up" first, then same front) that attaches. Nothing attaches (or
+    /// an empty vehicle): <paramref name="natural"/>.
+    /// </summary>
+    public int PredictOrientation(Point p, int natural)
+    {
+        if (Document == null || PlacePart == null || Document.Parts.Count == 0 || PlacePart.Attach == null) return natural;
+        int keep = PlaceOrientation;
+        try
+        {
+            var up = Vector3.TransformNormal(Vector3.UnitY, Orientations.All[natural]);
+            var fw = Vector3.TransformNormal(Vector3.UnitZ, Orientations.All[natural]);
+            // wheels and springs keep their "down" (the game's vehicles only turn them about the vertical): only their yaw varies
+            bool keepUp = PlacePart.IsWheel || PlacePart.Class == "objDefId_vehicleBlockSpring";
+            var order = Enumerable.Range(0, Orientations.All.Length)
+                .Where(i => !keepUp || Vector3.Dot(Vector3.TransformNormal(Vector3.UnitY, Orientations.All[i]), up) > 0.99f)
+                .OrderByDescending(i => 2 * Vector3.Dot(Vector3.TransformNormal(Vector3.UnitY, Orientations.All[i]), up) + Vector3.Dot(Vector3.TransformNormal(Vector3.UnitZ, Orientations.All[i]), fw));
+            foreach (int o in order)
+            {
+                PlaceOrientation = o;
+                if (PlaceCell(p) is not { } c) return natural;
+                if (GhostAt(c) == 0) return o;
+            }
+            return natural;
+        }
+        finally { PlaceOrientation = keep; }
+    }
+
+    /// <summary>Scripted tests: the same code as a part dragged from the library over view point <paramref name="at"/>
+    /// (and dropped there when <paramref name="drop"/>). Returns the ghost's cell, orientation and status.</summary>
+    public ((int X, int Y, int Z)? Cell, int Orientation, int Status) SimulatePartDrag(PartInfo part, Point at, bool drop)
+    {
+        var data = new DataObject(PartFormat, part.Id.ToString("X8"));
+        var sp = _gl.PointToScreen(at);
+        if (_partDrag && _dragPart != part) _partDrag = false;   // another part: a new drag
+        PartDragOver(new DragEventArgs(data, 1, sp.X, sp.Y, DragDropEffects.Copy, DragDropEffects.None), !_partDrag);
+        var r = (_hover, PlaceOrientation, _hover is { } h ? GhostAt(h) : -1);
+        if (drop) PartDragDrop(new DragEventArgs(data, 0, sp.X, sp.Y, DragDropEffects.Copy, DragDropEffects.Copy));
+        return r;
+    }
+
+    /// <summary>Scripted tests: the renderer's batches of a part's model.</summary>
+    public IEnumerable<string> DescribePart(PartInfo p) => Catalog?.Model(p) is { } m ? _r.DescribeBatches(m) : Enumerable.Empty<string>();
+
     /// <summary>The GL context exists (part thumbnails can be rendered).</summary>
     public bool GlReady => _ready && _gl.IsHandleCreated;
 
@@ -373,6 +482,15 @@ public sealed class VehicleViewport : UserControl
         PostMessage(h, 0x202, IntPtr.Zero, XY(a)); Application.DoEvents();
     }
 
+    /// <summary>A right click by window messages at view point <paramref name="a"/>.</summary>
+    public void PostRightClick(Point a)
+    {
+        var h = _gl.Handle;
+        PostMessage(h, 0x200, IntPtr.Zero, XY(a)); Application.DoEvents();
+        PostMessage(h, 0x204, (IntPtr)2, XY(a)); Application.DoEvents();
+        PostMessage(h, 0x205, IntPtr.Zero, XY(a)); Application.DoEvents();
+    }
+
     /// <summary>A key press by window messages to the focused view (WM_KEYDOWN / WM_KEYUP through the message loop).</summary>
     public void PostKey(Keys k)
     {
@@ -387,6 +505,7 @@ public sealed class VehicleViewport : UserControl
     void OnUp(object? s, MouseEventArgs e)
     {
         bool click = Math.Abs(e.X - _downAt.X) + Math.Abs(e.Y - _downAt.Y) < 5;
+        if (e.Button == MouseButtons.Right && click && Tool == VehicleTool.Place && PlacePart != null) RotateGhostRequested?.Invoke();
         if (e.Button == MouseButtons.Left && click && Document != null && !_dragBegun)
         {
             switch (Tool)
@@ -570,7 +689,7 @@ public sealed class VehicleViewport : UserControl
             }
             _r.FlushTransparent();
             // ghost of the part being placed
-            if (Tool == VehicleTool.Place && PlacePart != null && _hover is { } hc)
+            if ((Tool == VehicleTool.Place || _partDrag) && PlacePart != null && _hover is { } hc)
             {
                 var model = Catalog?.Model(PlacePart);
                 var probe = new VehicleDocument.Part { X = hc.X, Y = hc.Y, Z = hc.Z, B = new BlueprintBlock { Part = PlacePart.Id } };

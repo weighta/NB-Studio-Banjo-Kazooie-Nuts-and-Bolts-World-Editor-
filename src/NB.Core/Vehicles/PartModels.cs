@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using NB.Core.IO;
+using System.Numerics;
 using NB.Core.Models;
 
 namespace NB.Core.Vehicles;
@@ -139,5 +140,42 @@ public sealed class PartModelView
         // the boxy frame of the Parts Store picture (switches 7-10 option 0): verified in Showdown Town on an editor-made car
         if (p.IsWheel) for (int i = 0; i <= 12; i++) s[i] = 1;
         return s;
+    }
+
+    /// <summary>
+    /// A wheel as it hangs in the garage: its suspension fully extended. Wheel models are skinned to BASE /
+    /// WHEELFORKROTATE / WHEELFORKTRAVEL / WHEELCOGROTATE / WHEELROTATE; the bind pose has the fork pushed all the way up
+    /// (the tyre half inside the part above). The travel joint and the joints under it move down by
+    /// <paramref name="travel"/> (objparams +0x400), weighted per vertex, so the strut and spring stretch.
+    /// </summary>
+    public static List<MeshDraw> Extended(ModelAsset m, List<MeshDraw> draws, float travel)
+    {
+        List<Joint>? sk;
+        try { sk = Skeleton.Parse(m.View.Data(".data")); } catch { sk = null; }
+        int t = sk?.FindIndex(j => j.Name == "WHEELFORKTRAVEL") ?? -1;
+        if (sk == null || t < 0) return draws;
+        var moved = new HashSet<int> { t };
+        for (bool more = true; more;)
+        {
+            more = false;
+            foreach (var j in sk) if (j.Parent >= 0 && moved.Contains(j.Parent) && moved.Add(j.Index)) more = true;
+        }
+        var clone = typeof(object).GetMethod("MemberwiseClone", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        var res = new List<MeshDraw>(draws.Count);
+        foreach (var d in draws)
+        {
+            if (d.BlendIndices == null || d.BlendWeights == null || d.BlendIndices.Length < d.Positions.Length * 4) { res.Add(d); continue; }
+            var c = (MeshDraw)clone.Invoke(d, null)!;
+            var pos = new Vector3[d.Positions.Length];
+            for (int i = 0; i < pos.Length; i++)
+            {
+                float w = 0;
+                for (int k = 0; k < 4; k++) if (moved.Contains(d.BlendIndices[4 * i + k])) w += d.BlendWeights[4 * i + k];
+                pos[i] = d.Positions[i] - new Vector3(0, travel * Math.Clamp(w, 0, 1), 0);
+            }
+            c.Positions = pos;
+            res.Add(c);
+        }
+        return res;
     }
 }
