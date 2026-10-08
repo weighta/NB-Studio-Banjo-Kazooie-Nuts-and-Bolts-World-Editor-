@@ -7,7 +7,7 @@ using NB.Core.Textures;
 
 namespace NB.Core.World;
 
-public enum SceneObjectKind { Terrain, Scenery, Marker, Water }
+public enum SceneObjectKind { Terrain, Scenery, Marker, Water, CutsceneKey }
 
 /// <summary>An editable object in a loaded world.</summary>
 public sealed partial class SceneObject

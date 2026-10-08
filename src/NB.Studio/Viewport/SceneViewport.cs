@@ -521,6 +521,7 @@ public sealed partial class SceneViewport : UserControl
         if (scene != null)
             foreach (var o in scene.Objects)
                 if (SpawnPoints.Is(o) && o.Model == null) { o.BoundsMin = SpawnBounds.Min; o.BoundsMax = SpawnBounds.Max; }
+        InitCameras(scene);   // warp pad cameras etc. (SceneViewport.Cameras.cs)
 
         _allColl = null; _collFor = null; CollisionSummary = "";
         _collVer.Clear(); _collSelVer++; _rectFrom = null;
@@ -748,6 +749,8 @@ public sealed partial class SceneViewport : UserControl
         {
             if (_movingLines.Count > 0) _r.Lines(MovingLines(), vp, true);
             DrawSpawnFigures(vp);
+            DrawCameraFigures(vp);
+            DrawCutscenePaths(vp);
             DrawSelectionCollision(vp);
             if (ShowCollision) DrawCollisionSelection(vp);
             if (Selected != null) DrawGizmo(vp);
@@ -814,7 +817,7 @@ public sealed partial class SceneViewport : UserControl
             foreach (var o in Scene.Objects.Where(o => o.Visible && (o.Model == null || (o.Kind == SceneObjectKind.Marker && !_showObjects)) && (o.Kind != SceneObjectKind.Marker || ShowMarkers)))
             {
                 if (!box(o)) continue;
-                if (SpawnPoints.Is(o)) continue;   // drawn every frame, thicker: DrawSpawnFigures
+                if (SpawnPoints.Is(o) || CameraPoints.Is(o)) continue;   // drawn every frame, thicker: DrawSpawnFigures / DrawCameraFigures
                 if (o.Kind == SceneObjectKind.Marker) AddBox(lines, o, MarkerColor(o.Marker!.Type));
                 else AddCross(lines, o.Transform.Translation, 2, new Vector3(1, 0, 1));
             }
@@ -1035,6 +1038,7 @@ public sealed partial class SceneViewport : UserControl
             using (var bmp = DrawBar(showLight)) _r.UpdateOverlay(_barOv, bmp, barKey);
         _r.DrawOverlay(_barOv, cr.X, cr.Y, W, H);
         DrawSpawnLabels(W, H);
+        DrawCameraLabels(W, H);
         DrawCollisionRect(W, H);
         DrawHiddenNote(W, H);
         DrawTip(W, H);
@@ -1110,7 +1114,7 @@ public sealed partial class SceneViewport : UserControl
         using var _p = Prof.Time("hover pick");
         if (Scene == null || _looking || _panning || _xf != XfKind.None || !_gl.ClientRectangle.Contains(_mouse)) return;
         var o = Pick(_mouse).Obj;
-        if (!SpawnPoints.Is(o)) return;
+        if (!SpawnPoints.Is(o) && !CameraPoints.Is(o)) return;
         _tipFor = o;
         _tipAt = new Point(_mouse.X + 14, _mouse.Y + 18);
         _gl.Invalidate();
@@ -1827,6 +1831,7 @@ public sealed partial class SceneViewport : UserControl
             if (o.Kind == SceneObjectKind.Scenery && !ShowScenery) continue;
             bool asModel = o.Model != null && (o.Kind != SceneObjectKind.Marker || _showObjects);   // marker objects: their mesh
             if (o.Kind == SceneObjectKind.Marker && !asModel && !ShowMarkers) continue;
+            if (!_showCameras && CameraPoints.Is(o)) continue;
             if (!Matrix4x4.Invert(o.Transform, out var inv)) continue;
             var lo = Vector3.Transform(ro, inv); var ld = Vector3.TransformNormal(rd, inv);
             if (!RayBox(lo, ld, o.BoundsMin, o.BoundsMax, out float tb) || tb > bestT) continue;

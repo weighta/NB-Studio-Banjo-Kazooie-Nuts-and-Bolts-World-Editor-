@@ -39,7 +39,7 @@ public static class SpawnPoints
         Kind.ActStart => "Act start (Banjo + vehicle)",
         Kind.MultiplayerSlot => $"Multiplayer start #{o!.Marker!.Index}",
         Kind.Other => "Player start point",
-        _ => null,
+        _ => CameraPoints.Label(o),   // cameras (warp pad views, ...) carry their label in the same places
     };
 
     /// <summary>One or two sentences for the Properties panel and the tooltip.</summary>
@@ -49,6 +49,6 @@ public static class SpawnPoints
         Kind.ActStart => "Where this Act starts Banjo, in the challenge vehicle (verified for Nutty Acres Acts 1 and 2). The arrow shows the way he faces.",
         Kind.MultiplayerSlot => "One of the player start slots of this multiplayer game (one per player; not tested).",
         Kind.Other => "A player start marker (marker type 4) of this world's shared markers. When the game uses it was not tested (Acts start at their own Act start).",
-        _ => null,
+        _ => CameraPoints.Detail(o),
     };
 }

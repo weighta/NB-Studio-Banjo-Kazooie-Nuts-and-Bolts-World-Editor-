@@ -1316,3 +1316,62 @@ positions of all three blueprints change during the race; one loose part fell of
 * Challenge names: loctext `challenge__<world><act>game<n>` (e.g. challenge__worldofsportact2game1 = "Burnin' Rubber"),
   live challenges `challenge__<world>live<name>`. Vehicle assets carry the challenge in their name
   (worldofsport_burninrubber_racer1); the markers (type 21) of `aid_marker_banjox_<world>_<act>_main` place them.
+
+## 17. Cameras: fixed camera points, warp-pad cameras, cut-scene cameras (NB Studio 1.18, 2026-10-07) **[verified in Xenia]**
+
+
+### 17.1. Fixed cameras are marker points
+A fixed camera is a type-1 marker record ("point"):
+- **Position:** +0x14.
+- **Pitch:** rotation X at +0x20, positive = looking down.
+- **Yaw:** rotation Y at +0x24.
+- The view direction is the record's local +Z: (sin y·cos p, −sin p, cos y·cos p).
+- No field of view and no roll are stored.
+
+The object that uses a camera points at it with the **u16 at its record's +8** (the same field path nodes use for their next node).
+
+Verified in Xenia (in-game camera at 0x82FADC30):
+- The Town Square pad's WARP TO menu camera is exactly point #1083, with its pitch and yaw.
+- **Moving the point moved the menu view** (`shots/r12w4_pair.png`).
+
+| Owner of the camera (+8 →) | Marker type | Showdown Town | Note |
+|---|---|---|---|
+| Warp pad (`props_showdowntown_warppad`, pad number u32 at +0x38) | 37 | 6 | WARP TO menu view of that pad |
+| Bolt heads (`props_boltheads_*`) | 33 | 25 (78 in all worlds) | close-up cameras |
+| Info points (Banjoland, Spiral Mountain), Jiggy Bank | 14 | 1 (42 in all) | close-ups |
+| unidentified | 40 | 0 (2 in other worlds) | – |
+
+- World doors (type 28) and type 19 also point at points, but those points are level (pitch 0): they are places, not cameras.
+- In all 102 resident marker sets there are 134 pitched points. NB Studio lists 33 cameras in Showdown Town: 25 bolt-head, 6 warp, the Jiggy Bank and 1 unowned camera point.
+
+### 17.2. Warp pads
+- **Pad numbers.** The menu lists pads in number order, and pad numbers are verified by warping: 0 Town Square (Mumbo's Motors), 1 Theater District, 2 Seaside, 3 Lakeshore, 4 Docks, 5 Uptown.
+- **Arrival.** Arriving at a pad puts the vehicle on the pad and uses the normal camera behind it, so the arrival view follows the pad by itself. Traced in Xenia: arrival at the moved Lakeshore pad was at the new spot.
+- **What caused the user's report.** Only the WARP TO menu view uses the pad's camera point. Studio did not move that point with the pad, so the menu still showed the old surroundings.
+
+### 17.3. Cut-scene cameras (intros, act fly-bys, …)
+The camera of an `aid_cutscene_*` main record (the part that is not an "animation") is **sampled per frame (30 fps), uncompressed**:
+
+- **Header:**
+  - +0x00: u16 frame count.
+  - +0x03: u8 entity count n.
+  - +0x04: f32 duration.
+  - +0x08: offset of the camera block (= 0x10 + 0x30·n).
+  - +0x0C: offset of the entity list (= 0x10).
+- **Camera block:** u32 offset of the camera's name ("camera_newShape", "Camera_Shape1", …), then 12 channels of (u16 sample count, u16, f32 duration, u32 offset of f32[count]):
+  - 0–2: position.
+  - 3–6: rotation quaternion. The camera looks down local −Z (Maya convention).
+  - 7: vertical field of view in degrees.
+  - 8–11: four more curves, not identified (not edited).
+  - A channel with one sample is constant.
+- **Where they are stored:** most cut-scenes are streamed (Bundle/50); some are resident.
+- **Act intro fly-bys** are the same records (`<world>_act<N>_game<M>_intro`).
+
+**Verified in Xenia:**
+- **Matched to the data.** I traced the camera through Showdown Town's new-game intro (quick test with the intro kept). Every traced position lies on `showdowntown_animatedsequence1_shot3` (streamed, 992 frames) within 0.01–0.02 units, and the view direction equals the quaternion's −Z.
+- **Edit reaches the game.** I moved its key 15 (frame 450) up 15 units in Studio and saved. The game's camera now rises to Y 20.7 at that moment (original 6.5), then returns. Screenshots: `shots/r12_cutscene_before_after.png`, original left, edited right (same trigger point, the edited camera is higher and shows the roof).
+
+**Not edited:**
+- `aid_cutcam_*` (13 small "award jiggy" assets of 60-byte keys, likely relative to Banjo).
+- Camera volumes / triggers: no camera-specific volume type was found; type 7 volumes link to each other.
+

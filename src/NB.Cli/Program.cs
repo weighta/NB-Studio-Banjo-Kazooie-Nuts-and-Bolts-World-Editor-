@@ -1839,6 +1839,26 @@ static class Program
                     }
                     return 0;
                 }
+                case "cutscene-cams":
+                {
+                    // cutscene-cams <workspace> <bundle hex> [x,y,z [x,y,z ...]]: the cut-scene cameras of a bundle (resident and
+                    // streamed): frames, field of view, start / end; with positions: the closest frame of each camera to them
+                    var ws = NB.Core.Project.Workspace.Open(args[1]);
+                    uint b = Convert.ToUInt32(args[2], 16);
+                    var pts = args.Skip(3).Select(a => a.Split(',').Select(x => float.Parse(x, System.Globalization.CultureInfo.InvariantCulture)).ToArray()).Select(v => new System.Numerics.Vector3(v[0], v[1], v[2])).ToList();
+                    foreach (var c in NB.Core.World.CutsceneCamera.InBundle(ws, b))
+                    {
+                        string near = "";
+                        if (pts.Count > 0)
+                        {
+                            var best = pts.Select(p => Enumerable.Range(0, c.Positions.Length).Select(f => (D: System.Numerics.Vector3.Distance(c.Positions[f], p), F: f)).MinBy(x => x.D)).ToList();
+                            if (best.All(x => x.D > 1f)) continue;
+                            near = "  closest: " + string.Join(", ", best.Select(x => $"{x.D:0.00} at frame {x.F} (looking {c.Forward(x.F):0.000}, fov {c.FovAt(x.F):0.#})"));
+                        }
+                        Console.WriteLine($"{c.Asset} [{(c.Streamed ? $"stream {c.StreamId:X8}" : "resident")}] {c.CameraName}: {c.Frames} frames {c.Duration:0.0}s fov {c.Fov:0.#} channels {string.Join("/", c.Channels.Select(x => x.Count))} from {c.Positions[0]} to {c.Positions[^1]}{near}");
+                    }
+                    return 0;
+                }
                 case "marker-dump":
                 {
                     // marker-dump <caff> <marker asset> <type> <index>: raw words of one marker record

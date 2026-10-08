@@ -205,6 +205,7 @@ public sealed partial class SceneViewport
             if (!o.Visible || o.Kind == SceneObjectKind.Terrain) continue;
             if (o.Kind == SceneObjectKind.Scenery && (!ShowScenery || IsHidden(o))) continue;
             if (o.Kind == SceneObjectKind.Marker && !ShowMarkers && (o.Model == null || !_showObjects)) continue;
+            if (!_showCameras && CameraPoints.Is(o)) continue;
             bool asModel = o.Model != null && (o.Kind != SceneObjectKind.Marker || _showObjects);
             // the box first: off the rectangle -> no; entirely inside -> yes; else the drawn triangles (any touching)
             var m4 = o.Transform * vp;

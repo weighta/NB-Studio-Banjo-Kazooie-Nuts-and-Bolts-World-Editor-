@@ -297,6 +297,40 @@ public sealed class LivePanel : UserControl
     public void ScriptShow() { if (_x != null) ShowInView?.Invoke(CurrentPos()); }
     /// <summary>Script research helper: guest memory at an address expression ("82FACA44", "[82FACA44]+10", nested
     /// brackets = pointer reads), <paramref name="len"/> bytes as hex lines of 16.</summary>
+    /// <summary>Script research helper: the game camera (position, look direction) and the player every
+    /// <paramref name="ms"/> ms for <paramref name="secs"/> seconds, logged when the camera moved.</summary>
+    public async Task<string> ScriptCamTrace(float secs, int ms)
+    {
+        if (_x == null) return "not attached";
+        var sb = new System.Text.StringBuilder();
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        Vector3 last = new(float.NaN);
+        while (sw.Elapsed.TotalSeconds < secs)
+        {
+            var m = _x.Read(XeniaLive.CameraMatrix - 0x30, 0x40);
+            var pos = _x.CameraPosition; var fwd = new Vector3(NB.Core.IO.BE.F32(m, 0x20), NB.Core.IO.BE.F32(m, 0x24), NB.Core.IO.BE.F32(m, 0x28));
+            if (!(Vector3.Distance(pos, last) < 0.05f))
+                sb.Append($"\n  t {sw.Elapsed.TotalSeconds,5:0.00}  cam {pos.X:0.00},{pos.Y:0.00},{pos.Z:0.00}  axis2 {fwd.X:0.000},{fwd.Y:0.000},{fwd.Z:0.000}  cut {_x.U32(0x82FACBA4):X8}  player {_x.PlayerPosition.X:0.0},{_x.PlayerPosition.Y:0.0},{_x.PlayerPosition.Z:0.0}");
+            last = pos;
+            await Task.Delay(ms);
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>Script test helper: waits until the game camera is within <paramref name="r"/> of (x, z) on the ground plane.</summary>
+    public async Task<string> ScriptWaitCam(float x, float z, float r, float secs)
+    {
+        if (_x == null) return "not attached";
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (sw.Elapsed.TotalSeconds < secs)
+        {
+            var p = _x.CameraPosition;
+            if (new Vector2(p.X - x, p.Z - z).Length() < r) return $"camera at {p} after {sw.Elapsed.TotalSeconds:0.0} s";
+            await Task.Delay(20);
+        }
+        return "timed out";
+    }
+
     public string ScriptDump(string expr, int len)
     {
         if (_x == null) return "not attached";

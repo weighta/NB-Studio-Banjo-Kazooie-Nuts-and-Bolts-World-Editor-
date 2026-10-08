@@ -106,7 +106,7 @@ public sealed partial class SceneViewport
             case "--show":
             {
                 var what = next(); bool on = next() == "on";
-                switch (what) { case "markers": ShowMarkers = on; break; case "paths": ShowPaths = on; break; case "terrain": ShowTerrain = on; break; case "scenery": ShowScenery = on; break; case "objects": ShowObjects = on; break; case "grass": ShowGrass = on; break; }
+                switch (what) { case "markers": ShowMarkers = on; break; case "paths": ShowPaths = on; break; case "terrain": ShowTerrain = on; break; case "scenery": ShowScenery = on; break; case "objects": ShowObjects = on; break; case "grass": ShowGrass = on; break; case "cameras": ShowCameras = on; break; }
                 Refresh3D(); log($"script: show {what} {on}"); return true;
             }
             case "--key":

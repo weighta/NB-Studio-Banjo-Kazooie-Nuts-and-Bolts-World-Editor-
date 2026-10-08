@@ -96,7 +96,7 @@ public static class QuickTest
 
         // the start-of-game script of the copy: rebuilt only when the workspace's common bundle or the target changed
         var srcCommon = new FileInfo(Path.Combine(src, commonRel));
-        string key = $"v3|{srcCommon.Length}|{srcCommon.LastWriteTimeUtc.Ticks}|{t.Script}|{FirstTimeFlags.Length}";
+        string key = $"v3|{srcCommon.Length}|{srcCommon.LastWriteTimeUtc.Ticks}|{t.Script}|{FirstTimeFlags.Length}|{(KeepWorldIntros ? "intros" : "")}";
         string keyFile = Path.Combine(dir, "common.key"), dstCommon = Path.Combine(dst, commonRel);
         if (File.Exists(keyFile) && File.ReadAllText(keyFile) == key && File.Exists(dstCommon) && FileLinks.LinkCount(dstCommon) == 1)
             return Path.Combine(dst, "default.xex");
@@ -109,9 +109,9 @@ public static class QuickTest
         {
             using (fw.Batch())
             {
-                log("  " + NB.Core.World.TestMode.SkipStartOfGame(fw, keepShowdownTownIntro: false));
-                log("  " + NB.Core.World.TestMode.PresetTownIntro(fw));
-                log("  first-visit tutorials and cut-scenes: " + NB.Core.World.TestMode.PresetFlags(fw, FirstTimeFlags.Concat(PartSeenFlags(ws.Game.Xex)).Distinct()));
+                log("  " + NB.Core.World.TestMode.SkipStartOfGame(fw, keepShowdownTownIntro: KeepWorldIntros));
+                if (!KeepWorldIntros) log("  " + NB.Core.World.TestMode.PresetTownIntro(fw));
+                log("  first-visit tutorials and cut-scenes: " + NB.Core.World.TestMode.PresetFlags(fw, FirstTimeFlags.Where(f => !KeepWorldIntros || !f.StartsWith("gameFlag_Normal_Cutscene_Intro_")).Concat(PartSeenFlags(ws.Game.Xex)).Distinct()));
                 log("  start script " + NB.Core.World.TestMode.StartIn(fw, t.Script));
             }
         }
@@ -128,6 +128,10 @@ public static class QuickTest
     /// explanations in town. Not set: story progress (game globe, world doors, SphereDocked flags: one froze the game,
     /// Seattle B18), unlocks and the garage warnings that help building (too heavy, no fuel …).
     /// </summary>
+    /// <summary>Test games keep the intro cut-scenes: Showdown Town's (Mumbo and the golf cart) and the worlds' first-visit
+    /// intros (script option --quicktest-intros on: camera tests). The boot then presses A only, so Y does not skip them.</summary>
+    public static bool KeepWorldIntros;
+
     public static readonly string[] FirstTimeFlags =
     {
         "gameFlag_Normal_Garage_Tutorial_AdvancedSettings", "gameFlag_Normal_Garage_Tutorial_BuildPart1", "gameFlag_Normal_Garage_Tutorial_BuildPart2",
@@ -261,13 +265,13 @@ public static class QuickTest
                 if (sw.Elapsed.TotalSeconds > 7)
                 {
                     // A: title screen, house menu, "start a new game?"; Y: skips cut-scenes (and does nothing in the menus)
-                    await pad.Press(presses % 2 == 0 ? VirtualPad.A : VirtualPad.Y, 150, ct);
+                    await pad.Press(presses % 2 == 0 || KeepWorldIntros ? VirtualPad.A : VirtualPad.Y, 150, ct);
                     presses++;
                 }
                 await Task.Delay(1200, ct);
             }
             if (!inGame) return p.HasExited ? "Xenia was closed before the world loaded." : $"the world did not load within {sw.Elapsed.TotalSeconds:F0} s (finish by hand).";
-            if (t.IsAct)
+            if (t.IsAct && !KeepWorldIntros)
             {
                 // the act's opening dialogue: Y skips it (a second Y would make Banjo leave the vehicle)
                 await Task.Delay(1500, ct);

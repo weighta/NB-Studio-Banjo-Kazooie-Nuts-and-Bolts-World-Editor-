@@ -157,8 +157,9 @@ public sealed partial class MainForm : Form
         // a confirmed G / R / T or gizmo drag: one undo step for the whole selection
         _view.ObjectsEdited += list =>
         {
-            if (list.Count == 1) PushUndo(list[0].Obj, list[0].Before, list[0].Obj.Transform);
-            else { _history.PushTransforms(list.Select(x => (x.Obj, x.Before, x.Obj.Transform)).ToList()); UpdateTitle(); foreach (var x in list) RefreshNode(x.Obj); }
+            var cams = FollowCameras(list);   // a moved warp pad can take its camera along (MainForm.Cameras.cs)
+            if (list.Count == 1 && cams.Count == 0) PushUndo(list[0].Obj, list[0].Before, list[0].Obj.Transform);
+            else { _history.PushTransforms(list.Select(x => (x.Obj, x.Before, x.Obj.Transform)).Concat(cams).ToList()); UpdateTitle(); foreach (var x in list) RefreshNode(x.Obj); foreach (var c in cams) RefreshNode(c.Obj); _view.Refresh3D(); }
         };
         _view.SelectionSetChanged += OnSelectionSet;
         _view.HiddenChanged += n => { FillTree(); _status.Text = n > 0 ? $"{n} object(s) hidden in the 3D view (this session only) — U or Alt+H shows them again." : "Every object is shown again."; };
@@ -172,10 +173,15 @@ public sealed partial class MainForm : Form
                 _history.PushTransforms(all.Select(x => (x.Obj, x.Before, x.Obj.Transform)).ToList());
                 foreach (var x in all) RefreshNode(x.Obj);
             }
+            else if (o != _collProxy && FollowCameras(new[] { (o, before) }) is { Count: > 0 } cams)
+            {
+                _history.PushTransforms(cams.Prepend((o, before, o.Transform)).ToList());
+                RefreshNode(o); foreach (var c in cams) RefreshNode(c.Obj);
+            }
             else PushUndo(o, before, o.Transform);
             _view.Refresh3D(); UpdateTitle();
         };
-        _transform.InfoFor = CollisionInfo;
+        _transform.InfoFor = o => CollisionInfo(o) ?? (o.Kind == SceneObjectKind.CutsceneKey ? $"CUT-SCENE CAMERA: {CameraPoints.Detail(o)}\nFrame {o.CutsceneFrame} of {o.Cutscene?.Frames}; rotation X = pitch (down), Y = yaw, Z = roll.\n{(o.Dirty ? "Modified (not yet saved)" : "Unmodified")}" : null);
         InitCollisionEditing();
         _transform.LinkChanged += (o, before) => { _history.PushLink(o, before, o.Marker!.Link); _view.Refresh3D(); UpdateTitle(); Log($"{o.Name}: next path node {before} -> {o.Marker!.Link} (World > Save to write it)"); };
         _history.Limit = _settings.UndoSteps;
@@ -190,6 +196,7 @@ public sealed partial class MainForm : Form
         };
         _tree.AfterSelect += (_, e) =>
         {
+            if (!_syncingTree && e.Node?.Tag is CutsceneCamera cc) { OpenCutscene(cc); return; }   // its keys (MainForm.Cutscenes.cs)
             if (_syncingTree || e.Node?.Tag is not SceneObject o) return;
             // Ctrl / Shift + click in the list adds or removes, like in the 3D view
             if ((ModifierKeys & (Keys.Control | Keys.Shift)) != 0 && _view.Selected != null) _view.ToggleSelect(o);
@@ -635,6 +642,7 @@ public sealed partial class MainForm : Form
         _objMenu.Items.Clear();
         _objMenu.Items.Add(new ToolStripLabel(o.Name) { Font = new Font(Font, FontStyle.Bold) });
         _objMenu.Items.Add("Focus Camera on Object", null, (_, _) => _view.Focus(o));
+        AddCameraMenuItems(o);   // Look Through Camera, Set Camera from 3D View, a warp pad's camera (MainForm.Cameras.cs)
         _objMenu.Items.Add("Edit Properties", null, (_, _) => { _view.Select(o); _right.SelectedIndex = 1; });
         if (o.Kind == SceneObjectKind.Marker && o.Marker!.AssetIds.Any(a => a >> 24 == 0x1F))
             _objMenu.Items.Add("Dialogue…", null, (_, _) => { _view.Select(o); _right.SelectedTab = _dialogueTab; });
@@ -1815,6 +1823,7 @@ public sealed partial class MainForm : Form
             if (_scripted) ApplyAtmosphere(); else if (_center.SelectedTab?.Controls.Contains(_atmos) == true) BeginInvoke(ApplyAtmosphere);
             using (Viewport.Prof.Time("open:   view SetScene")) _view.SetScene(scene, keepCamera: reload);
             using (Viewport.Prof.Time("open:   tree")) FillTree();
+            LoadCutscenes(scene);   // cut-scene camera paths, in the background (MainForm.Cutscenes.cs)
             if (selKey != null && scene.Objects.FirstOrDefault(o => UndoHistory.KeyOf(o) == selKey) is { } sel) _view.Select(sel);
             Log($"Opened {(act?.Display ?? w.Display)} (world bundle {w.Bundle:x6}{(act != null ? $", act bundle {act.ActBundle:x6} markers" : "")}): {scene.Objects.Count} objects, {scene.Models.Count} reference models.");
             {
@@ -1886,6 +1895,7 @@ public sealed partial class MainForm : Form
                 foreach (var o in starts) sn.Nodes.Add(new TreeNode(NodeText(o)) { Tag = o, Checked = o.Visible, ToolTipText = SpawnPoints.Detail(o), ForeColor = Color.FromArgb(20, 130, 50) });
                 sn.Expand();
             }
+            AddCameraNodes(q);   // "Cameras (n)": warp pad cameras etc. (MainForm.Cameras.cs)
             var terrain = _tree.Nodes.Add("Terrain");
             var scenery = _tree.Nodes.Add("Scenery (by model)");
             terrain.Checked = scenery.Checked = true;
@@ -2057,6 +2067,7 @@ public sealed partial class MainForm : Form
                 n = _scene.Save();
                 if (coll.Count > 0 && !_scene.DirtyBundles.Contains(_scene.Bundle))
                     _ws.SaveResident(_scene.Bundle, _scene.Caff, $"collision edits: {coll.Count} asset(s)");
+                coll.AddRange(SaveCutscenes());   // edited cut-scene cameras (MainForm.Cutscenes.cs)
             }
             Log(n == 0 && coll.Count == 0 ? "No world changes to save." : $"Saved {n} changed object(s){(coll.Count > 0 ? $" and {coll.Count} edited collision asset(s)" : "")} → {Path.GetRelativePath(_ws.Root, _ws.Game.ResidentPath(_scene.Bundle))} (uncompressed CAFF, checksum recomputed).");
             foreach (var l in coll) Log(l);
@@ -2599,7 +2610,9 @@ public sealed partial class MainForm : Form
                     {
                         var v = Next().Split(',').Select(x => float.Parse(x, System.Globalization.CultureInfo.InvariantCulture)).ToArray();
                         var o = _view.Selected!; var before = o.Transform; var m = before; m.Translation += new Vector3(v[0], v[1], v[2]); o.Transform = m;
-                        PushUndo(o, before, o.Transform); _view.Select(o); L($"script: moved {o.Name} to {o.Transform.Translation}"); break;
+                        var cams = FollowCameras(new[] { (o, before) });
+                        if (cams.Count == 0) PushUndo(o, before, o.Transform); else { _history.PushTransforms(cams.Prepend((o, before, o.Transform)).ToList()); UpdateTitle(); }
+                        _view.Select(o); L($"script: moved {o.Name} to {o.Transform.Translation}" + string.Concat(cams.Select(c => $"; its camera {c.Obj.Name} to {c.After.Translation}"))); break;
                     }
                     case "--scale":
                     {
@@ -2657,6 +2670,15 @@ public sealed partial class MainForm : Form
                         _live.ScriptTeleport(new Vector3(v[0], v[1], v[2])); await Task.Delay(1200); L("script: live position " + _live.PositionText); break;
                     }
                     case "--shot-marker": L("script: shot-marker " + Next()); await Task.Delay(3000); break;   // a test driver captures the game now
+                    case "--cut-wait": if (_cutLoad != null) await _cutLoad; await Task.Delay(200); L($"script: {_cutCams.Count} cut-scene cameras"); break;
+                    case "--cut-open": { var q = Next(); var c = _cutCams.First(x => x.Asset.Contains(q, StringComparison.OrdinalIgnoreCase)); OpenCutscene(c); L($"script: opened {c.Asset}: {_scene!.Objects.Count(o => o.Cutscene == c)} keys"); break; }
+                    case "--cam-list": L("script: cameras " + CameraListText()); break;
+                    case "--cam-follow": { var v = Next(); _camFollow = v == "on" ? true : v == "off" ? false : null; L($"script: cameras follow {v}"); break; }
+                    case "--look-through": { var q = Next(); var c = _scene!.Objects.First(x => CameraPoints.Is(x) && (x.Name.Contains(q, StringComparison.OrdinalIgnoreCase) || CameraPoints.Label(x)!.Contains(q, StringComparison.OrdinalIgnoreCase))); _view.LookThrough(c); L($"script: looking through {CameraPoints.Label(c)} ({c.Name}) at {_view.CameraPosition}"); break; }
+                    case "--cam-from-view": { var o = _view.Selected!; SetCameraFromView(o); L($"script: {o.Name} set from the 3D view: {o.Transform.Translation}, pitch/yaw {CameraPoints.View(o.Transform).Pitch * 180 / MathF.PI:0.#}/{CameraPoints.View(o.Transform).Yaw * 180 / MathF.PI:0.#}"); break; }
+                    case "--quicktest-intros": QuickTest.KeepWorldIntros = Next() == "on"; L($"script: test games keep the world intros: {QuickTest.KeepWorldIntros}"); break;
+                    case "--live-wait-cam": { var v = Next().Split(',').Select(x => float.Parse(x, System.Globalization.CultureInfo.InvariantCulture)).ToArray(); L("script: live wait camera: " + await _live.ScriptWaitCam(v[0], v[1], v[2], v[3])); break; }
+                    case "--live-camtrace": { float sec = float.Parse(Next(), System.Globalization.CultureInfo.InvariantCulture); L("script: live camera trace" + await _live.ScriptCamTrace(sec, 100)); break; }
                     case "--live-dump": { var ex = Next(); int n = Convert.ToInt32(Next(), 16); L("script: live dump " + _live.ScriptDump(ex, n)); break; }
                     case "--live-probe": L("script: live probe " + _live.ScriptProbe()); break;
                     case "--live-fall": { float h = float.Parse(Next(), System.Globalization.CultureInfo.InvariantCulture); L("script: live fall " + await _live.ScriptFall(h)); break; }
