@@ -251,7 +251,9 @@ public sealed class VehicleEditorPanel : UserControl
         _toast.Click += (_, _) => _toast.Visible = false;
         _toastTimer.Tick += (_, _) => { _toastTimer.Stop(); _toast.Visible = false; };
         // the tab shown for the first time in a workspace with nothing open: open a vehicle for the user
-        VisibleChanged += (_, _) => { if (Visible) BeginAutoOpen(); };
+        // a vehicle that stayed open across a workspace switch needs the new workspace's parts (else every part is a red box
+        // and the library is empty)
+        VisibleChanged += (_, _) => { if (Visible) { if (_cat == null && _doc.Parts.Count > 0) EnsureCatalog(); BeginAutoOpen(); } };
         void PlaceNote() { _aiNote.Location = new Point(8, _where.Bottom + 8); }
         viewHost.Layout += (_, _) => PlaceNote();
         _aiSwap.LinkClicked += (_, _) => SwapToAi();
@@ -522,7 +524,7 @@ public sealed class VehicleEditorPanel : UserControl
         _autoOpenTried = false; _autoOpenPending = false; _toast.Visible = false;
         StartGameCatalog();
         StartPartCatalog();
-        if (Visible) BeginAutoOpen();
+        if (Visible) { if (_ws != null && _doc.Parts.Count > 0) EnsureCatalog(); BeginAutoOpen(); }
     }
 
     /// <summary>
