@@ -40,7 +40,7 @@ public sealed partial class SceneObject
     /// WorldScene.GruntyActs); null for every other object.</summary>
     public bool? GruntySign;
     public string GruntySignWhy = "";
-    public bool Dirty => Transform != OriginalTransform || (Marker is { Type: 22 } m && m.Link != m.SavedLink);
+    public bool Dirty => Transform != OriginalTransform || (Marker is { Type: 22 } m && m.Link != m.SavedLink) || MusicDirty;
 }
 
 /// <summary>
@@ -179,6 +179,7 @@ public sealed partial class WorldScene
                     };
                     Audit.Markers++;
                     AttachMarkerModel(obj, mc);
+                    InitMusicRegion(obj, mc);   // WorldScene.Music.cs
                     Objects.Add(obj);
                 }
             }
@@ -899,6 +900,7 @@ public sealed partial class WorldScene
                     o.Transform = o.Marker.Matrix; o.OriginalTransform = o.Transform;
                 }
                 if (o.Marker.Type == 22 && o.Marker.Link != o.Marker.SavedLink) MarkerAsset.WriteLink(o.MarkerSet.Caff ?? Caff, o.MarkerSet.Symbol, o.Marker);
+                if (o.MusicDirty) WriteMusicRegion(o);
                 DirtyBundles.Add(o.MarkerSet.Caff != null ? o.MarkerSet.Bundle : Bundle);
                 changed++;
                 continue;

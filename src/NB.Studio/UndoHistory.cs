@@ -334,6 +334,7 @@ public sealed class UndoHistory
             Directory.CreateDirectory(_dir!);
             foreach (var e in f.Files)
             {
+                using var streamEdit = _ws?.LockStreamFile(e.Path);   // a stream archive: wait for a writer still working on it (a part build …)
                 string? keep = undo ? e.Before : e.After;
                 bool keepExists = undo ? e.Existed : File.Exists(e.After ?? "");
                 // keep what's there now for the other direction

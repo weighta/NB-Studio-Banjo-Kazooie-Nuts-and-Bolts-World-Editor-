@@ -27,7 +27,9 @@ namespace NB.Core.Vehicles;
 /// </summary>
 public sealed class Blueprint
 {
-    public const int HeaderSize = 0x7C, BlockSize = 0x24, NameOffset = 0x20, NameBytes = 0x40, MaxNameChars = 31;
+    /// <summary><see cref="MaxNameChars"/>: the name field holds 32 UTF-16 characters. The game itself fills all 32
+    /// without a closing zero when the keyboard entry is longer, and lists and loads such names (seen in Xenia).</summary>
+    public const int HeaderSize = 0x7C, BlockSize = 0x24, NameOffset = 0x20, NameBytes = 0x40, MaxNameChars = 32;
 
     /// <summary>The raw header (count at +0 is rewritten from <see cref="Blocks"/> on <see cref="Write"/>).</summary>
     public byte[] Header = new byte[HeaderSize];
@@ -112,19 +114,70 @@ public sealed class Blueprint
     public uint ButtonWord(int i) => BE.U32(Header, 0x6C + 4 * i);
 
     /// <summary>True when the name field holds 8-bit text (the game's own assets carry an ASCII creator tag such as
-    /// "SalvyBob"); saved vehicles hold UTF-16BE.</summary>
-    public bool NameIsAscii => Header[NameOffset] != 0 && Header[NameOffset + 1] != 0;
+    /// "SalvyBob"); saved vehicles hold UTF-16BE. See <see cref="IsEightBitName"/>.</summary>
+    public bool NameIsAscii => IsEightBitName(Header.AsSpan(NameOffset, NameBytes));
 
     /// <summary>
-    /// The text of a blueprint name field (0x40 bytes): 8-bit text when its first two bytes are both set (the game's own
+    /// The characters the game's text font has (xuifontcachemeta\precache_euro.ini, the same list as precache_russian.ini:
+    /// MS Comic Sans Euro): printable ASCII, Latin-1 (no U+00A0 / U+00B7), Latin Extended-A from U+013D, Greek, Cyrillic,
+    /// and punctuation / symbols such as – — ‘ ’ “ ” • … ‰ € ™. Vehicle names are typed with these.
+    /// </summary>
+    public static bool InGameFont(char c)
+    {
+        int lo = 0, hi = FontRanges.Length / 2 - 1;
+        while (lo <= hi)
+        {
+            int m = (lo + hi) / 2;
+            if (c < FontRanges[2 * m]) hi = m - 1;
+            else if (c > FontRanges[2 * m + 1]) lo = m + 1;
+            else return true;
+        }
+        return false;
+    }
+
+    static readonly char[] FontRanges =
+    {
+        '\u0020', '\u007E', '\u00A1', '\u00B6', '\u00B8', '\u0120', '\u013D', '\u017F', '\u0192', '\u0192', '\u01FA', '\u01FF',
+        '\u02C6', '\u02C7', '\u02C9', '\u02C9', '\u02D8', '\u02DD', '\u037E', '\u037E', '\u0384', '\u038A', '\u038C', '\u038C',
+        '\u038E', '\u03A1', '\u03A3', '\u03CE', '\u0401', '\u040C', '\u040E', '\u044F', '\u0451', '\u0452', '\u0454', '\u045C',
+        '\u045E', '\u045F', '\u0490', '\u0491', '\u1E80', '\u1E85', '\u1EF2', '\u1EF3', '\u2013', '\u2015', '\u2017', '\u201E',
+        '\u2020', '\u2022', '\u2026', '\u2026', '\u2030', '\u2030', '\u2032', '\u2033', '\u2039', '\u203A', '\u203C', '\u203C',
+        '\u203E', '\u203E', '\u2044', '\u2044', '\u207F', '\u207F', '\u20A3', '\u20A4', '\u20A7', '\u20A7', '\u20AC', '\u20AC',
+        '\u2105', '\u2105', '\u2113', '\u2113', '\u2116', '\u2116', '\u2122', '\u2122', '\u2126', '\u2126', '\u212E', '\u212E',
+        '\u215B', '\u215E', '\u2202', '\u2202', '\u2206', '\u2206', '\u220F', '\u220F', '\u2211', '\u2212', '\u2215', '\u2215',
+        '\u2219', '\u221A', '\u221E', '\u221E', '\u222B', '\u222B', '\u2248', '\u2248', '\u2260', '\u2260', '\u2264', '\u2265',
+        '\u25A1', '\u25A1', '\u25AA', '\u25AB', '\u25CA', '\u25CA', '\u25CF', '\u25CF', '\u25E6', '\u25E6', '\uFB01', '\uFB02',
+    };
+
+    /// <summary>
+    /// True when a name field holds 8-bit text (a game asset's creator tag such as "SalvyBob") rather than UTF-16BE. Read as
+    /// UTF-16BE up to its closing zero, a tag turns into characters the game cannot show ("Sa" = U+5361), while a name the
+    /// game saved is made of its font's characters, including names that start with a character above U+00FF ("Łada"
+    /// 01 41, "Ракета" 04 20, "€uro" 20 AC), which an "are both first bytes set" test took for 8-bit text.
+    /// Names typed in Chinese or Japanese characters (other releases' fonts) can still be taken for 8-bit text.
+    /// </summary>
+    public static bool IsEightBitName(ReadOnlySpan<byte> f)
+    {
+        if (f.Length < 2 || f[0] == 0 || f[1] == 0) return false;
+        for (int o = 0; o + 1 < f.Length; o += 2)
+        {
+            char c = (char)(f[o] << 8 | f[o + 1]);
+            if (c == 0) break;
+            if (!InGameFont(c)) return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// The text of a blueprint name field (0x40 bytes): 8-bit text when <see cref="IsEightBitName"/> (the game's own
     /// vehicles carry an ASCII creator tag such as "SalvyBob", and the game shows it as such in Your Blueprints), else
-    /// UTF-16BE (vehicles saved in the game). Ends at the first NUL or control character (some saves have junk after the
+    /// UTF-16BE (vehicles saved in the game; up to 32 characters, the game writes 32 without a closing zero). Ends at the first NUL or control character (some saves have junk after the
     /// name). Every reader of vehicle names uses this: read as UTF-16BE, "SalvyBob" became "卡汶祂潢".
     /// </summary>
     public static string DecodeName(ReadOnlySpan<byte> f)
     {
         var sb = new StringBuilder();
-        if (f.Length >= 2 && f[0] != 0 && f[1] != 0)
+        if (IsEightBitName(f))
         {
             foreach (byte b in f) { if (b < 0x20) break; sb.Append((char)b); }
             return sb.ToString().TrimEnd();

@@ -486,6 +486,14 @@ public sealed class WorldAtmosphere
         return set.OrderBy(b => b).ToList();
     }
 
+    /// <summary>Another editor saved bytes inside an array this one snapshots (the music tables of the time-of-day
+    /// scripts): they become part of the saved state, so Discard / Revert keeps them.</summary>
+    public void NoteExternalWrite(byte[] live, int offset, int length)
+    {
+        if (_saved.TryGetValue(live, out var saved) && offset >= 0 && offset + length <= saved.Length && saved.Length == live.Length)
+            Buffer.BlockCopy(live, offset, saved, offset, length);
+    }
+
     /// <summary>Discards unsaved edits: every light setup and time-of-day script gets its last saved bytes back.</summary>
     public void Revert()
     {

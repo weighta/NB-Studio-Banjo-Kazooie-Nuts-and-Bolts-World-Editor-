@@ -75,6 +75,7 @@ public static class BlueprintVault
     public static void Harvest(IEnumerable<string>? extraContentRoots = null)
     {
         var v = Load();
+        var removed = NB.Core.Project.VehicleVault.Removed(Dir);   // replaced / removed in NB Studio's Vehicle Editor: kept out
         var ownRoots = new[] { Path.Combine(AppSettings.DataDir, "content"), Renut.UserRoot };
         foreach (var root in ContentRoots(extraContentRoots))
         {
@@ -95,6 +96,7 @@ public static class BlueprintVault
                         if (!NB.Core.Project.VehicleVault.LooksLikeBlueprint(bytes)) continue;
                         var hash = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
                         present.Add(hash);
+                        if (removed.ContainsKey(hash)) continue;
                         if (!v.TryGetValue(hash, out var e))
                         {
                             e = v[hash] = new Entry { Hash = hash, FirstSeen = DateTime.Now, Name = ReadName(bytes) };
@@ -119,6 +121,7 @@ public static class BlueprintVault
     public static int RestoreInto(string profileDir)
     {
         var v = Load();
+        var removed = NB.Core.Project.VehicleVault.Removed(Dir);
         string xuid = Path.GetFileName(profileDir);
         var pkgRoot = Path.Combine(profileDir, Title, SaveType);
         var hdrRoot = Path.Combine(profileDir, Title, "Headers", SaveType);
@@ -133,7 +136,7 @@ public static class BlueprintVault
             have.Add(Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(data))).ToLowerInvariant());
         }
         int restored = 0, next = 1;
-        foreach (var e in v.Values.Where(e => !e.Deleted && !have.Contains(e.Hash)).OrderBy(e => e.FirstSeen))
+        foreach (var e in v.Values.Where(e => !e.Deleted && !removed.ContainsKey(e.Hash) && !have.Contains(e.Hash)).OrderBy(e => e.FirstSeen))
         {
             var src = Path.Combine(Dir, e.Hash + ".bp");
             if (!File.Exists(src)) continue;

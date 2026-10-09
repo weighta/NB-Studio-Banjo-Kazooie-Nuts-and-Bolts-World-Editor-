@@ -15,6 +15,9 @@ public sealed class AudioPanel : UserControl
     public string? VgmstreamPath;
     Workspace? _ws; AssetIndex? _index; AudioService.BankRef? _bank; XwbFile? _xwb; byte[]? _raw;
     SoundPlayer? _player;
+    /// <summary>The "Music" page: every music track, its format and where it plays (MusicListPanel.cs).</summary>
+    public readonly MusicListPanel Music = new() { Dock = DockStyle.Fill };
+    readonly TabControl _pages = new() { Dock = DockStyle.Fill };
 
     public AudioPanel()
     {
@@ -24,7 +27,11 @@ public sealed class AudioPanel : UserControl
         var top = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 32 };
         top.Controls.Add(new Label { Text = "Bundle", AutoSize = true, Padding = new Padding(0, 6, 0, 0) }); top.Controls.Add(_bundle);
         Btn("▶ Play", Play); Btn("■ Stop", () => _player?.Stop()); Btn("Export WAV…", Export); Btn("Export Whole Bank…", ExportAll); Btn("Replace with WAV…", Replace);
-        Controls.Add(split); Controls.Add(_buttons); Controls.Add(top);
+        var pBanks = new TabPage("Wave banks"); pBanks.Controls.Add(split); pBanks.Controls.Add(_buttons); pBanks.Controls.Add(top);
+        var pMusic = new TabPage("Music"); pMusic.Controls.Add(Music);
+        _pages.TabPages.Add(pBanks); _pages.TabPages.Add(pMusic);
+        Controls.Add(_pages);
+        Music.Log = s => Log?.Invoke(s);
         _bundle.SelectedIndexChanged += (_, _) => FillBanks();
         _banks.SelectedIndexChanged += (_, _) => LoadBank();
         // a single click on a sound selects and plays it (the button plays the selected / focused one)
@@ -67,11 +74,15 @@ public sealed class AudioPanel : UserControl
     public void SetWorkspace(Workspace ws, AssetIndex idx)
     {
         _ws = ws; _index = idx;
+        Music.VgmstreamPath = VgmstreamPath; Music.SetWorkspace(ws, idx);
         _bundle.Items.Clear();
         foreach (var g in idx.Entries.Where(e => e.Type == "wavebank").GroupBy(e => e.Bundle).OrderByDescending(g => g.Count()))
             _bundle.Items.Add($"{g.Key:x6}  ({g.Count()} banks)  {idx.BundleSummary.GetValueOrDefault(g.Key, "")}");
         if (_bundle.Items.Count > 0) _bundle.SelectedIndex = 0;
     }
+
+    /// <summary>Shows the Music page (scripts, the Help text).</summary>
+    public void ShowMusicPage() => _pages.SelectedIndex = 1;
 
     uint CurBundle => Convert.ToUInt32(((string)_bundle.SelectedItem!)[..6], 16);
 

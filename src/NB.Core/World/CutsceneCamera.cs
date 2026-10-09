@@ -161,6 +161,7 @@ public sealed class CutsceneCamera
             ws.SaveResident(Bundle, caff, description);
             return;
         }
+        using var streamEdit = ws.LockStream(Bundle);   // Workspace.LockStream: this load → change → save is one step (other writers of the archive wait)
         var arch = ws.LoadStream(Bundle);
         var e = arch.Entries.FirstOrDefault(x => x.Id == StreamId && x.Kind == "caff") ?? throw new InvalidDataException($"{Asset}: stream entry {StreamId:X8} not found");
         var sc = CaffFile.Read(e.Data!);

@@ -82,10 +82,9 @@ public static class AudioService
         File.WriteAllBytes(tmp, rawBank);
         try
         {
-            var psi = new ProcessStartInfo(Path.GetFullPath(vgmstreamExe), $"-s {index + 1} -o \"{outPath}\" \"{tmp}\"") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
-            using var p = Process.Start(psi)!;
-            string err = p.StandardError.ReadToEnd(); p.StandardOutput.ReadToEnd(); p.WaitForExit();
-            if (p.ExitCode != 0 || !File.Exists(outPath)) throw new InvalidOperationException("vgmstream failed: " + err.Trim());
+            var psi = new ProcessStartInfo(Path.GetFullPath(vgmstreamExe), $"-s {index + 1} -o \"{outPath}\" \"{tmp}\"");
+            var (code, err) = MusicEncoder.RunTool(psi, MusicEncoder.DecodeTimeout);
+            if (code != 0 || !File.Exists(outPath)) throw new InvalidOperationException("vgmstream failed: " + err.Trim());
         }
         finally { try { File.Delete(tmp); } catch { } }
     }
@@ -94,6 +93,7 @@ public static class AudioService
     public static string ReplaceWithWav(Workspace ws, uint bundle, uint bankId, int index, string wavPath)
     {
         var (s, ch, rate) = Wav.Read(wavPath);
+        using var _ = ws.LockStream(bundle);   // load → change → save as one step (other writers of this archive wait)
         var arch = ws.LoadStream(bundle);
         var entry = arch.Entries.First(e => e.Id == bankId && e.Kind == "xwb");
         var bank = XwbFile.Read(entry.Data!);

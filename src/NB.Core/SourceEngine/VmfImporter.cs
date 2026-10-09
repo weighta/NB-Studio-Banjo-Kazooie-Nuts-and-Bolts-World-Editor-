@@ -998,7 +998,7 @@ public static class VmfImporter
     /// coordinates lie in 0..1 (positions and normals are interpolated: texture coordinates are affine on a brush face).
     /// A triangle covering more than 1024 repeats is only shifted.
     /// </summary>
-    static void TileSplit((Vector3 P, Vector3 N, Vector2 T) a, (Vector3 P, Vector3 N, Vector2 T) b, (Vector3 P, Vector3 N, Vector2 T) c,
+    internal static void TileSplit((Vector3 P, Vector3 N, Vector2 T) a, (Vector3 P, Vector3 N, Vector2 T) b, (Vector3 P, Vector3 N, Vector2 T) c,
         List<(Vector3 P, Vector3 N, Vector2 T)> outTris)
     {
         var mn = Vector2.Min(a.T, Vector2.Min(b.T, c.T)); var mx = Vector2.Max(a.T, Vector2.Max(b.T, c.T));

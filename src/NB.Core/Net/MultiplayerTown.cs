@@ -53,6 +53,7 @@ public static class MultiplayerTown
         BE.W32(md, dp + 4 * dc, 0x4F000000u | TownWorld); BE.W32(md, 20, (uint)(dc + 1));
         mp.Data = md; mp.Size = md.Length;
         ws.SaveResident(FreewheelBundle, fw, "diagnostic: freewheel also depends on Showdown Town");
+        using var streamEdit = ws.LockStream(FreewheelBundle);   // Workspace.LockStream: this load → change → save is one step (other writers of the archive wait)
         var st = ws.LoadStream(FreewheelBundle);
         st.Dependencies.Add(0x50000000u | TownWorld);
         ws.SaveStream(FreewheelBundle, st, "diagnostic: freewheel stream also depends on Showdown Town");
@@ -138,6 +139,7 @@ public static class MultiplayerTown
         ws.SaveResident(FreewheelBundle, fw, $"multiplayer: freewheel depends on Showdown Town ({swapped} dependency, {dropped} dropped), {moved} markers moved by {delta}");
         log.Add($"bundle {FreewheelBundle:x6}: world dependency {BanjolandWorld:x6} -> {TownWorld:x6} ({swapped}), {dropped} Banjoland-only dependency dropped; {moved} markers moved by {delta}");
 
+        using var streamEdit = ws.LockStream(FreewheelBundle);   // Workspace.LockStream: this load → change → save is one step (other writers of the archive wait)
         var st = ws.LoadStream(FreewheelBundle);
         int s2 = 0;
         st.Dependencies.RemoveAll(d => DroppedDependencies.Contains(d & 0xFFFFFF));

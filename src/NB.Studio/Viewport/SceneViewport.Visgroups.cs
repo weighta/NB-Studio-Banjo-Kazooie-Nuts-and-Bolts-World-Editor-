@@ -7,7 +7,7 @@ namespace NB.Studio.Viewport;
 
 /// <summary>What the 3D view can show or hide, in one place: the "Show ▾" button left of the Collision toggle opens a
 /// menu of these groups (the View menu keeps its own items; both stay in step through <see cref="VisibilityChanged"/>).</summary>
-public enum Visgroup { Terrain, Scenery, Objects, Grass, Water, Sky, Markers, Paths, Collision, Cameras, CutscenePaths }
+public enum Visgroup { Terrain, Scenery, Objects, Grass, Water, Sky, Markers, Paths, Collision, Cameras, CutscenePaths, Music }
 
 public sealed partial class SceneViewport
 {
@@ -24,14 +24,14 @@ public sealed partial class SceneViewport
     public static readonly (Visgroup Group, string Label)[] VisgroupLabels =
     {
         (Visgroup.Terrain, "Terrain"), (Visgroup.Scenery, "Scenery"), (Visgroup.Objects, "Objects at markers"), (Visgroup.Grass, "Grass"),
-        (Visgroup.Water, "Water"), (Visgroup.Sky, "Sky"), (Visgroup.Markers, "Markers"), (Visgroup.Paths, "Paths"), (Visgroup.Cameras, "Cameras"), (Visgroup.CutscenePaths, "Cut-scene camera paths (all)"), (Visgroup.Collision, "Collision"),
+        (Visgroup.Water, "Water"), (Visgroup.Sky, "Sky"), (Visgroup.Markers, "Markers"), (Visgroup.Paths, "Paths"), (Visgroup.Cameras, "Cameras"), (Visgroup.CutscenePaths, "Cut-scene camera paths (all)"), (Visgroup.Music, "Music (regions, speakers)"), (Visgroup.Collision, "Collision"),
     };
 
     public bool IsVisible(Visgroup g) => g switch
     {
         Visgroup.Terrain => ShowTerrain, Visgroup.Scenery => ShowScenery, Visgroup.Objects => ShowObjects, Visgroup.Grass => ShowGrass,
         Visgroup.Water => ShowWater, Visgroup.Sky => ShowSky, Visgroup.Markers => ShowMarkers, Visgroup.Paths => ShowPaths,
-        Visgroup.Collision => ShowCollision, Visgroup.Cameras => ShowCameras, Visgroup.CutscenePaths => ShowAllCutscenePaths, _ => true,
+        Visgroup.Collision => ShowCollision, Visgroup.Cameras => ShowCameras, Visgroup.CutscenePaths => ShowAllCutscenePaths, Visgroup.Music => ShowMusic, _ => true,
     };
 
     public void SetVisible(Visgroup g, bool on)
@@ -50,6 +50,7 @@ public sealed partial class SceneViewport
             case Visgroup.Collision: ShowCollision = on; break;
             case Visgroup.Cameras: ShowCameras = on; break;
             case Visgroup.CutscenePaths: ShowAllCutscenePaths = on; break;
+            case Visgroup.Music: ShowMusic = on; break;
         }
         Refresh3D();
         VisibilityChanged?.Invoke(g, on);

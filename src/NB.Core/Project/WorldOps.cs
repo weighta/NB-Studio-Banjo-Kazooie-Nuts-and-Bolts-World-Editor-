@@ -239,6 +239,7 @@ public static class WorldOps
         uint id = AssetIds.IdOf(name) ?? 0;
         foreach (var b in streamed)
         {
+            using var streamEdit = ws.LockStream(b);   // Workspace.LockStream: this load → change → save is one step (other writers of the archive wait)
             var arch = ws.LoadStream(b); bool changed = false;
             foreach (var en in arch.Entries.Where(x => x.Id == id && x.Kind == "caff"))
             {

@@ -560,7 +560,7 @@ Notable strings: `frontend_debugmenu` / `XuiScene_BanjoX_Frontend_DebugMenu` (a 
 
   u32 loopStart, u32 loopLength`; seek tables per XMA entry; wave data 2048-aligned. XMA is decoded with
 
-  vgmstream; replacements are stored as PCM16 (the engine's own music format) — **in-game playback not yet tested**.
+  vgmstream; replacements are stored as PCM16 (the engine's own music format) — **plays in game: verified in Xenia** (MusicPause XMA2 → PCM16 tone, loopback; Showdown Town stem and Nutty Acres XMA2 track → PCM16, streamed while playing: §19).
 
 
 
@@ -1411,3 +1411,161 @@ The camera of an `aid_cutscene_*` main record (the part that is not an "animatio
 - Examples: Thomas tilted 60° and Bottles tilted 45° appear upright. Klungo pitched 120° does not appear at all.
 - Props (e.g. Jig-o-Vend) keep their tilt.
 - A yaw beyond ±90° stored as (X 180, Y y, Z 180) is read correctly.
+
+## 19. Music regions and tracks (NB Studio 1.23, 2026-10-08) **[verified in Xenia]**
+
+### 19.1. Where the audio is
+
+Every sound of the game, music included, is an entry of a **big-endian XACT 3 wave bank** (`DNBW`, version 43, §8)
+inside the Bundle/50 stream archives. There are no loose audio files, no RIFF/WAVE or RIFX files, and no XMA in RIFF
+anywhere in the game folder, the resident bundles or the stream archives (survey of every file, stream entry and CAFF
+part).
+
+The music banks are streaming banks in the common bundle `685374`:
+
+| Bank | Codec | Notes |
+|---|---|---|
+| MusicShowdownTown | PCM16 BE, 44.1 kHz stereo | 6 synchronized stems of 3:52 and Intro04 |
+| MusicWorldofSport, MusicTerrorium | PCM16 BE | main and underwater stems |
+| All other Music* banks | XMA2, ~44.1 kHz stereo | |
+
+Entry layout:
+
+- Format word: tag (0 PCM, 1 XMA), channels, rate, blockAlign 4, 16-bit flag.
+- Loop points are in samples.
+- Wave data is 2048-aligned.
+- XMA2 seek table: `u32 n` and `n × u32` cumulative samples at the end of each 64 KB block (the last value is the total).
+
+### 19.2. Cues: `aid_xcuelist_banjox_default` (bundle 685374)
+
+The `.data` of this asset holds the XACT project:
+
+- **Global settings** (`FSGX` at +0x20): categories and variables. Music uses the cue variables `interactive_music` and
+  `interactive_multiplier`.
+- **103 sound banks** (`KBDS` = SDBK): the table at `[+0x1C]` has `[+0x18]` entries of 16 bytes: u32 size, u32 offset,
+  u32 name, u32 hash.
+- **Wave bank names** → stream entry ids.
+- **The game's music events.** After the Music KBDS come 0xB4-byte records:
+
+  | Offset | Field |
+  |---|---|
+  | +0 | XACT cue name |
+  | +4 | event label |
+  | +8 | **hash** (what scripts and objects name) |
+  | +0x10 | → wave bank stream id and variable name |
+  | +0x28 | u8 "sets the variable" |
+  | +0x2C | f32 value of `interactive_music` |
+
+**Music sound bank (XSB).** The header fields used:
+
+| Offset | Field |
+|---|---|
+| +0x13 | simple cues |
+| +0x15 | complex cues |
+| +0x19 | cues |
+| +0x1B | wave banks |
+| +0x22 | simple cue table (5 bytes each) |
+| +0x26 | complex cue table (15 bytes each) |
+| +0x2A | cue names |
+| +0x32 | variation tables |
+| +0x3A | wave bank names (64 bytes each) |
+| +0x46 | sounds |
+
+Sounds and variation tables:
+
+- **Sound:** u8 flags, u16 category, u8 volume, u16 pitch, u8 priority, u16 size.
+  - Simple sound: u16 wave, u8 bank.
+  - Complex sound: u8 tracks, then an RPC block (u16 size including itself), then tracks (u8 volume, u32 events). An
+    event is a u32 header whose type 1 = play wave, with +8 u16 wave and +10 u8 bank.
+- **Interactive variation table:** u16 flags (low bits 3), u16 count, u16 −1, u16 variable index, then `count × (u32
+  sound, f32 min, f32 max, u32 flags)`.
+
+`Showdown_Town_Inter` picks stem *v* for `interactive_music = v`:
+
+| Value | Stem |
+|---|---|
+| 0 | Market |
+| 1 | Seaside |
+| 2 | Docks |
+| 3 | Park |
+| 4 | Posh |
+| 5 | L.O.G. |
+
+World of Sports and Terrarium use 0 = main and 1 = underwater.
+
+### 19.3. Level script commands (`aid_script_*`)
+
+The block that §9 calls the "header" is the first command, of the same `(size, op, …)` form; Test-O-Track's music
+command is the first command.
+
+| Op | Size | Meaning |
+|---|---|---|
+| 0x19 | 0x14 | play music: +8 cue hash, +0xC f32 volume |
+| 0x1A | | stop music |
+| 0x2D | 0x10 | ambience: +8 hash, +0xC f32 |
+| 0x85 | 0x3C | region → music table: +8 u32 set, then 6 × (u32 region, u32 cue hash) |
+
+- **Op 0x85 sets:**
+  - 0 = Showdown Town districts.
+  - 1 = World of Sports (the region comes from a player state).
+  - 2 = Terrarium (region 2 when the player's underwater flags are set).
+- **Handler:** 0x823CE880.
+  - 0x85 → 0x823D3C18, which stores a 76-byte table on the playing track.
+  - Each frame, 0x823D34C8 works out the region and cross-fades to the pair's cue when it changes.
+- **Region 0:** no region; pair 0 plays.
+
+Where the commands are:
+
+- **Showdown Town:** `showdowntown_{morning,midday,afternoon,night,startofgame,demo}` in the common bundle (`startofgame`
+  also in 234cec).
+  - Day: 1 Market, 2 Docks, 3 Park, 4 Posh, 5 Seaside, 6 L.O.G.
+  - Night: every region plays Park.
+  - Midday starts the table only while `gameFlag_Normal_ShowdownTown_Intro_01_AlreadyPlayingMusic` is clear, so test mode
+    no longer presets that flag.
+- **Other worlds:** `common_audio_<world>` in each Act bundle (one copy per Act) holds op 0x19, plus the 0x85
+  underwater table for World of Sports and Terrarium.
+- **Nighttime:** `<world>_act4_main` / `_actww_main` play it.
+- **Banjo's House menus:** `ui_frontend_{main,garage,credits}`.
+- **Started by objects or settings, not scripts:** challenge music and jingles (`aid_misc_*_challengesfx_*`), Klungo
+  (`scenecontrol_showdowntown_klungosarcade`), garage (`garage_pitstop`), pause (`frontendsfx`), radio
+  (`stereotracklists`), cut-scenes (`cutsceneevents`).
+
+### 19.4. Music regions (Showdown Town only)
+
+Music regions are marker **type 8** records (140 bytes) with flag 0x200:
+
+| Offset | Field |
+|---|---|
+| +0x34 | u32 flags (0x200 music; 0x280 = music + another use) |
+| +0x38 | f32 radius |
+| +0x3C | f32 10 |
+| +0x84 | u8 region 1–6 |
+
+- **The test:** the game measures distance in X/Z only (an endless upright cylinder). The first region in list order
+  that holds the player wins.
+- **Count:** 32 regions in Showdown Town. Region 1 (Market) has no volume; it plays everywhere else (the Town Square
+  start).
+- **Verified in Xenia:**
+  - Entering region #37 switches to Park.
+  - Moving #37 onto the start, or changing its number, changes the music there.
+  - Changing a region's cue in the day tables changes what plays.
+  - PCM16 written over a town stem, or over the XMA2 Nutty Acres track, is streamed and played. The test pattern was
+    found in guest memory, with counters moving while playing.
+
+## 20. Transplanting scenery between workspaces and worlds (NB Studio 1.23, 2026-10-08) [verified in Xenia]
+- An instance references its model through the background's reference list; a copied instance index means nothing in
+  another workspace (same bundle id, different content). Copying must carry the assets.
+- Rebuild path that loads: clone a town template (VMF importer templates), replace geometry per material, retarget
+  colour / mask, lightmap in the strut AO slot (UV set 2), then GpuCompactor.Compact the new model: a fresh clone keeps
+  the template's whole vertex memory (34 rig models: 15.4 MB .gpu before, 2.3 MB after).
+- Collision: a model's own aid_havok_<name> (ModelFactory "mesh", telegraph-pole clone) attached as the instance's
+  (model, havok) collision-list pair loads and collides. A SEPARATE collision asset added as a second pair to an instance
+  (aid_havok_..._coll, also a telegraph-pole clone with the triangles) HANGS the level load at "Loading..." (Xenia,
+  reproduced twice; the same paste without it loads in 30 s).
+- VMF lightmaps (aid_texture_banjox_vmf_lm_*) end in a page number: name-based material roles classify them as colour;
+  find them by name (or by the strut AO slot s2) when reading imported models.
+- Re-encoding: textures carried as decoded RGBA are DXT1 (DXT2/3 for blend colour), power-of-two; their bytes differ
+  from the source asset, so "same asset?" across workspaces needs a record of what was rebuilt (cache/transplants.json:
+  content key -> names + checksums, validated against the bundle).
+- Xenia does not enforce the console memory budget: the snowy town + rig is 206.9 MB resident (original 188.2 MB) and
+  loads; on a real 360 large pastes into a full town may not.

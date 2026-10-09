@@ -101,12 +101,13 @@ public sealed partial class SceneViewport : UserControl
         var scene = Scene;
         if (scene == null || _collFor == scene) return;
         _collFor = scene; _allColl = null;
+        var objects = scene.Objects.ToList();   // the UI thread may add objects meanwhile (sky dome, music speaker)
         _collTask = Task.Run(() =>
         {
             var sw = System.Diagnostics.Stopwatch.StartNew();
             var res = new Dictionary<SceneObject, List<(string, List<NB.Core.Havok.CollisionMesh>, Matrix4x4)>>();
             long tris = 0; int shapes = 0;
-            foreach (var o in scene.Objects)
+            foreach (var o in objects)
             {
                 if (o.Model == null) continue;
                 List<(string Asset, List<NB.Core.Havok.CollisionMesh> Meshes, Matrix4x4 Local)> parts;
@@ -119,7 +120,7 @@ public sealed partial class SceneViewport : UserControl
             return (res, $"collision of {res.Count:N0} objects ({shapes:N0} shapes, {tris:N0} triangles) decoded in {sw.Elapsed.TotalSeconds:F1} s");
         }).ContinueWith(t =>
         {
-            if (t.IsFaulted) { BeginInvoke(() => CollisionInfo?.Invoke("collision decoding failed: " + t.Exception?.GetBaseException().Message)); return; }
+            if (t.IsFaulted) { BeginInvoke(() => { if (_collFor == scene) _collFor = null; CollisionInfo?.Invoke("collision decoding failed: " + t.Exception?.GetBaseException().Message); }); return; }   // _collFor reset: showing collision again retries
             BeginInvoke(() =>
             {
                 if (Scene != scene) return;
@@ -754,7 +755,9 @@ public sealed partial class SceneViewport : UserControl
             if (_movingLines.Count > 0) _r.Lines(MovingLines(), vp, true);
             DrawSpawnFigures(vp);
             DrawCameraFigures(vp);
+            DrawMusicFigures(vp);   // SceneViewport.Music.cs
             DrawCutscenePaths(vp);
+            DrawClipCollision(vp);   // SceneViewport.Clip.cs
             DrawSelectionCollision(vp);
             if (ShowCollision) DrawCollisionSelection(vp);
             if (Selected != null) DrawGizmo(vp);
@@ -821,7 +824,7 @@ public sealed partial class SceneViewport : UserControl
             foreach (var o in Scene.Objects.Where(o => o.Visible && (o.Model == null || (o.Kind == SceneObjectKind.Marker && !_showObjects)) && (o.Kind != SceneObjectKind.Marker || ShowMarkers)))
             {
                 if (!box(o)) continue;
-                if (SpawnPoints.Is(o) || CameraPoints.Is(o)) continue;   // drawn every frame, thicker: DrawSpawnFigures / DrawCameraFigures
+                if (SpawnPoints.Is(o) || CameraPoints.Is(o) || o.IsWorldMusic) continue;   // drawn every frame, thicker: DrawSpawnFigures / DrawCameraFigures (the music speaker: its label)
                 if (o.Kind == SceneObjectKind.Marker) AddBox(lines, o, MarkerColor(o.Marker!.Type));
                 else AddCross(lines, o.Transform.Translation, 2, new Vector3(1, 0, 1));
             }
@@ -1043,6 +1046,7 @@ public sealed partial class SceneViewport : UserControl
         _r.DrawOverlay(_barOv, cr.X, cr.Y, W, H);
         DrawSpawnLabels(W, H);
         DrawCameraLabels(W, H);
+        DrawMusicLabels(W, H);
         DrawCollisionRect(W, H);
         DrawHiddenNote(W, H);
         DrawSpeedReadout(W, H);
@@ -1834,6 +1838,8 @@ public sealed partial class SceneViewport : UserControl
         using var _p = Prof.Time("Pick (objects)");
         var (best, bestT) = PickRay(p, markersOnly: false, float.MaxValue);
         if (best?.Kind != SceneObjectKind.Marker && PickNear(p, bestT) is { Obj: not null } near) return near;   // SceneViewport.Pick.cs
+        // the world-music speaker: its label as drawn (over everything), but a marker under the pixel wins (SceneViewport.Music.cs)
+        if (best?.Kind != SceneObjectKind.Marker && WorldMusicAt(p) is { } wm) return (wm, Vector3.Distance(_camPos, wm.Transform.Translation));
         if (best == null && PickableSky is { } sky) return (sky, 1e6f);
         return (best, bestT);
     }
@@ -1846,12 +1852,13 @@ public sealed partial class SceneViewport : UserControl
         foreach (var o in Scene!.Objects)
         {
             if (!o.Visible || (markersOnly && o.Kind != SceneObjectKind.Marker)) continue;
+            if (o.IsWorldMusic) continue;   // the music speaker has no 3D body: Pick takes it by its drawn label
             if (o.Kind == SceneObjectKind.Terrain && !ShowTerrain) continue;
             if (o.Kind == SceneObjectKind.Water && !WaterShown) continue;
             if (o.IsSkyDome) continue;   // the sky: only when nothing else is hit (below)
             if (o.Kind == SceneObjectKind.Scenery && !ShowScenery) continue;
             bool asModel = o.Model != null && (o.Kind != SceneObjectKind.Marker || _showObjects);   // marker objects: their mesh
-            if (o.Kind == SceneObjectKind.Marker && !asModel && !ShowMarkers) continue;
+            if (o.Kind == SceneObjectKind.Marker && !asModel && !ShowMarkers && !(o.IsMusicRegion && _showMusic)) continue;
             if (!_showCameras && CameraPoints.Is(o)) continue;
             if (!Matrix4x4.Invert(o.Transform, out var inv)) continue;
             var lo = Vector3.Transform(ro, inv); var ld = Vector3.TransformNormal(rd, inv);

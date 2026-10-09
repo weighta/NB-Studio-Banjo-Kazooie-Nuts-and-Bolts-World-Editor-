@@ -42,7 +42,41 @@ public sealed class Workspace
         ws.Manifest = JsonSerializer.Deserialize<WorkspaceManifest>(File.ReadAllText(ws.ManifestPath)) ?? throw new InvalidDataException("bad workspace.json");
         ws.Original = new GameDirectory(ws.Manifest.OriginalPath);
         ws.Game = new GameDirectory(Path.Combine(ws.Root, "game"));
+        ws.SweepTemps();
         return ws;
+    }
+
+    /// <summary>
+    /// Deletes temp files left by writes that were interrupted (NB Studio closed or killed mid-save): "&lt;file&gt;.&lt;pid&gt;-&lt;guid&gt;.tmp"
+    /// whose process is gone, and old-style "&lt;file&gt;.tmp" older than 10 minutes. Only in this workspace's game folder.
+    /// </summary>
+    void SweepTemps()
+    {
+        try
+        {
+            foreach (var dir in new[] { Path.Combine(Game.Root, "Bundle"), Path.Combine(Game.Root, "Debug") })
+            {
+                if (!Directory.Exists(dir)) continue;
+                foreach (var f in Directory.EnumerateFiles(dir, "*.tmp", SearchOption.AllDirectories))
+                {
+                    try
+                    {
+                        var stem = Path.GetFileNameWithoutExtension(f);            // e.g. "685374.1234-<guid>" or "685374"
+                        int dot = stem.LastIndexOf('.');
+                        bool stale;
+                        if (dot > 0 && stem[(dot + 1)..].Split('-') is { Length: 2 } parts && int.TryParse(parts[0], out int pid))
+                        {
+                            try { using var p = System.Diagnostics.Process.GetProcessById(pid); stale = p.HasExited; }
+                            catch (ArgumentException) { stale = true; }          // no such process
+                        }
+                        else stale = DateTime.UtcNow - File.GetLastWriteTimeUtc(f) > TimeSpan.FromMinutes(10);
+                        if (stale) File.Delete(f);
+                    }
+                    catch (Exception) { }   // in use or not ours to delete: left alone
+                }
+            }
+        }
+        catch (Exception) { }
     }
 
     /// <summary>
@@ -134,7 +168,64 @@ public sealed class Workspace
         return c;
     }
 
-    public BundleArchive LoadStream(uint bundle) => BundleArchive.Read(File.ReadAllBytes(Game.StreamPath(bundle)));
+    // ------------------------------------------------------------ stream archives (Bundle/50)
+
+    /// <summary>Two locks per stream archive. Edit: held for a whole load → change → save (<see cref="EditStream"/>,
+    /// <see cref="LockStream"/>, and inside <see cref="SaveStream"/>), so two writers (a part build on a worker, a music
+    /// Replace… on the UI thread, a sky texture replace …) can't save over each other's change. File: held while the file
+    /// is open for reading and while a save moves the new file in (an open reader makes that move fail).</summary>
+    sealed class StreamGate { public readonly object Edit = new(), File = new(); }
+    readonly System.Collections.Concurrent.ConcurrentDictionary<uint, StreamGate> _streamGates = new();
+    StreamGate Gate(uint bundle) => _streamGates.GetOrAdd(bundle & 0xFFFFFF, _ => new StreamGate());
+
+    /// <summary>Hold this while a stream file is open for reading outside <see cref="LoadStream"/> (reading one entry,
+    /// a bank header): a save waits for it before it replaces the file.</summary>
+    public object StreamFileLock(uint bundle) => Gate(bundle).File;
+
+    /// <summary>The bundle's edit lock until disposed (re-entrant, same thread): <c>using var _ = ws.LockStream(b);</c>
+    /// before a LoadStream → change → SaveStream of it makes the three one step that no other writer can split.</summary>
+    public IDisposable LockStream(uint bundle)
+    {
+        var o = Gate(bundle).Edit;
+        if (!Monitor.TryEnter(o)) { Interlocked.Increment(ref _streamLockWaits); Monitor.Enter(o); }
+        return new Unlock(o);
+    }
+
+    /// <summary>How often a stream writer had to wait for another one (diagnostics, script checks).</summary>
+    public int StreamLockWaits => _streamLockWaits;
+    int _streamLockWaits;
+
+    sealed class Unlock : IDisposable
+    {
+        object? _o;
+        public Unlock(object o) { _o = o; }
+        public void Dispose() { if (Interlocked.Exchange(ref _o, null) is { } o) Monitor.Exit(o); }
+    }
+
+    /// <summary><see cref="LockStream"/> for a working-copy file path when it is a stream archive, else null (undo
+    /// puts saved copies back through it).</summary>
+    public IDisposable? LockStreamFile(string path)
+    {
+        var dir = Path.GetDirectoryName(Path.GetFullPath(path));
+        if (dir == null || !string.Equals(dir, Path.GetFullPath(Path.Combine(Game.Root, "Bundle", "50")), StringComparison.OrdinalIgnoreCase)) return null;
+        return uint.TryParse(Path.GetFileName(path), System.Globalization.NumberStyles.HexNumber, null, out uint b) ? LockStream(b) : null;
+    }
+
+    public BundleArchive LoadStream(uint bundle)
+    {
+        byte[] raw;
+        lock (Gate(bundle).File) raw = File.ReadAllBytes(Game.StreamPath(bundle));
+        return BundleArchive.Read(raw);
+    }
+
+    /// <summary>Loads a stream archive, lets <paramref name="edit"/> change it and saves it, under the bundle's edit lock.
+    /// <paramref name="edit"/> returns the change log's description, or null when nothing changed (no save).</summary>
+    public void EditStream(uint bundle, Func<BundleArchive, string?> edit)
+    {
+        using var _ = LockStream(bundle);
+        var a = LoadStream(bundle);
+        if (edit(a) is { } description) SaveStream(bundle, a, description);
+    }
 
     /// <summary>Writes a modified resident bundle (uncompressed CAFF — the game accepts both) and logs the change.</summary>
     int _batch;
@@ -205,12 +296,27 @@ public sealed class Workspace
         Log(Path.GetRelativePath(Game.Root, path), description);
     }
 
+    /// <summary>Writes a stream archive (under its edit lock; through a temporary file of its own, moved in under the
+    /// file lock). Callers that loaded the archive themselves hold <see cref="LockStream"/> or use <see cref="EditStream"/>.</summary>
     public void SaveStream(uint bundle, BundleArchive a, string description)
     {
+        var g = Gate(bundle);
+        using var _ = LockStream(bundle);
         var path = Game.StreamPath(bundle);
         Snapshot(path);
-        File.WriteAllBytes(path + ".tmp", a.Write());
-        File.Move(path + ".tmp", path, true);
+        // a temporary name of its own: two writers (two programs on one workspace) never share one
+        var tmp = $"{path}.{Environment.ProcessId}-{Guid.NewGuid():N}.tmp";
+        try
+        {
+            File.WriteAllBytes(tmp, a.Write());
+            lock (g.File) File.Move(tmp, path, true);
+        }
+        catch (Exception)
+        {
+            // a failed write or move (a test game holding the file, a full disk) must not leave an ~800 MB .tmp behind
+            try { File.Delete(tmp); } catch (Exception) { }
+            throw;
+        }
         Log(Path.GetRelativePath(Game.Root, path), description);
     }
 
@@ -243,6 +349,7 @@ public sealed class Workspace
             // a patch applied to the workspace's game folder leaves its rollback copies and log there: not game files
             // (they made Create Patch carry ~200 MB of backups after a map mod was applied to a workspace)
             if (rel.StartsWith(PatchPackage.BackupDirName, StringComparison.OrdinalIgnoreCase) || rel.Equals(PatchPackage.LogFileName, StringComparison.OrdinalIgnoreCase)) continue;
+            if (rel.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase)) continue;   // an interrupted write's temporary file, not a game file
             var o = Path.Combine(Original.Root, rel);
             if (!File.Exists(o)) { list.Add(rel); continue; }
             var fi = new FileInfo(f); var oi = new FileInfo(o);
@@ -290,11 +397,24 @@ public sealed class Workspace
         var dst = Path.Combine(Game.Root, relative);
         var bytes = File.ReadAllBytes(h[0]);
         BeforeWrite?.Invoke(dst);
+        ReplaceFile(dst, bytes);   // never in place: dst could still be a hard link to the original game
         File.Delete(h[0]);
-        File.WriteAllBytes(dst, bytes);
         _residentCache.Clear();
         Log(relative, "restored previous version " + Path.GetFileNameWithoutExtension(h[0]));
         return Path.GetFileNameWithoutExtension(h[0]);
+    }
+
+    /// <summary>Writes a working-copy file through a temporary file of its own and moves it over the old one: a file still
+    /// hard-linked to the original game (or another workspace) is replaced, never written through.</summary>
+    static void ReplaceFile(string path, byte[] bytes)
+    {
+        var tmp = $"{path}.{Environment.ProcessId}-{Guid.NewGuid():N}.tmp";
+        try
+        {
+            File.WriteAllBytes(tmp, bytes);
+            File.Move(tmp, path, true);
+        }
+        catch (Exception) { try { File.Delete(tmp); } catch (Exception) { } throw; }
     }
 
     /// <summary>Restores one file from the original directory.</summary>
@@ -303,8 +423,9 @@ public sealed class Workspace
         var src = Path.Combine(Original.Root, relative);
         var dst = Path.Combine(Game.Root, relative);
         Snapshot(dst);
-        File.Copy(src, dst, true);
-        File.SetAttributes(dst, FileAttributes.Normal);
+        // dst may still be a hard link to the original: copying onto it in place would write through the link (and a
+        // file copied onto itself can be truncated), so the original is read into memory and moved in as a new file
+        ReplaceFile(dst, File.ReadAllBytes(src));
         if (relative.StartsWith("Bundle", StringComparison.OrdinalIgnoreCase)) _residentCache.Clear();
         Log(relative, "reverted to original");
     }

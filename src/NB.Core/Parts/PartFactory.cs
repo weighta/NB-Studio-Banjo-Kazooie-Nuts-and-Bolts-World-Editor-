@@ -325,6 +325,7 @@ public static class PartFactory
         }
         foreach (uint sb in idx.Entries.Where(x => x.Streamed && x.Name.StartsWith("aid_misc_banjox_blockset_")).Select(x => x.Bundle).Distinct())
         {
+            using var streamEdit = ws.LockStream(sb);   // Workspace.LockStream: this load → change → save is one step (other writers of the archive wait)
             var arch = ws.LoadStream(sb); bool any = false;
             var setIds = idx.Entries.Where(x => x.Streamed && x.Bundle == sb && x.Name.StartsWith("aid_misc_banjox_blockset_")).Select(x => x.Id).ToHashSet();
             foreach (var en in arch.Entries.Where(x => setIds.Contains(x.Id) && x.Kind == "caff"))
@@ -364,6 +365,7 @@ public static class PartFactory
         }
         {
             var ids = names.Skip(1).Select(n => AssetIds.IdOf(n)!.Value).ToHashSet();
+            using var streamEdit = ws.LockStream(common);   // Workspace.LockStream: this load → change → save is one step (other writers of the archive wait)
             var arch = ws.LoadStream(common);
             int n0 = arch.Entries.Count; arch.Entries.RemoveAll(e => ids.Contains(e.Id));
             if (arch.Entries.Count != n0) { ws.SaveStream(common, arch, $"part {p.Id}: streamed assets removed"); log.Add($"stream {Common}: {n0 - arch.Entries.Count} entr(ies) removed"); }
@@ -483,6 +485,7 @@ public static class PartFactory
         var log = new List<string>();
         uint tplId = AssetIds.IdOf(tplAsset) ?? throw new InvalidDataException("no id for " + tplAsset);
         uint newId = AssetIds.IdOf(newAsset) ?? throw new InvalidDataException("no id for " + newAsset);
+        using var streamEdit = ws.LockStream(bundle);   // Workspace.LockStream: this load → change → save is one step (other writers of the archive wait)
         var arch = ws.LoadStream(bundle);
         var te = arch.Entries.FirstOrDefault(e => e.Id == tplId && e.Kind == "caff");
         if (te == null) { log.Add($"stream {bundle:x6}: no entry for {tplAsset}, nothing streamed"); return log; }
@@ -511,13 +514,13 @@ public static class PartFactory
             CaffFile c;
             try { c = CaffFile.Read(File.ReadAllBytes(f)); } catch { continue; }
             if (table == null && !c.Symbols.Any(s => s.Contains("loctext_banjox_blocks"))) continue;
-            ws.Snapshot(f);
             var part = c.Parts.First(x => c.SectionOf(x).Name == ".data");
             var t = LocText.Parse(part.Data);
             ushort key = t.AddOrSet(name, text);
             part.Data = t.Write(); part.Size = part.Data.Length;
-            File.WriteAllBytes(f, c.Write());
-            ws.Log(Path.GetRelativePath(ws.Game.Root, f), $"text {name} = \"{text}\" (key {key:X4})");
+            // through a temp file + move (Workspace.SaveFile): a text file still hard-linked to the original game is
+            // replaced, never written through (writing in place changed the original game and every linked copy)
+            ws.SaveFile(f, c.Write(), $"text {name} = \"{text}\" (key {key:X4})");
             log.Add($"text {name} = \"{text}\" (key {key:X4})");
         }
     }
@@ -573,6 +576,7 @@ public static class PartFactory
         }
         foreach (var b in idx.Entries.Where(x => x.Name == set && x.Streamed).Select(x => x.Bundle).Distinct())
         {
+            using var streamEdit = ws.LockStream(b);   // Workspace.LockStream: this load → change → save is one step (other writers of the archive wait)
             var arch = ws.LoadStream(b); uint id = idx.Entries.First(x => x.Name == set).Id; bool any = false;
             foreach (var en in arch.Entries.Where(x => x.Id == id && x.Kind == "caff"))
             {

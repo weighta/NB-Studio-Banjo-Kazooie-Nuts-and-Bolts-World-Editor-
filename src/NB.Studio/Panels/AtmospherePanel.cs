@@ -1226,6 +1226,16 @@ public sealed class AtmospherePanel : UserControl
         _redoStack.Clear();
     }
 
+    /// <summary>Another editor saved bytes inside a script this tab snapshots (the music tables of the time-of-day scripts,
+    /// MainForm.Music.cs): the saved state and this tab's undo snapshots take them, so Discard or Ctrl+Z here keeps them.</summary>
+    public void NoteExternalWrite(byte[] live, int offset, int length)
+    {
+        _at?.NoteExternalWrite(live, offset, length);
+        foreach (var s in _undoStack.Concat(_redoStack))
+            foreach (var (l, copy) in s.Bytes)
+                if (ReferenceEquals(l, live) && offset >= 0 && offset + length <= copy.Length && copy.Length == live.Length) Buffer.BlockCopy(live, offset, copy, offset, length);
+    }
+
     public void Undo() => Step(_undoStack, _redoStack, "undone");
     public void Redo() => Step(_redoStack, _undoStack, "redone");
 

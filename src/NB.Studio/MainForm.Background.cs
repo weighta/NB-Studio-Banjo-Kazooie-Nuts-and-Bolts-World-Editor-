@@ -31,9 +31,20 @@ public partial class MainForm
         }
     }
 
+    System.Windows.Forms.Timer? _fgLock;
+
     protected override void OnShown(EventArgs e)
     {
-        if (QuietLaunch.Enabled) QuietLaunch.PushBehind(Handle);
+        if (QuietLaunch.Enabled)
+        {
+            QuietLaunch.PushBehind(Handle);
+            // the 3D views' GL windows (OpenTK GLControl) call SetForegroundWindow when they get the focus; that only
+            // succeeds when Windows lets anyone take the foreground (the user idle past the foreground-lock timeout), and
+            // exactly then this process may lock it: re-lock every half second (Windows lifts the lock on any user input)
+            _fgLock = new System.Windows.Forms.Timer { Interval = 500 };
+            _fgLock.Tick += (_, _) => QuietLaunch.LockForeground();
+            _fgLock.Start();
+        }
         base.OnShown(e);
     }
 

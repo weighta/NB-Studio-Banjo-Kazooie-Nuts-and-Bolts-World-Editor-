@@ -96,7 +96,7 @@ public static class QuickTest
 
         // the start-of-game script of the copy: rebuilt only when the workspace's common bundle or the target changed
         var srcCommon = new FileInfo(Path.Combine(src, commonRel));
-        string key = $"v3|{srcCommon.Length}|{srcCommon.LastWriteTimeUtc.Ticks}|{t.Script}|{FirstTimeFlags.Length}|{(KeepWorldIntros ? "intros" : "")}";
+        string key = $"v4|{srcCommon.Length}|{srcCommon.LastWriteTimeUtc.Ticks}|{t.Script}|{FirstTimeFlags.Length}|{(KeepWorldIntros ? "intros" : "")}";
         string keyFile = Path.Combine(dir, "common.key"), dstCommon = Path.Combine(dst, commonRel);
         if (File.Exists(keyFile) && File.ReadAllText(keyFile) == key && File.Exists(dstCommon) && FileLinks.LinkCount(dstCommon) == 1)
             return Path.Combine(dst, "default.xex");

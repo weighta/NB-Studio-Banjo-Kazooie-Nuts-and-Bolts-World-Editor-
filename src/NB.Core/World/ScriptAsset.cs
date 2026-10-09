@@ -68,10 +68,12 @@ public sealed class ScriptCommand
 /// <summary>Test-mode patches that shorten the path to gameplay (for testing mods in Xenia).</summary>
 public static class TestMode
 {
-    /// <summary>Showdown Town intro steps pre-set by <see cref="PresetTownIntro"/> (the town then starts at "receive game globe").</summary>
+    /// <summary>Showdown Town intro steps pre-set by <see cref="PresetTownIntro"/> (the town then starts at "receive game globe").
+    /// Not "…_Intro_01_AlreadyPlayingMusic": the town's time-of-day scripts start the district music (op 0x85) only while
+    /// it is clear, so presetting it gave test games a silent town.</summary>
     public static readonly string[] TownIntroFlags =
     {
-        "gameFlag_Normal_ShowdownTown_Intro_01_SeenAnimatedIntro", "gameFlag_Normal_ShowdownTown_Intro_01_AlreadyPlayingMusic",
+        "gameFlag_Normal_ShowdownTown_Intro_01_SeenAnimatedIntro",
         "gameFlag_Normal_ShowdownTown_Intro_02_GivenCrateToMumbo", "gameFlag_Normal_ShowdownTown_Intro_03_FlippedVehicle",
         "gameFlag_Normal_ShowdownTown_Intro_04_EnabledGetIn", "gameFlag_Normal_ShowdownTown_Intro_04_GotInVehicle",
         "gameFlag_Normal_ShowdownTown_Intro_05_FinishedDriving", "gameFlag_Normal_ShowdownTown_Intro_06_ReachedLOG",
@@ -127,6 +129,8 @@ public static class TestMode
         var part = caff.PartsOf(sym).First(p => caff.SectionOf(p).Name == ".data");
         var script = ScriptAsset.Parse(part.Data);
         var template = script.Commands.First(c => c.Op == 0x48);
+        // workspaces prepared by earlier versions preset "…_Intro_01_AlreadyPlayingMusic", which keeps the town silent
+        int dropped = script.Commands.RemoveAll(c => c.Op == 0x48 && c.Text == "gameFlag_Normal_ShowdownTown_Intro_01_AlreadyPlayingMusic");
         int go = script.Commands.FindIndex(c => c.Op == 0x86);
         int added = 0;
         foreach (var flag in TownIntroFlags)
@@ -139,10 +143,10 @@ public static class TestMode
             script.Commands.Insert(go++, new ScriptCommand { Data = d });
             added++;
         }
-        if (added == 0) return "town intro flags already preset";
+        if (added == 0 && dropped == 0) return "town intro flags already preset";
         part.Data = script.Write();
-        ws.SaveResident(CommonBundle, caff, $"TEST MODE: preset {added} Showdown Town intro flags");
-        return $"preset {added} Showdown Town intro flags";
+        ws.SaveResident(CommonBundle, caff, $"TEST MODE: preset {added} Showdown Town intro flags" + (dropped > 0 ? " (the town music flag removed)" : ""));
+        return $"preset {added} Showdown Town intro flags" + (dropped > 0 ? "; removed the old AlreadyPlayingMusic preset (the town has its music again)" : "");
     }
 
     /// <summary>

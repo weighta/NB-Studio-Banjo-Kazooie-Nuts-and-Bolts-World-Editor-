@@ -16,7 +16,9 @@ public sealed class GameDirectory
 
     public IEnumerable<uint> Bundles() =>
         Directory.Exists(Path.Combine(Root, "Bundle", "4f"))
-            ? Directory.GetFiles(Path.Combine(Root, "Bundle", "4f")).Select(f => Convert.ToUInt32(Path.GetFileName(f), 16)).OrderBy(x => x)
+            ? Directory.GetFiles(Path.Combine(Root, "Bundle", "4f"))
+                .Select(f => uint.TryParse(Path.GetFileName(f), System.Globalization.NumberStyles.HexNumber, null, out var b) ? b : (uint?)null)   // skips leftovers like 234cec.<pid>-<guid>.tmp
+                .Where(b => b != null).Select(b => b!.Value).OrderBy(x => x)
             : Enumerable.Empty<uint>();
 
     public sealed record ValidationReport(bool Ok, List<string> Errors, List<string> Info);

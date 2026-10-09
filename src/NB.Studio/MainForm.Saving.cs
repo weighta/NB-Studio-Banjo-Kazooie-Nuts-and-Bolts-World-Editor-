@@ -40,6 +40,7 @@ public sealed partial class MainForm
         if (_tags.HasUnsaved) p.Add("Tag Editor edits");
         if (_dialogue.UnsavedLines > 0) p.Add($"dialogue lines ({_dialogue.UnsavedLines})");
         if (_text.HasUnsaved) p.Add("text table");
+        if (MusicPendingCount > 0) p.Add($"music ({MusicPendingCount} track choice{(MusicPendingCount == 1 ? "" : "s")})");
         return p;
     }
 
@@ -81,6 +82,7 @@ public sealed partial class MainForm
         try { _tags.SaveNow(); } catch (Exception e) { Log("Tag Editor: saving failed: " + e.Message); }
         try { if (_dialogue.UnsavedLines > 0) _dialogue.SaveNow(); } catch (Exception e) { Log("Dialogue: saving failed: " + e.Message); }
         try { _text.SaveNow(); } catch (Exception e) { Log("Text: saving failed: " + e.Message); }
+        try { SaveMusic(); } catch (Exception e) { Log("Music: saving failed: " + e.Message); }
         var left = PendingEdits();
         Log(left.Count == 0 ? $"Saved all: {string.Join(", ", before)}." : $"Saved what could be saved; still unsaved: {string.Join(", ", left)} (see above).");
         UpdatePending();
@@ -153,6 +155,7 @@ public sealed partial class MainForm
     {
         try { if (_atmos.HasUnsaved) _atmos.Discard(); } catch (Exception) { }
         _tags.DiscardNow();
+        DiscardMusic();
         Log("Unsaved changes dropped.");
         UpdatePending();
     }

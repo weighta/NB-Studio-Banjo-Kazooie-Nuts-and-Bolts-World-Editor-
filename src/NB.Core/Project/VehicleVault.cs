@@ -62,15 +62,34 @@ public static class VehicleVault
 
     static void Store(string dir, Dictionary<string, Entry> v)
     {
+        // removed.json is what counts: an older NB Multiplayer / NB Studio clears Deleted when its storage still has the
+        // vehicle; every store marks the removed ones deleted again (for readers that only know the flag)
+        foreach (var h in Removed(dir).Keys) if (v.TryGetValue(h, out var r)) r.Deleted = true;
         Directory.CreateDirectory(dir);
         var tmp = IndexFile(dir) + "." + Environment.ProcessId + ".tmp";
         File.WriteAllText(tmp, JsonSerializer.Serialize(v, new JsonSerializerOptions { WriteIndented = true }));
         File.Move(tmp, IndexFile(dir), true);
     }
 
-    /// <summary>The vehicles of the folder that are not deleted (name, first seen), oldest first.</summary>
-    public static List<Entry> Vehicles(string dir) =>
-        Load(dir).Values.Where(e => !e.Deleted && File.Exists(Path.Combine(dir, e.Hash + ".bp"))).OrderBy(e => e.FirstSeen).ToList();
+    /// <summary>The vehicles of the folder that are not deleted nor removed (removed.json; an older NB Multiplayer may
+    /// have cleared their Deleted flag), oldest first.</summary>
+    public static List<Entry> Vehicles(string dir)
+    {
+        var removed = Removed(dir);
+        return Load(dir).Values.Where(e => !e.Deleted && !removed.ContainsKey(e.Hash) && File.Exists(Path.Combine(dir, e.Hash + ".bp"))).OrderBy(e => e.FirstSeen).ToList();
+    }
+
+    /// <summary>The part count of a vehicle of the folder (0 when unreadable).</summary>
+    public static int PartsOf(string dir, Entry e)
+    {
+        try
+        {
+            using var s = File.OpenRead(Path.Combine(dir, e.Hash + ".bp"));
+            var h = new byte[10];
+            return s.Read(h, 0, 10) == 10 ? h[8] << 8 | h[9] : 0;
+        }
+        catch (IOException) { return 0; }
+    }
 
     /// <summary>0x00000001..0x00FFFFFF are blueprint packages.</summary>
     public static bool IsBlueprint(string folder, out int index)
@@ -128,6 +147,7 @@ public static class VehicleVault
         var added = new List<string>();
         if (!Directory.Exists(contentRoot)) return added;
         var v = Load(dir);
+        var removed = Removed(dir);
         bool changed = false;
         foreach (var prof in Profiles(contentRoot))
         {
@@ -147,13 +167,15 @@ public static class VehicleVault
                     if (!LooksLikeBlueprint(bytes)) continue;
                     var hash = Hash(bytes);
                     present.Add(hash);
+                    if (removed.ContainsKey(hash)) continue;   // replaced or removed in the Vehicle Editor: stays out of the folder
                     if (!v.TryGetValue(hash, out var e))
                     {
+                        string note = DuplicateNote(dir, v, removed, bytes, ReadName(bytes));
                         e = v[hash] = new Entry { Hash = hash, FirstSeen = DateTime.Now, Name = ReadName(bytes) };
                         Directory.CreateDirectory(dir);
                         File.WriteAllBytes(Path.Combine(dir, hash + ".bp"), bytes);
                         if (File.Exists(header)) File.Copy(header, Path.Combine(dir, hash + ".header"), true);
-                        added.Add(e.Name);
+                        added.Add(e.Name + note);
                     }
                     if (e.Deleted) { e.Deleted = false; }
                     e.SeenAt[key] = idx;
@@ -175,6 +197,30 @@ public static class VehicleVault
         foreach (var e in v.Values)
             foreach (var k in e.SeenAt.Keys.Where(k => k.StartsWith(owner + "|", StringComparison.Ordinal)).ToList()) { e.SeenAt.Remove(k); changed = true; }
         if (changed) Store(dir, v);
+        var put = LoadPut(dir); bool putChanged = false;
+        foreach (var at in put.Values)
+            foreach (var k in at.Keys.Where(k => k.StartsWith(owner + "|", StringComparison.Ordinal)).ToList()) { at.Remove(k); putChanged = true; }
+        if (putChanged) StorePut(dir, put);
+    }
+
+    static string PutFile(string dir) => Path.Combine(dir, "studio_put.json");
+
+    /// <summary>Where NB Studio's <see cref="RestoreInto"/> put each vehicle (hash → storage key → package index); NB
+    /// Studio's own file (NB Multiplayer does not use it). Only these copies are taken back when a vehicle is removed: a
+    /// vehicle the player built in a test storage (Harvest saw it there) stays.</summary>
+    static Dictionary<string, Dictionary<string, int>> LoadPut(string dir)
+    {
+        try { return JsonSerializer.Deserialize<Dictionary<string, Dictionary<string, int>>>(File.ReadAllText(PutFile(dir))) ?? new(); }
+        catch (Exception) { return new(); }
+    }
+
+    static void StorePut(string dir, Dictionary<string, Dictionary<string, int>> put)
+    {
+        foreach (var h in put.Where(x => x.Value.Count == 0).Select(x => x.Key).ToList()) put.Remove(h);
+        Directory.CreateDirectory(dir);
+        var tmp = PutFile(dir) + "." + Environment.ProcessId + ".tmp";
+        File.WriteAllText(tmp, JsonSerializer.Serialize(put, new JsonSerializerOptions { WriteIndented = true }));
+        File.Move(tmp, PutFile(dir), true);
     }
 
     /// <summary>
@@ -186,21 +232,45 @@ public static class VehicleVault
         var res = new List<string>();
         var v = Load(dir);
         if (v.Count == 0) return res;
+        var removed = Removed(dir);
         string xuid = Path.GetFileName(profileDir), key = owner + "|" + xuid;
         ulong profileId = ulong.TryParse(xuid, System.Globalization.NumberStyles.HexNumber, null, out var x) ? x : 0;
         var pkgRoot = Path.Combine(profileDir, Title, SaveType);
         var hdrRoot = Path.Combine(profileDir, Title, "Headers", SaveType);
         Directory.CreateDirectory(pkgRoot); Directory.CreateDirectory(hdrRoot);
         var have = new HashSet<string>(); var used = new HashSet<int>();
+        var put = LoadPut(dir);
+        bool changedIdx = false, changedPut = false;
         foreach (var pkg in Directory.GetDirectories(pkgRoot))
         {
             if (!IsBlueprint(Path.GetFileName(pkg), out int idx)) continue;
-            used.Add(idx);
             var data = Path.Combine(pkg, Path.GetFileName(pkg)[2..]);
-            if (File.Exists(data)) have.Add(Hash(File.ReadAllBytes(data)));
+            if (File.Exists(data))
+            {
+                var h = Hash(File.ReadAllBytes(data));
+                // a vehicle this folder put into this storage (studio_put.json, at this very package index) and that was
+                // replaced / removed since: taken back out of this test storage. Vehicles built in the storage stay.
+                if (removed.ContainsKey(h) && put.TryGetValue(h, out var putAt) && putAt.TryGetValue(key, out int at) && at == idx)
+                {
+                    try
+                    {
+                        File.Delete(data);
+                        if (Directory.GetFileSystemEntries(pkg).Length == 0) Directory.Delete(pkg);
+                        var hf = Path.Combine(hdrRoot, Path.GetFileName(pkg) + ".header");
+                        if (File.Exists(hf)) File.Delete(hf);
+                        putAt.Remove(key); changedPut = true;
+                        if (v.TryGetValue(h, out var gone) && gone.SeenAt.Remove(key)) changedIdx = true;
+                        continue;
+                    }
+                    catch (IOException) { }
+                }
+                have.Add(h);
+            }
+            used.Add(idx);
         }
+        if (changedIdx) Store(dir, v);
         int next = 1;
-        foreach (var e in v.Values.Where(e => !e.Deleted && !have.Contains(e.Hash)).OrderBy(e => e.FirstSeen))
+        foreach (var e in v.Values.Where(e => !e.Deleted && !removed.ContainsKey(e.Hash) && !have.Contains(e.Hash)).OrderBy(e => e.FirstSeen))
         {
             var src = Path.Combine(dir, e.Hash + ".bp");
             if (!File.Exists(src)) continue;
@@ -211,9 +281,12 @@ public static class VehicleVault
             File.Copy(src, Path.Combine(pkgRoot, name, name[2..]), true);
             File.WriteAllBytes(Path.Combine(hdrRoot, name + ".header"), HeaderFor(dir, e, name, profileId, headerTemplate));
             e.SeenAt[key] = next; used.Add(next);
+            if (!put.TryGetValue(e.Hash, out var at)) put[e.Hash] = at = new();
+            at[key] = next; changedPut = true;
             res.Add(e.Name);
         }
         if (res.Count > 0) Store(dir, v);
+        if (changedPut) StorePut(dir, put);
         return res;
     }
 
@@ -248,6 +321,7 @@ public static class VehicleVault
     {
         var added = new List<string>(); var skipped = new List<string>(); int known = 0;
         var v = Load(dir);
+        var removed = Removed(dir);
         foreach (var f in files)
         {
             try
@@ -261,18 +335,187 @@ public static class VehicleVault
                 var bytes = pkg.Extract(entry);
                 if (bytes.Length < 8 + 0x7C) { skipped.Add(Path.GetFileName(f) + " (too small)"); continue; }
                 var hash = Hash(bytes);
-                if (v.TryGetValue(hash, out var old)) { if (old.Deleted) { old.Deleted = false; added.Add(old.Name); } else known++; continue; }
+                if (v.TryGetValue(hash, out var old))
+                {
+                    if (old.Deleted || removed.ContainsKey(hash)) { Unremove(dir, hash); removed.Remove(hash); old.Deleted = false; added.Add(old.Name); } else known++;
+                    continue;
+                }
+                string note = DuplicateNote(dir, v, removed, bytes, ReadName(bytes));
                 var e = v[hash] = new Entry { Hash = hash, FirstSeen = DateTime.Now, Name = ReadName(bytes) };
                 Directory.CreateDirectory(dir);
                 File.WriteAllBytes(Path.Combine(dir, hash + ".bp"), bytes);
                 var hdr = new byte[HeaderSize];
                 Array.Copy(raw, hdr, Math.Min(NameField, raw.Length));
                 File.WriteAllBytes(Path.Combine(dir, hash + ".header"), hdr);
-                added.Add(e.Name);
+                added.Add(e.Name + note);
             }
             catch (Exception x) { skipped.Add($"{Path.GetFileName(f)} ({x.Message})"); }
         }
         if (added.Count > 0) Store(dir, v);
         return (added, known, skipped);
+    }
+
+    // ------------------------------------------------------------------ duplicates, names, replace / remove (Vehicle Editor)
+
+    /// <summary>
+    /// What makes two vehicle files the same vehicle: their part records (cell, orientation, part, paint, settings,
+    /// buttons — 0x24 bytes each), in any order. The header is left out: the name, the stat bars, the weight, the button
+    /// part types and the "named by the player" flag change when the game or NB Studio saves the same vehicle again.
+    /// </summary>
+    public static string PartsKey(byte[] file)
+    {
+        int start = file.Length >= 8 + 0x7C && file[0] == 0x3F && file[1] == 0x9A ? 8 : 0;   // content files: f32 1.21, f32 3.32 prefix
+        int first = start + 0x7C;
+        if (file.Length < first) return Hash(file);
+        int n = (file.Length - first) / 0x24;
+        var recs = Enumerable.Range(0, n).Select(i => Convert.ToHexString(file, first + i * 0x24, 0x24)).OrderBy(x => x, StringComparer.Ordinal);
+        return Convert.ToHexString(SHA256.HashData(Encoding.ASCII.GetBytes(string.Concat(recs)))).ToLowerInvariant();
+    }
+
+    /// <summary>A vehicle of the folder like the one being saved: the same parts (<see cref="PartsKey"/>, whatever the name)
+    /// and / or the same name (letter case ignored).</summary>
+    public sealed record Match(Entry Entry, bool SameParts, bool SameName, bool SameBytes);
+
+    /// <summary>The vehicles of the folder (not deleted) with the same parts or the same name as <paramref name="file"/>.</summary>
+    public static List<Match> Similar(string dir, byte[] file, string name)
+    {
+        var res = new List<Match>();
+        string key = PartsKey(file), hash = Hash(file);
+        foreach (var e in Vehicles(dir))
+        {
+            bool sameName = string.Equals(e.Name.Trim(), name.Trim(), StringComparison.OrdinalIgnoreCase);
+            bool sameParts = false;
+            try { sameParts = PartsKey(File.ReadAllBytes(Path.Combine(dir, e.Hash + ".bp"))) == key; } catch (IOException) { }
+            if (sameName || sameParts) res.Add(new Match(e, sameParts, sameName, e.Hash == hash));
+        }
+        return res;
+    }
+
+    /// <summary>The first free name like <paramref name="name"/> among the folder's vehicles (leaving out
+    /// <paramref name="except"/>, vehicles about to be replaced): "Racer" → "Racer 2", "Racer 3", … A copy of "Racer 2" is
+    /// "Racer 3" (when "Racer" is there too), but "Apollo 13" keeps its number: "Apollo 13 2". Cut so it stays within
+    /// <paramref name="maxChars"/>.</summary>
+    public static string FreeName(string dir, string name, int maxChars = NB.Core.Vehicles.Blueprint.MaxNameChars, IEnumerable<string>? except = null)
+    {
+        var skip = except?.ToHashSet() ?? new HashSet<string>();
+        var used = Vehicles(dir).Where(e => !skip.Contains(e.Hash)).Select(e => e.Name.Trim()).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (!used.Contains(name.Trim())) return name;
+        var bare = name.Trim();
+        // only a small number after a name that is there itself is a copy number
+        var m = System.Text.RegularExpressions.Regex.Match(bare, @"^(.*\S) (\d{1,2})$");
+        if (m.Success && int.Parse(m.Groups[2].Value) is >= 2 and <= 20 && used.Contains(m.Groups[1].Value)) bare = m.Groups[1].Value;
+        for (int k = 2; k < 1000; k++)
+        {
+            var tail = " " + k;
+            var n = (bare.Length + tail.Length > maxChars ? bare[..(maxChars - tail.Length)].TrimEnd() : bare) + tail;
+            if (!used.Contains(n)) return n;
+        }
+        return name;
+    }
+
+    static string RemovedFile(string dir) => Path.Combine(dir, "removed.json");
+
+    /// <summary>
+    /// Vehicles replaced or removed in the Vehicle Editor (removed.json: hash → why). Unlike "deleted in the game" they are
+    /// not brought back when a test storage or NB Multiplayer still holds a copy: Harvest skips them, <see cref="Vehicles"/>
+    /// does not list them, RestoreInto does not put them into a storage and takes back the copies it put there itself
+    /// (studio_put.json). NB Multiplayer reads the same file. <see cref="Restore"/> brings them back.
+    /// </summary>
+    public static Dictionary<string, string> Removed(string dir)
+    {
+        try { return JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(RemovedFile(dir))) ?? new(); }
+        catch (Exception) { return new(); }
+    }
+
+    static void StoreRemoved(string dir, Dictionary<string, string> r)
+    {
+        Directory.CreateDirectory(dir);
+        var tmp = RemovedFile(dir) + "." + Environment.ProcessId + ".tmp";
+        File.WriteAllText(tmp, JsonSerializer.Serialize(r, new JsonSerializerOptions { WriteIndented = true }));
+        File.Move(tmp, RemovedFile(dir), true);
+    }
+
+    /// <summary>Takes vehicles out of the folder on purpose (Replace, Remove, Remove duplicates): listed in removed.json
+    /// with <paramref name="why"/> (written first: it is what counts) and marked deleted. Their files stay;
+    /// <see cref="Restore"/> brings them back.</summary>
+    public static void Remove(string dir, IEnumerable<string> hashes, string why)
+    {
+        var r = Removed(dir);
+        foreach (var h in hashes) r[h] = $"{why} ({DateTime.Now:yyyy-MM-dd HH:mm})";
+        StoreRemoved(dir, r);
+        Store(dir, Load(dir));   // marks them deleted
+    }
+
+    /// <summary>Removed vehicles (removed.json) whose files are still in the folder, with why and when; newest first.</summary>
+    public static List<(Entry Entry, string Why)> RemovedVehicles(string dir)
+    {
+        var v = Load(dir); var res = new List<(Entry, string)>();
+        foreach (var (h, why) in Removed(dir))
+        {
+            var f = Path.Combine(dir, h + ".bp");
+            if (!File.Exists(f)) continue;
+            if (!v.TryGetValue(h, out var e))
+            {
+                string name = "";
+                try { name = ReadName(File.ReadAllBytes(f)); } catch (IOException) { }
+                e = new Entry { Hash = h, Name = name, FirstSeen = File.GetLastWriteTime(f) };
+            }
+            res.Add((e, why));
+        }
+        return res.OrderByDescending(x => x.Item1.FirstSeen).ToList();
+    }
+
+    /// <summary>Puts removed vehicles back: off removed.json, not deleted; the next test (and NB Multiplayer) gets them again.</summary>
+    public static void Restore(string dir, IEnumerable<string> hashes)
+    {
+        var list = hashes.ToList();
+        var r = Removed(dir);
+        foreach (var h in list) r.Remove(h);
+        StoreRemoved(dir, r);
+        var v = Load(dir);
+        foreach (var h in list)
+            if (v.TryGetValue(h, out var e)) e.Deleted = false;
+            else if (File.Exists(Path.Combine(dir, h + ".bp")))
+            {
+                string name = "";
+                try { name = ReadName(File.ReadAllBytes(Path.Combine(dir, h + ".bp"))); } catch (IOException) { }
+                v[h] = new Entry { Hash = h, Name = name, FirstSeen = DateTime.Now };
+            }
+        Store(dir, v);
+    }
+
+    /// <summary>A removed vehicle saved or imported again on purpose: no longer kept out.</summary>
+    public static void Unremove(string dir, string hash)
+    {
+        var r = Removed(dir);
+        if (r.Remove(hash)) StoreRemoved(dir, r);
+    }
+
+    /// <summary>The folder's exact duplicates: groups of vehicles with the same parts (2 or more), newest first.</summary>
+    public static List<List<Entry>> Duplicates(string dir)
+    {
+        var keyed = new List<(string Key, Entry E)>();
+        foreach (var e in Vehicles(dir))
+            try { keyed.Add((PartsKey(File.ReadAllBytes(Path.Combine(dir, e.Hash + ".bp"))), e)); } catch (IOException) { }
+        return keyed.GroupBy(x => x.Key).Where(g => g.Count() > 1).Select(g => g.Select(x => x.E).OrderByDescending(e => e.FirstSeen).ToList()).ToList();
+    }
+
+    /// <summary>" (same vehicle as 'X' …)" / " (a vehicle named 'X' …)" for a vehicle arriving in the folder (logs).</summary>
+    static string DuplicateNote(string dir, Dictionary<string, Entry> v, Dictionary<string, string> removed, byte[] bytes, string name)
+    {
+        try
+        {
+            string key = PartsKey(bytes);
+            foreach (var e in v.Values.Where(e => !e.Deleted && !removed.ContainsKey(e.Hash)))
+            {
+                var f = Path.Combine(dir, e.Hash + ".bp");
+                if (File.Exists(f) && PartsKey(File.ReadAllBytes(f)) == key)
+                    return $" (the same vehicle as '{e.Name}' already in the vehicle saves: Vehicle Editor › Save As › My Vehicle Saves can remove duplicates)";
+            }
+            var same = v.Values.FirstOrDefault(e => !e.Deleted && !removed.ContainsKey(e.Hash) && string.Equals(e.Name.Trim(), name.Trim(), StringComparison.OrdinalIgnoreCase));
+            if (same != null) return $" (another vehicle named '{same.Name}' is in the vehicle saves too)";
+        }
+        catch (IOException) { }
+        return "";
     }
 }

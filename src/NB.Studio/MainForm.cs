@@ -106,7 +106,7 @@ public sealed partial class MainForm : Form
         _center.TabPages.AddRange(new[] { c3d, cPrev, cAtmos, cText, cAudio, cVideo, cParts, cVehicles });
         _center.SelectedIndexChanged += (_, _) => { if (_center.SelectedTab == cAtmos) ApplyAtmosphere(); };
 
-        var rProps = new TabPage("Properties"); rProps.Controls.Add(_transform);
+        var rProps = new TabPage("Properties"); rProps.Controls.Add(_transform); rProps.Controls.Add(_musicPanel);   // music: MainForm.Music.cs
         var rTags = new TabPage("Tag Editor"); rTags.Controls.Add(_tags);
         var rLive = new TabPage("Live (game)"); rLive.Controls.Add(_live);
         var rDlg = _dialogueTab = new TabPage("Dialogue"); rDlg.Controls.Add(_dialogue);
@@ -184,6 +184,7 @@ public sealed partial class MainForm : Form
             _view.Refresh3D(); UpdateTitle();
         };
         _transform.InfoFor = o => CollisionInfo(o) ?? (o.Kind == SceneObjectKind.CutsceneKey ? $"CUT-SCENE CAMERA: {CameraPoints.Detail(o)}\nFrame {o.CutsceneFrame} of {o.Cutscene?.Frames}; rotation X = pitch (down), Y = yaw, Z = roll.\n{(o.Dirty ? "Modified (not yet saved)" : "Unmodified")}" : null);
+        InitMusic();   // MainForm.Music.cs (wraps InfoFor)
         InitCollisionEditing();
         _transform.LinkChanged += (o, before) => { _history.PushLink(o, before, o.Marker!.Link); _view.Refresh3D(); UpdateTitle(); Log($"{o.Name}: next path node {before} -> {o.Marker!.Link} (World > Save to write it)"); };
         _history.Limit = _settings.UndoSteps;
@@ -261,9 +262,14 @@ public sealed partial class MainForm : Form
         };
         FormClosing += (_, e) =>
         {
+            // a music replacement still being prepared: dropped (asked only when the user closes; never on shutdown)
+            HoldMusic(true);   // a preparation finishing during the questions below is not written meanwhile
+            if (!ConfirmDropMusicReplace("Close NB Studio", e.CloseReason == CloseReason.UserClosing)) { e.Cancel = true; HoldMusic(false); return; }
             // Save / Don't save / Cancel for everything unsaved (test runs end without questions unless --prompts on)
-            if (!AskSavePending("quitting")) e.Cancel = true;
-            else RememberCamera();
+            if (!AskSavePending("quitting")) { e.Cancel = true; HoldMusic(false); return; }
+            CancelMusicReplace("NB Studio is closing");   // MainForm.Music.cs
+            HoldMusic(false);   // a held write now sees the cancellation: nothing is written
+            RememberCamera();
         };
     }
 
@@ -433,11 +439,15 @@ public sealed partial class MainForm : Form
         var redoItem = new ToolStripMenuItem("&Redo", null, async (_, _) => await Redo()) { ShortcutKeyDisplayString = "Ctrl+Y" };
         var histItem = new ToolStripMenuItem("(no changes yet)") { Enabled = false };
         var cutItem = new ToolStripMenuItem("Cu&t Object (lift; Ctrl+V puts it down)", null, (_, _) => LiftSelection()) { ShortcutKeyDisplayString = "Ctrl+X" };
-        var copyItem = new ToolStripMenuItem("&Copy Object", null, (_, _) => CopySelection()) { ShortcutKeyDisplayString = "Ctrl+C" };
+        var copyItem = new ToolStripMenuItem("&Copy Object (with its collision)", null, (_, _) => CopySelection()) { ShortcutKeyDisplayString = "Ctrl+C",
+            ToolTipText = "Copies the selected scenery with its collision (its model's own; pieces of an imported Source map take the level's collision inside their box, highlighted). Pastes in this world, another world or another workspace." };
+        var copyMeshItem = new ToolStripMenuItem("Copy &Mesh Only", null, (_, _) => CopySelection(meshOnly: true)) { ShortcutKeyDisplayString = "Ctrl+Shift+C" };
+        var copyLevelItem = new ToolStripMenuItem("Copy With &Level Collision", null, (_, _) => CopySelection(levelCollision: true)) {
+            ToolTipText = "Also for game models without collision of their own: takes the level's collision inside each object's box (Source map pieces get it with Ctrl+C). Pasted into another world or workspace, one copy is rebuilt to carry it." };
         var pasteItem = new ToolStripMenuItem("&Paste Object", null, async (_, _) => { if (_lifted.Count > 0) PlaceLifted(); else await PasteClipboard(); }) { ShortcutKeyDisplayString = "Ctrl+V",
             ToolTipText = "Pastes a copy where the mouse points in the 3D view (on the ground or an object), keeping its rotation and size. From this menu: at the centre of the view." };
         var delItem = new ToolStripMenuItem("&Delete Object", null, async (_, _) => await DeleteSelection()) { ShortcutKeyDisplayString = "Del" };
-        edit.DropDownItems.AddRange(new ToolStripItem[] { undoItem, redoItem, histItem, new ToolStripSeparator(), cutItem, copyItem, pasteItem, delItem, new ToolStripSeparator() });
+        edit.DropDownItems.AddRange(new ToolStripItem[] { undoItem, redoItem, histItem, new ToolStripSeparator(), cutItem, copyItem, copyMeshItem, copyLevelItem, pasteItem, delItem, new ToolStripSeparator() });
         edit.DropDownOpening += (_, _) =>
         {
             undoItem.Text = _history.UndoLabel is { } u ? "&Undo " + MenuText(u) : "&Undo";
@@ -446,7 +456,7 @@ public sealed partial class MainForm : Form
             histItem.Text = _history.Count == 0 ? "(no changes to undo yet)" : $"{_history.Count} step(s) can be undone (File > Settings: up to {_history.Limit})";
             var sel = _view.Selected;
             bool can = sel?.Kind == SceneObjectKind.Scenery && sel.Instance != null;
-            copyItem.Enabled = delItem.Enabled = can;
+            copyItem.Enabled = copyMeshItem.Enabled = copyLevelItem.Enabled = delItem.Enabled = can;
             cutItem.Enabled = sel != null && Liftable(sel);   // any object but the terrain: lifted, put down with Ctrl+V
             pasteItem.Enabled = (_clip.Count > 0 || _lifted.Count > 0) && _scene != null;
             pasteItem.Text = _lifted.Count > 0 ? "&Put " + MenuText(_lifted[0].Name) + " Down (where the mouse points)" : _clip.Count > 0 ? "&Paste " + MenuText(_clip[0].Name) : "&Paste Object";
@@ -617,7 +627,7 @@ public sealed partial class MainForm : Form
         };
         var help = new ToolStripMenuItem("&Help");
         help.DropDownItems.Add("Controls", null, (_, _) => MessageBox.Show(this,
-            "3D view:\n  Right-drag: look    WASD / Q E or the arrow keys: fly (Shift = fast; S always flies backwards)\n  Wheel: dolly    Middle-drag: pan    Left-click: select    Ctrl / Shift + click: add or remove    B or Ctrl+drag: rectangle    Ctrl+A: all shown    F: focus    Esc: deselect\n  H: hide the selection (this session only)    U or Alt+H: show everything again\n  View modes: the bar in the top-right corner (Wire, Solid, Texture, Render) or Shift+Z. Render uses the level's light setup (click the light line to switch).\n\nTransforms (Blender style), with an object selected:\n  G move on the camera plane, R rotate, T scale; then X / Y / Z constrain to that world axis (drawn as a line in the axis colour;\n  press again for the object's own axis, again for free). Type a value (e.g. G Z 5 Enter); Ctrl snaps.\n  Left click / Enter confirms (one undo step, also for several selected objects), right click / Esc cancels.\n  1 / 2 / 3: move / rotate / scale gizmo; drag the selection with the left button (ground plane), or drag an axis handle\n  (or hold X, Y or Z) to constrain to that axis.\n  Right-click an object for its context menu.\n\nEdits are held in memory until you save them: Ctrl+S (World > Save All Changes) saves everything unsaved at once (Help > What Is Saved When).\nCtrl+Z / Ctrl+Y undo and redo any change, including imports, duplicates, deletes and saved tag or atmosphere edits (File > Settings: number of steps).\nCtrl+X lifts the selected objects (actors and other markers too), Ctrl+V puts them down where the mouse points, Esc puts them back. Ctrl+C / Ctrl+V paste copies of scenery; Del deletes scenery (all undoable).\nEdit Collision (toolbar): click / drag to select collision, G / R / T to move it, Del, Ctrl+C / X / V / D, right-click for boxes, ramps and planes.\nF5 plays the open world in Xenia (no title screen or menus), Shift+F5 starts at the 3D view's camera, Ctrl+F5 starts at the title screen.", "Controls"));
+            "3D view:\n  Right-drag: look    WASD / Q E or the arrow keys: fly (Shift = fast; S always flies backwards)\n  Wheel: dolly    Middle-drag: pan    Left-click: select    Ctrl / Shift + click: add or remove    B or Ctrl+drag: rectangle    Ctrl+A: all shown    F: focus    Esc: deselect\n  H: hide the selection (this session only)    U or Alt+H: show everything again\n  View modes: the bar in the top-right corner (Wire, Solid, Texture, Render) or Shift+Z. Render uses the level's light setup (click the light line to switch).\n\nTransforms (Blender style), with an object selected:\n  G move on the camera plane, R rotate, T scale; then X / Y / Z constrain to that world axis (drawn as a line in the axis colour;\n  press again for the object's own axis, again for free). Type a value (e.g. G Z 5 Enter); Ctrl snaps.\n  Left click / Enter confirms (one undo step, also for several selected objects), right click / Esc cancels.\n  1 / 2 / 3: move / rotate / scale gizmo; drag the selection with the left button (ground plane), or drag an axis handle\n  (or hold X, Y or Z) to constrain to that axis.\n  Right-click an object for its context menu.\n\nEdits are held in memory until you save them: Ctrl+S (World > Save All Changes) saves everything unsaved at once (Help > What Is Saved When).\nCtrl+Z / Ctrl+Y undo and redo any change, including imports, duplicates, deletes and saved tag or atmosphere edits (File > Settings: number of steps).\nCtrl+X lifts the selected objects (actors and other markers too), Ctrl+V puts them down where the mouse points, Esc puts them back. Ctrl+C copies scenery with its collision (Ctrl+Shift+C: the mesh only), Ctrl+V pastes copies where the mouse points, also in another world or workspace; Del deletes scenery (all undoable).\nEdit Collision (toolbar): click / drag to select collision, G / R / T to move it, Del, Ctrl+C / X / V / D, right-click for boxes, ramps and planes.\nF5 plays the open world in Xenia (no title screen or menus), Shift+F5 starts at the 3D view's camera, Ctrl+F5 starts at the title screen.", "Controls"));
         help.DropDownItems.Add("What Is Saved When", null, (_, _) => MessageBox.Show(this, SavingHelp, "What is saved when"));
         help.DropDownItems.Add("Take the Tour (for beginners)", null, (_, _) => StartTour());
         help.DropDownItems.Add("File Format Notes (docs)", null, (_, _) => OpenDocs());
@@ -809,17 +819,23 @@ public sealed partial class MainForm : Form
         await OpenWorld(_sceneEntry, _sceneAct);
     }
 
-    async Task CloseWorkspace()
+    async Task CloseWorkspace(string? switchingTo = null)
     {
         if (_ws == null) { Log("No workspace is open."); return; }
+        if (PasteRunning("Close Workspace")) return;   // MainForm.Transplant.cs
         if (_busy) { Log("Close Workspace: NB Studio is busy, try again in a moment."); return; }
+        HoldMusic(true);   // a preparation finishing during the questions below is not written meanwhile
+        if (!ConfirmDropMusicReplace("Close the workspace", true)) { HoldMusic(false); return; }
         _view.CancelTransform();
-        if (!AskSavePending("closing the workspace")) return;   // Save / Don't save / Cancel
+        if (!AskSavePending("closing the workspace")) { HoldMusic(false); return; }   // Save / Don't save / Cancel
+        CancelMusicReplace("the workspace is closing");   // MainForm.Music.cs
+        HoldMusic(false);   // a held write now sees the cancellation: nothing is written
         if (_qtProcess is { HasExited: false } qt)
         {
             if (_scripted || MessageBox.Show(this, "The test game NB Studio started for this workspace is still running. Close it too?", "Close Workspace", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
             { _qtCts?.Cancel(); await CloseTestGame(qt); }
         }
+        if (switchingTo != null) ShowOpening(switchingTo);   // File > Open Recent: "Opening …" instead of the start page (MainForm.Opening.cs)
         var root = _ws.Root;
         _view.CollisionMode = false;
         _soups.Clear(); _soupWhy.Clear(); _soupMesh.Clear(); _collSel.Clear(); _collAt.Clear(); _collProxy = null; _collClip = null;
@@ -832,11 +848,11 @@ public sealed partial class MainForm : Form
         try { _atmos.SetWorkspace(null, null); } catch (Exception) { }
         _texLib?.Close();
         _history.Attach(null);
-        _ws = null; _index = null; _clip.Clear();
+        _ws = null; _index = null;   // the clipboard stays: it pastes into the next workspace too (MainForm.Transplant.cs)
         _status.Text = "";
         _start.SetLastWorkspace(root);
         _start.SetStatus("");
-        _start.Visible = true; _start.BringToFront();
+        if (switchingTo == null) { _start.Visible = true; _start.BringToFront(); }
         UpdateTitle(); UpdateUndoUi();
         Log($"Workspace {Path.GetFileName(root.TrimEnd('\\', '/'))} closed.");
     }
@@ -891,9 +907,10 @@ public sealed partial class MainForm : Form
         if (_ws != null)
         {
             if (string.Equals(Path.GetFullPath(_ws.Root).TrimEnd('\\', '/'), Path.GetFullPath(root).TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase)) { Log("That workspace is already open."); return; }
-            await CloseWorkspace();
-            if (_ws != null) return;   // cancelled
+            await CloseWorkspace(Path.GetFileName(root.TrimEnd('\\', '/')));
+            if (_ws != null) { HideOpening(); return; }   // cancelled
         }
+        else ShowOpening(Path.GetFileName(root.TrimEnd('\\', '/')));
         try
         {
             _start.SetStatus($"Opening {Path.GetFileName(root.TrimEnd('\\', '/'))}…"); Application.DoEvents();
@@ -906,7 +923,7 @@ public sealed partial class MainForm : Form
             UpdateTitle();
             _start.Visible = false;
             if (_settings.TourPending) { _settings.TourPending = false; _settings.Save(); StartTour(); }
-            else if (!_scripted && !await OpenLastWorld() && previousWorld != null)
+            else if ((!_scripted || _scriptLastWorld) && !await OpenLastWorld() && previousWorld != null)
             {
                 var item = _worlds.Items.OfType<WorldItem>().FirstOrDefault(i => WorldKey(i.Entry, i.Act) == previousWorld);
                 if (item != null)
@@ -917,7 +934,8 @@ public sealed partial class MainForm : Form
                 }
             }
         }
-        catch (Exception e) { _start.SetStatus(""); Error("Opening workspace failed", e); }
+        catch (Exception e) { _start.SetStatus(""); if (_ws == null) { _start.Visible = true; _start.BringToFront(); } Error("Opening workspace failed", e); }
+        finally { HideOpening(); }   // the new world is shown (or the workspace has none open yet)
     }
 
     async Task LoadIndex(bool rebuild)
@@ -978,6 +996,7 @@ public sealed partial class MainForm : Form
     async Task ImportVmf(string? file, NB.Core.SourceEngine.VmfImportOptions? script)
     {
         if (_ws == null || _index == null) { MessageBox.Show(this, "Open a workspace first.", "Import Source Map"); return; }
+        if (PasteRunning("Import Source Map")) return;
         var ws = _ws; var idx = _index;
         var o = script;
         if (o == null)
@@ -1015,7 +1034,7 @@ public sealed partial class MainForm : Form
     /// <summary>Runs a scene file (NB.Core.World.SceneBuilder, docs/SCENE_FORMAT.md) into the workspace, then reopens the world.</summary>
     async Task BuildScene(string? path)
     {
-        if (_ws == null || _index == null) return;
+        if (_ws == null || _index == null || PasteRunning("Build Scene")) return;
         if (path == null)
         {
             using var d = new OpenFileDialog { Filter = "Scene (*.json)|*.json", Title = "Scene file to build into the workspace" };
@@ -1215,6 +1234,7 @@ public sealed partial class MainForm : Form
     bool CanAddOrRemove(SceneObject? o, string what)
     {
         if (_ws == null || _scene == null || _sceneEntry == null) return false;
+        if (PasteRunning(what)) return false;
         if (_busy || _undoing) { Log($"{what}: NB Studio is busy (loading or saving), try again in a moment."); return false; }
         if (o != null && (o.Kind != SceneObjectKind.Scenery || o.Instance == null))
         {
@@ -1291,7 +1311,7 @@ public sealed partial class MainForm : Form
     sealed record ClipItem(uint Bundle, int Instance, string Name, string ModelName, Matrix4x4 Transform, Vector3 BoundsMin, Vector3 BoundsMax);
     readonly List<ClipItem> _clip = new();
 
-    bool CopySelection()
+    bool CopySelection(bool meshOnly = false, bool levelCollision = false)
     {
         var sel = _view.SelectedObjects;
         if (sel.Count == 0 || _scene == null) { Log("Copy: select an object first (click it in the 3D view)."); return false; }
@@ -1299,7 +1319,8 @@ public sealed partial class MainForm : Form
         if (list.Count == 0) { CanAddOrRemove(sel[0], "Copy"); return false; }
         _clip.Clear();
         foreach (var o in list) _clip.Add(new ClipItem(_scene.Bundle, o.Instance!.Index, o.Name, o.ModelName, o.Transform, o.BoundsMin, o.BoundsMax));
-        Log($"Copied {(list.Count == 1 ? list[0].Name : $"{list.Count} objects")}{(sel.Count > list.Count ? $" ({sel.Count - list.Count} marker(s) / terrain not copied)" : "")}. Ctrl+V pastes where the mouse points in the 3D view (again for more copies).");
+        Log($"Copied {(list.Count == 1 ? list[0].Name : $"{list.Count} objects")}{(meshOnly ? " (mesh only)" : "")}{(sel.Count > list.Count ? $" ({sel.Count - list.Count} marker(s) / terrain not copied)" : "")}. Ctrl+V pastes where the mouse points in the 3D view (again for more copies), also in another workspace or world.");
+        PrepareClip(list, meshOnly, levelCollision);   // package for other workspaces / worlds + collision (MainForm.Transplant.cs)
         return true;
     }
 
@@ -1318,15 +1339,26 @@ public sealed partial class MainForm : Form
         if (_clip.Count == 0) { Log("Paste: nothing copied yet (select an object and press Ctrl+C)."); return null; }
         if (_scene == null || _sceneEntry == null) return null;
         var c = _clip[0];
-        if (c.Bundle != _scene.Bundle) { Log($"Paste: {c.Name} was copied in another world ({c.Bundle:x6}); it can only be pasted into that world."); return null; }
+        if (c.Bundle != _scene.Bundle && _clipPkg == null) { Log($"Paste: {c.Name} was copied in another world ({c.Bundle:x6}); it can only be pasted into that world."); return null; }
         if (!CanAddOrRemove(null, "Paste")) return null;
-        float size = (c.BoundsMax - c.BoundsMin).Length();
+        // several objects: their joint box stands on the surface, centred under the mouse (one object: its origin there)
+        var gmn = new Vector3(float.MaxValue); var gmx = new Vector3(float.MinValue);
+        foreach (var x in _clip)
+            for (int k = 0; k < 8; k++)
+            {
+                var w = Vector3.Transform(new Vector3((k & 1) != 0 ? x.BoundsMax.X : x.BoundsMin.X, (k & 2) != 0 ? x.BoundsMax.Y : x.BoundsMin.Y, (k & 4) != 0 ? x.BoundsMax.Z : x.BoundsMin.Z), x.Transform);
+                gmn = Vector3.Min(gmn, w); gmx = Vector3.Max(gmx, w);
+            }
+        float size = _clip.Count > 1 && gmn.X <= gmx.X ? (gmx - gmn).Length() : (c.BoundsMax - c.BoundsMin).Length();
         var (p, hit, mouse) = _view.SurfaceAt(at, Math.Clamp(size * 2, 10, 200));
-        var first = SceneViewport.PlaceOn(c.Transform, c.BoundsMin, c.BoundsMax, p);
-        var shift = first.Translation - c.Transform.Translation;
+        Vector3 shift;
+        if (_clip.Count > 1 && gmn.X <= gmx.X) shift = p - new Vector3((gmn.X + gmx.X) / 2, gmn.Y, (gmn.Z + gmx.Z) / 2);
+        else shift = SceneViewport.PlaceOn(c.Transform, c.BoundsMin, c.BoundsMax, p).Translation - c.Transform.Translation;
         Log($"Paste {(_clip.Count == 1 ? c.Name : $"{_clip.Count} objects")} " + (hit != null ? $"on {hit.Name}{(mouse || at != null ? " under the mouse" : " at the centre of the view")}" : "in front of the camera (nothing under the mouse)"));
+        if (PasteNeedsTransplant() && await PasteTransplant(shift) is { } pasted) return pasted.FirstOrDefault();   // another workspace / world, or with collision (MainForm.Transplant.cs)
+        NotePlainPaste();
         var items = _clip.Select(x => { var w = x.Transform; w.Translation += shift; return (x.Instance, x.Name, w); }).ToList();
-        var copies = await AddCopies(items, "pasted");
+        var copies = await AddCopies(items, "pasted", meshOnly: _clipMeshOnly);
         return copies.FirstOrDefault();
     }
 
@@ -1339,7 +1371,7 @@ public sealed partial class MainForm : Form
     }
 
     /// <summary>Adds copies of scenery instances (one world-bundle write = one undo step, one reload); the copies are selected.</summary>
-    async Task<List<SceneObject>> AddCopies(IReadOnlyList<(int Src, string Name, Matrix4x4 World)> items, string verb)
+    async Task<List<SceneObject>> AddCopies(IReadOnlyList<(int Src, string Name, Matrix4x4 World)> items, string verb, bool meshOnly = false)
     {
         var res = new List<SceneObject>();
         if (items.Count == 0 || !CanAddOrRemove(null, "Paste")) return res;
@@ -1352,6 +1384,8 @@ public sealed partial class MainForm : Form
                 int ni = NB.Core.World.InstanceEditor.DuplicateMany(_scene!.Caff, _scene.Background.View.Symbol, g.Key, g.Select(x => x.World).ToList());
                 made.AddRange(Enumerable.Range(ni, g.Count()));
             }
+            if (meshOnly)   // Copy Mesh Only: the duplicates keep no collision (DuplicateMany copies the source's list)
+                foreach (int i in made) NB.Core.World.InstanceEditor.SetCollisionList(_scene!.Caff, _scene.Background.View.Name, i, Array.Empty<(uint, uint)>());
             string what = items.Count == 1 ? $"{items[0].Name} as instance {made[0]} at {Fmt(items[0].World.Translation)}" : $"{items.Count} objects ({string.Join(", ", items.Take(4).Select(x => x.Name))}{(items.Count > 4 ? ", …" : "")}) as instances {made.Min()}..{made.Max()}";
             _ws!.SaveResident(_scene!.Bundle, _scene.Caff, $"{verb} {what}");
             Log($"{Cap(verb)} {what} (Ctrl+Z removes {(items.Count == 1 ? "it" : "them")}). Reloading world…");
@@ -1421,6 +1455,9 @@ public sealed partial class MainForm : Form
             case Keys.Control | Keys.C:
                 if (typing || (tb != null && tb.SelectionLength > 0) || !SceneKeysActive(f)) return false;   // e.g. copying log text
                 CopySelection(); return true;
+            case Keys.Control | Keys.Shift | Keys.C:
+                if (typing || !SceneKeysActive(f)) return false;
+                CopySelection(meshOnly: true); return true;
             case Keys.Control | Keys.X:
                 if (typing || !SceneKeysActive(f)) return false;
                 LiftSelection(); return true;   // lift: Ctrl+V puts it down where the mouse points (MainForm.Lift.cs)
@@ -1485,11 +1522,11 @@ public sealed partial class MainForm : Form
 
     async Task UndoLastBundleSave()
     {
-        if (_ws == null || _scene == null || _sceneEntry == null) return;
+        if (_ws == null || _scene == null || _sceneEntry == null || PasteRunning("Undo Last Bundle Save")) return;
         var rel = Path.GetRelativePath(_ws.Game.Root, _ws.Game.ResidentPath(_scene.Bundle));
         var hist = _ws.History(rel);
-        if (hist.Count == 0) { MessageBox.Show(this, "No earlier saved version of this world's bundle.", Text); return; }
-        if (MessageBox.Show(this, $"Restore {rel} to the version saved before the last change ({Path.GetFileNameWithoutExtension(hist[0])})?", Text, MessageBoxButtons.OKCancel) != DialogResult.OK) return;
+        if (hist.Count == 0) { if (!_scripted) MessageBox.Show(this, "No earlier saved version of this world's bundle.", Text); Log("Undo Last Bundle Save: no earlier version."); return; }
+        if (!_scripted && MessageBox.Show(this, $"Restore {rel} to the version saved before the last change ({Path.GetFileNameWithoutExtension(hist[0])})?", Text, MessageBoxButtons.OKCancel) != DialogResult.OK) return;
         var v = _ws.UndoLastSave(rel);
         Log($"Restored {rel} to {v}. Reloading world…");
         _scene.Objects.ForEach(x => x.OriginalTransform = x.Transform);   // discard in-memory edits of the old scene
@@ -1778,7 +1815,7 @@ public sealed partial class MainForm : Form
 
     async Task OpenWorld(WorldEntry w, ActEntry? act = null)
     {
-        if (_ws == null) return;
+        if (_ws == null || PasteRunning($"Opening {act?.Display ?? w.Display}")) return;   // the paste reloads its own world afterwards
         // the same world again (after a duplicate, a delete, an import, an undo ...): keep the camera, the selection, the
         // undo history and any unsaved transform edits
         bool reload = _scene != null && _sceneEntry == w && _sceneAct == act;
@@ -1789,7 +1826,7 @@ public sealed partial class MainForm : Form
         if (!reload) { _soups.Clear(); _soupWhy.Clear(); _soupMesh.Clear(); }
         else foreach (var k in _soups.Where(kv => kv.Value?.Dirty != true).Select(kv => kv.Key).ToList()) { _soups.Remove(k); _soupMesh.Remove(k); _soupWhy.Remove(k); }
         _collSel.Clear(); _collAt.Clear(); _collProxy = null;
-        var carry = reload ? _scene!.Objects.Where(o => o.Dirty).Select(o => (Key: UndoHistory.KeyOf(o), o.Transform, Link: o.Marker?.Link)).ToList() : null;
+        var carry = reload ? _scene!.Objects.Where(o => o.Dirty).Select(o => (Key: UndoHistory.KeyOf(o), o.Transform, Link: o.Marker?.Link, Music: o.IsMusicRegion ? (o.MusicRegionId, o.MusicRadius) : ((int, float)?)null)).ToList() : null;
         string? selKey = reload && _view.Selected != null ? UndoHistory.KeyOf(_view.Selected) : null;
         _busy = true; SetProgress($"Loading {w.Display}…", 0);
         var _openClock = System.Diagnostics.Stopwatch.StartNew();
@@ -1823,7 +1860,11 @@ public sealed partial class MainForm : Form
                 var byKey = new Dictionary<string, SceneObject>();
                 foreach (var o in scene.Objects) byKey.TryAdd(UndoHistory.KeyOf(o), o);
                 foreach (var c in carry!)
-                    if (byKey.TryGetValue(c.Key, out var o)) { o.Transform = c.Transform; if (c.Link is { } l && o.Marker != null) o.Marker.Link = l; }
+                    if (byKey.TryGetValue(c.Key, out var o))
+                    {
+                        o.Transform = c.Transform; if (c.Link is { } l && o.Marker != null) o.Marker.Link = l;
+                        if (c.Music is { } m && o.IsMusicRegion) { o.MusicRegionId = m.Item1; o.MusicRadius = m.Item2; }   // unsaved region edits (MainForm.Music.cs)
+                    }
                 _history.Rebind(scene);
             }
             else _history.DropSceneSteps();
@@ -1831,6 +1872,7 @@ public sealed partial class MainForm : Form
             // the Atmosphere tab reads the world's light setups when it is first shown (1-1.6 s, not needed to show the world)
             _atmosPending = (w.Bundle, act?.Display ?? w.Display, act?.ActBundle ?? 0);
             if (_scripted) ApplyAtmosphere(); else if (_center.SelectedTab?.Controls.Contains(_atmos) == true) BeginInvoke(ApplyAtmosphere);
+            EnsureWorldMusic(scene);   // the music speaker joins the object list before the view (and its collision decode) gets it
             using (Viewport.Prof.Time("open:   view SetScene")) _view.SetScene(scene, keepCamera: reload);
             if (!reload && RestoreCamera(w, act)) Log("  Camera: back where it was when you last left this world.");
             using (Viewport.Prof.Time("open:   tree")) FillTree();
@@ -1907,10 +1949,11 @@ public sealed partial class MainForm : Form
                 sn.Expand();
             }
             AddCameraNodes(q);   // "Cameras (n)": warp pad cameras etc. (MainForm.Cameras.cs)
+            AddMusicNodes(q);    // "Music (n)": the world's music and its regions (MainForm.Music.cs)
             var terrain = _tree.Nodes.Add("Terrain");
             var scenery = _tree.Nodes.Add("Scenery (by model)");
             terrain.Checked = scenery.Checked = true;
-            foreach (var o in _scene.Objects.Where(o => o.Kind == SceneObjectKind.Terrain))
+            foreach (var o in _scene.Objects.Where(o => o.Kind == SceneObjectKind.Terrain && !o.IsWorldMusic))
                 terrain.Nodes.Add(new TreeNode(o.Name) { Tag = o, Checked = o.Visible });
             // water regions (chunk 38): selectable and movable like scenery (WorldScene.Water.cs)
             foreach (var o in _scene.Objects.Where(o => o.Kind == SceneObjectKind.Water))
@@ -1952,6 +1995,7 @@ public sealed partial class MainForm : Form
         }
         _movingSel = o;
         _transform.SetObject(o);
+        ShowMusicFor(o);   // Properties: music region / world music (MainForm.Music.cs)
         // a character (a marker placing an actor): its dialogue lines, and the Dialogue tab when the user wants it shown
         if (o?.Marker != _dialogueFor?.Marker || o == null)
         {
@@ -2004,7 +2048,8 @@ public sealed partial class MainForm : Form
     async Task UndoRedo(bool undo)
     {
         if (_view.Transforming) { _view.CancelTransform(); Log("Transform cancelled."); return; }   // a G / R / T in progress is cancelled, not undone
-        if (_busy || _undoing) { Log((undo ? "Undo" : "Redo") + ": NB Studio is busy (loading or saving), try again in a moment."); return; }
+        if (PasteRunning(undo ? "Undo" : "Redo")) return;
+        if (_busy || _undoing || MusicBusy) { Log((undo ? "Undo" : "Redo") + ": NB Studio is busy (loading or saving), try again in a moment."); return; }
         _undoing = true;
         try
         {
@@ -2175,9 +2220,10 @@ public sealed partial class MainForm : Form
         foreach (var c in _ws.Manifest.Changes.TakeLast(50)) Log($"  {c.Time:yyyy-MM-dd HH:mm}  {c.File}: {c.Description}");
     }
 
-    void RevertFile()
+    void RevertFile(string? scriptFile = null)
     {
-        if (_ws == null) return;
+        if (_ws == null || PasteRunning("Revert a Modified File")) return;
+        if (scriptFile != null) { _ws.Revert(scriptFile); Log("Reverted " + scriptFile); return; }
         var files = _ws.ModifiedFiles();
         if (files.Count == 0) { Log("Nothing to revert."); return; }
         using var f = new Form { Text = "Revert file", Width = 600, Height = 400, StartPosition = FormStartPosition.CenterParent };
@@ -2328,7 +2374,8 @@ public sealed partial class MainForm : Form
     async Task QuickTestXenia(bool fromCamera)
     {
         if (_ws == null) { Log("Test in Xenia: open a workspace first."); return; }
-        if (_busy) { Log("Test in Xenia: NB Studio is busy, try again in a moment."); return; }
+        if (PasteRunning("Test in Xenia")) return;
+        if (_busy || MusicBusy) { Log("Test in Xenia: NB Studio is busy, try again in a moment."); return; }
         var t = QuickTarget();
         if (!AskTestPending()) return;   // MainForm.Saving.cs: what F5 does with unsaved changes (also the Vehicle Editor's)
         if (_qtProcess is { HasExited: false } old)
@@ -2592,6 +2639,22 @@ public sealed partial class MainForm : Form
                 switch (a[i])
                 {
                     case "--workspace": await OpenWorkspace(Next()); L("script: workspace open"); break;
+                    case "--open-recent": _scriptLastWorld = true; await OpenWorkspace(Next()); _scriptLastWorld = false; L($"script: workspace open as from File > Open Recent; world {_sceneEntry?.Display ?? "-"}"); break;
+                    case "--screen-every":
+                    {
+                        // --screen-every MS N PREFIX: N window captures MS apart, taken while the next steps run (what a
+                        // workspace switch shows: start page, "Opening …" cover, world)
+                        int ms = int.Parse(Next()), n = int.Parse(Next()); var prefix = Next();
+                        _ = Task.Run(async () =>
+                        {
+                            for (int k = 0; k < n; k++)
+                            {
+                                await Task.Delay(ms);
+                                Invoke(() => { using var q = Background.Capture(this); q.Save($"{prefix}_{k:D2}.png"); L($"script: capture {k}: start page {_start.Visible}, opening cover {_opening?.Visible == true}, world {_scene != null}"); });
+                            }
+                        });
+                        break;
+                    }
                     case "--act":
                     {
                         uint ab = Convert.ToUInt32(Next(), 16);
@@ -2793,6 +2856,16 @@ public sealed partial class MainForm : Form
                         var objs = names.Select(q => _scene!.Objects.First(x => x.Name.Contains(q, StringComparison.OrdinalIgnoreCase))).ToList();
                         _view.SelectMany(objs); L($"script: selected {string.Join(", ", objs.Select(x => $"{x.Name} at {Fmt(x.Transform.Translation)}"))}"); break;
                     }
+                    case "--select-like": { var q = Next(); var objs = _scene!.Objects.Where(x => x.Kind == SceneObjectKind.Scenery && (x.Name.Contains(q, StringComparison.OrdinalIgnoreCase) || x.ModelName.Contains(q, StringComparison.OrdinalIgnoreCase))).ToList(); _view.SelectMany(objs); L($"script: selected {objs.Count} scenery object(s) like {q}"); break; }
+                    case "--obj-list": { var q = Next(); foreach (var x in _scene!.Objects.Where(x => x.Name.Contains(q, StringComparison.OrdinalIgnoreCase))) { var sz = x.BoundsMax - x.BoundsMin; L($"script: obj {x.Name} at {Fmt(x.Transform.Translation)} size {Fmt(sz)} model {AssetIds.DisplayName(x.ModelName)}"); } break; }
+                    case "--select-inbox":
+                    {
+                        // --select-inbox x0,y0,z0,x1,y1,z1: every scenery object whose world box lies inside
+                        var v = Next().Split(',').Select(x => float.Parse(x, System.Globalization.CultureInfo.InvariantCulture)).ToArray();
+                        var bmn = new Vector3(v[0], v[1], v[2]); var bmx = new Vector3(v[3], v[4], v[5]);
+                        var objs = _scene!.Objects.Where(x => x.Kind == SceneObjectKind.Scenery && x.Visible && Enumerable.Range(0, 8).All(i => Vector3.Transform(new Vector3((i & 1) != 0 ? x.BoundsMax.X : x.BoundsMin.X, (i & 2) != 0 ? x.BoundsMax.Y : x.BoundsMin.Y, (i & 4) != 0 ? x.BoundsMax.Z : x.BoundsMin.Z), x.Transform) is var w && w.X >= bmn.X && w.Y >= bmn.Y && w.Z >= bmn.Z && w.X <= bmx.X && w.Y <= bmx.Y && w.Z <= bmx.Z)).ToList();
+                        _view.SelectMany(objs); L($"script: selected {objs.Count} scenery object(s) inside the box"); break;
+                    }
                     case "--sel-list": L($"script: selection {string.Join(", ", _view.SelectedObjects.Select(x => $"{x.Name} at {Fmt(x.Transform.Translation)}"))}; hidden {_view.HiddenCount}"); break;
                     case "--hide": _view.HideSelection(); L($"script: hidden; {_view.HiddenCount} hidden"); break;
                     case "--unhide": _view.UnhideAll(); L("script: unhide all"); break;
@@ -2878,6 +2951,20 @@ public sealed partial class MainForm : Form
                     }
                     case "--texlib-close": _texLib?.Close(); break;
                     case "--copy": L($"script: copy {(CopySelection() ? "ok: " + _clip[0].Name : "refused")}"); break;
+                    case "--copy-mesh": L($"script: copy mesh only {(CopySelection(meshOnly: true) ? "ok: " + _clip[0].Name : "refused")}"); break;
+                    case "--copy-level": L($"script: copy with level collision {(CopySelection(levelCollision: true) ? "ok: " + _clip[0].Name : "refused")}"); break;
+                    case "--coll-list": { var q = Next(); L($"script: collision list {q}: {CollisionListText(q)}"); break; }
+                    case "--paste-slow": _pasteSlowMs = int.Parse(Next()); L($"script: paste builds wait {_pasteSlowMs} ms"); break;
+                    case "--paste-async":
+                    {
+                        // --paste-async X,Y: starts a paste and goes on with the next steps while it builds (--paste-wait)
+                        var v = Next(); var at = new Point(int.Parse(v.Split(',')[0]), int.Parse(v.Split(',')[1]));
+                        _pasteTask = PasteClipboard(at); await Task.Delay(1500); L($"script: paste started; building {_pasting}"); break;
+                    }
+                    case "--paste-wait": { if (_pasteTask != null) await _pasteTask; L($"script: paste done; history {_history.Count}: {_history.UndoLabel}"); break; }
+                    case "--revert": RevertFile(Next()); break;
+                    case "--undo-bundle": await UndoLastBundleSave(); L("script: undo last bundle save"); break;
+                    case "--paste-fail": { var v = Next(); _pasteFailTest = v == "off" ? null : v; L($"script: paste failure test {v}"); break; }
                     case "--cut": { var n = _view.Selected?.Name; LiftSelection(); L($"script: cut (lifted) {n}: {string.Join(", ", _lifted.Select(x => $"{x.Name} at {Fmt(x.Transform.Translation)}"))}"); break; }
                     case "--cut-cancel": PutBackLifted("Esc"); L($"script: lift cancelled; selected {_view.Selected?.Name ?? "-"}"); break;
                     case "--del": { var n = _view.Selected?.Name; await DeleteSelection(); L($"script: delete {n}; selected {_view.Selected?.Name ?? "-"}"); break; }
@@ -3040,6 +3127,7 @@ public sealed partial class MainForm : Form
                     case "--exit": L("script: exit"); Close(); return;
                     default:
                         if (await CollisionScript(a[i], Next, L)) break;
+                        if (await MusicScript(a[i], Next, L)) break;
                         if (await _view.RunScriptCommand(a[i], Next, L)) break;
                         if (await _vehicles.RunScriptCommand(a[i], Next, L, () => SelectCenter("Vehicle Editor"))) break;
                         L("script: unknown argument " + a[i]); break;
@@ -3079,5 +3167,6 @@ public sealed partial class MainForm : Form
         _progress.Visible = text != null;
         _progress.Value = Math.Clamp((int)(p * 100), 0, 100);
         _status.Text = text ?? "";
+        OpeningStep(text);
     }
 }

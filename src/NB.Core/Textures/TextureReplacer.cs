@@ -44,6 +44,7 @@ public static class TextureReplacer
 
         // streamed top level
         uint topId = AssetIds.Make(0x01, (stem + "top")["aid_texture_".Length..]);
+        using var streamEdit = ws.LockStream(bundle);   // Workspace.LockStream: this load → change → save is one step (other writers of the archive wait)
         var arch = ws.LoadStream(bundle);
         bool archChanged = false;
         foreach (var e in arch.Entries.Where(e => e.Id == topId && e.Kind == "caff"))
@@ -78,6 +79,7 @@ public static class TextureReplacer
         }
         if (resident > 0) ws.SaveResident(bundle, caff, $"replaced {list.Count} texture(s) ({resident} resident asset(s))");
         var tops = list.GroupBy(i => AssetIds.Make(0x01, (Stem(i.Name) + "top")["aid_texture_".Length..])).ToDictionary(g => g.Key, g => g.Last());
+        using var streamEdit = ws.LockStream(bundle);   // Workspace.LockStream: this load → change → save is one step (other writers of the archive wait)
         var arch = ws.LoadStream(bundle);
         bool archChanged = false;
         foreach (var e in arch.Entries.Where(e => tops.ContainsKey(e.Id) && e.Kind == "caff"))
