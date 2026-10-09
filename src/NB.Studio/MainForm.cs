@@ -2650,7 +2650,7 @@ public sealed partial class MainForm : Form
                             for (int k = 0; k < n; k++)
                             {
                                 await Task.Delay(ms);
-                                Invoke(() => { using var q = Background.Capture(this); q.Save($"{prefix}_{k:D2}.png"); L($"script: capture {k}: start page {_start.Visible}, opening cover {_opening?.Visible == true}, world {_scene != null}"); });
+                                Invoke(() => { using var q = Background.Capture(this); q.Save($"{prefix}_{k:D2}.png"); L($"script: capture {k}: start page {_start.Visible}, opening {_openingName != null}, world {_scene != null}"); });
                             }
                         });
                         break;
