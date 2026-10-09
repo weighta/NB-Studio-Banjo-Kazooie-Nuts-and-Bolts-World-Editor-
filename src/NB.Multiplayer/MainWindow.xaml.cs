@@ -233,6 +233,13 @@ public partial class MainWindow : Window
                 change.Click += (_, _) => StartEditing(ed);
                 buttons.Children.Add(change);
             }
+            if (!ed.IsVanilla && ed.Mods.Count > 0)
+            {
+                var exp = new Button { Content = "Export...", Margin = new Thickness(8, 0, 0, 0), ToolTip = "Save this edition's mods as one .nbpatch (right-click for the reNut mods folder)" };
+                exp.Click += async (_, _) => await ExportAsync(EditionMods(ed), ed.Name, toRenut: false);
+                exp.ContextMenu = ExportMenu(() => EditionMods(ed), ed.Name);
+                buttons.Children.Add(exp);
+            }
             if (!ed.IsVanilla)
             {
                 var del = new Button { Content = "Delete", Margin = new Thickness(8, 0, 0, 0) };
@@ -309,9 +316,13 @@ public partial class MainWindow : Window
             var card = new Border { Style = (Style)FindResource("CardBorder"), Margin = new Thickness(0, 0, 0, 10), Padding = new Thickness(18, 14, 18, 14),
                 BorderBrush = _ticked.Contains(m.Sha256) ? B("Accent") : B("Line") };
             var dock = new DockPanel();
+            var export = ExportButton(() => new List<ModStack.Mod> { m }, man.Name);
+            DockPanel.SetDock(export, Dock.Right);
+            dock.Children.Add(export);
+            card.ContextMenu = ExportMenu(() => new List<ModStack.Mod> { m }, man.Name);
             if (!tweak)
             {
-                var remove = new Button { Content = "Remove", VerticalAlignment = VerticalAlignment.Center, Padding = new Thickness(12, 6, 12, 6), FontSize = 13,
+                var remove = new Button { Content = "Remove", VerticalAlignment = VerticalAlignment.Center, Padding = new Thickness(12, 6, 12, 6), FontSize = 13, Margin = new Thickness(0, 0, 8, 0),
                     IsEnabled = usedBy.Count == 0, ToolTip = usedBy.Count == 0 ? "Remove this mod from the library" : "Used by an edition: delete the edition first" };
                 remove.Click += (_, _) => { ModLibrary.Remove(m.Sha256); RefreshEditions(); };
                 DockPanel.SetDock(remove, Dock.Right);
@@ -360,6 +371,8 @@ public partial class MainWindow : Window
         BuildBar.Visibility = mods.Count > 0 || _editing != null ? Visibility.Visible : Visibility.Collapsed;
         CancelEditButton.Visibility = _editing != null ? Visibility.Visible : Visibility.Collapsed;
         CombineButton.IsEnabled = mods.Count > 0;
+        ExportSelectedButton.IsEnabled = mods.Count > 0 && _editing == null;
+        ExportRenutButton.IsEnabled = mods.Count > 0 && _editing == null;
         CombineButton.Content = _editing != null ? $"Rebuild \"{_editing.Name}\"" : mods.Count > 1 ? $"Build an edition from {mods.Count} mods" : "Build an edition";
         BuildMods.Text = mods.Count == 0 ? "Tick at least one mod." : (_editing != null ? $"New mods of \"{_editing.Name}\": " : "Ticked: ") + string.Join(" + ", mods.Select(m => m.Manifest.Name));
         var problems = mods.Count > 1 ? NB.Core.Project.ModStack.Problems(mods) : new List<string>();
@@ -367,7 +380,7 @@ public partial class MainWindow : Window
         var notes = mods.Count > 1 ? NB.Core.Project.ModStack.Notes(mods) : new List<string>();
         if (notes.Count > 0) BuildMods.Text += "\n" + string.Join("\n", notes);
         CombineProblems.Visibility = problems.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
-        if (problems.Count > 0) CombineButton.IsEnabled = false;
+        if (problems.Count > 0) CombineButton.IsEnabled = ExportSelectedButton.IsEnabled = ExportRenutButton.IsEnabled = false;
     }
 
     /// <summary>"Change mods" of an edition: its mods are ticked; rebuilding replaces the edition (same name).</summary>

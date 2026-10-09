@@ -244,6 +244,16 @@
                             <DockPanel>
                                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
                                     <Button x:Name="CancelEditButton" Content="Cancel" Padding="14,7" FontSize="13" Margin="0,0,10,0" Click="CancelEdit_Click"/>
+                                    <Button x:Name="ExportSelectedButton" Content="Export..." Padding="14,7" FontSize="13" Margin="0,0,10,0" Click="ExportSelected_Click"
+                                            ToolTip="Save the ticked mods as ONE .nbpatch for another game copy, PC or reNut"/>
+                                    <Button x:Name="ExportRenutButton" Content="To reNut mods" Padding="14,7" FontSize="13" Margin="0,0,10,0" Click="ExportRenut_Click"
+                                            ToolTip="Write the ticked mods as one .nbpatch into a reNut mods folder (chosen once; right-click to change it)">
+                                        <Button.ContextMenu>
+                                            <ContextMenu>
+                                                <MenuItem Header="Choose the reNut mods folder..." Click="ChooseRenutMods_Click"/>
+                                            </ContextMenu>
+                                        </Button.ContextMenu>
+                                    </Button>
                                     <Button x:Name="CombineButton" Style="{StaticResource Primary}" Content="Build an edition" Click="Combine_Click"/>
                                 </StackPanel>
                                 <TextBlock Text="Name" VerticalAlignment="Center" Margin="0,0,10,0" DockPanel.Dock="Left" FontSize="13"/>

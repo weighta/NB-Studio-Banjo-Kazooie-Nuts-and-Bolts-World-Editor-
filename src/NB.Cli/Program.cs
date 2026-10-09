@@ -2376,6 +2376,27 @@ static class Program
                     }
                     return 0;
                 }
+                case "mod-export":
+                {
+                    // mod-export <out.nbpatch> <clean game dir> <mod.nbpatch>... [--name N] [--work dir]: one standalone .nbpatch from
+                    // library mods (NB Multiplayer's "Export"): a single mod without world edits is copied, anything else is applied to a
+                    // hard-linked copy of the clean game and diffed against it (file deltas + executable mods, no world edits left)
+                    string Opt(string k, string d) { int i = Array.IndexOf(args, k); return i >= 0 && i + 1 < args.Length ? args[i + 1] : d; }
+                    var paths = args.Skip(3).TakeWhile(a => !a.StartsWith("--")).ToList();
+                    var mods = paths.Select(NB.Core.Project.ModStack.Load).ToList();
+                    var work = Opt("--work", Path.Combine(Path.GetDirectoryName(Path.GetFullPath(args[2]))!, "_nb_export"));
+                    var sw = System.Diagnostics.Stopwatch.StartNew();
+                    string last = "";
+                    var res = NB.Core.Project.ModExport.Export(mods, args[2], args[1], work, Opt("--name", ""),
+                        new Progress<(string T, double F)>(p => { if (p.T != last) { last = p.T; Console.WriteLine($"  [{sw.Elapsed.TotalSeconds,6:F1}s] {p.T}"); } }), Console.WriteLine);
+                    if (Directory.Exists(work) && !Directory.EnumerateFileSystemEntries(work).Any()) Directory.Delete(work);
+                    Console.WriteLine($"{(res.Flattened ? "flattened" : "copied")}: {res.Manifest.Name} ({res.Manifest.Id} {res.Manifest.Version}), format {res.Manifest.Format}");
+                    foreach (var f in res.Manifest.Files) Console.WriteLine($"  {f.Kind,-7} {f.Path}");
+                    Console.WriteLine($"  exe mods: {string.Join(", ", res.Manifest.ExeMods.Select(m => m.Id))}; ops: {res.Manifest.Ops.Count}");
+                    foreach (var n in res.Notes) Console.WriteLine("  note: " + n);
+                    Console.WriteLine($"wrote {args[1]} ({new FileInfo(args[1]).Length:N0} bytes) in {sw.Elapsed.TotalSeconds:F0}s");
+                    return 0;
+                }
                 case "xex-poke":
                 {
                     // xex-poke <in default.xex> <out default.xex> [--mod <exe mod id>]... [address=value]...: write words into the

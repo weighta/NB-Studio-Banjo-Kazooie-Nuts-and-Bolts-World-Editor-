@@ -35,6 +35,9 @@ public sealed class AppSettings
     /// <summary>The reNut build to use (renut.exe built with NB's mod layer); "" = renut\renut.exe next to NB Multiplayer.</summary>
     public string RenutPath { get; set; } = "";
     public bool UseRenut => string.Equals(Engine, "renut", StringComparison.OrdinalIgnoreCase);
+    /// <summary>"Export to reNut mods folder": the mods folder of a reNut that loads .nbpatch files (chosen once by the player;
+    /// "" = not chosen yet). NB Multiplayer writes there only when the player exports to it.</summary>
+    public string RenutModsFolder { get; set; } = "";
 
     /// <summary>%LOCALAPPDATA%\NB-Multiplayer, or NB_MP_ROOT (tests: a separate settings/profile folder).</summary>
     public static string Root => Environment.GetEnvironmentVariable("NB_MP_ROOT") is { Length: > 0 } r ? r

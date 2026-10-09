@@ -1569,3 +1569,39 @@ Music regions are marker **type 8** records (140 bytes) with flag 0x200:
   content key -> names + checksums, validated against the bundle).
 - Xenia does not enforce the console memory budget: the snowy town + rig is 206.9 MB resident (original 188.2 MB) and
   loads; on a real 360 large pastes into a full town may not.
+
+## 21. .nbpatch mods and exported mods (NB Multiplayer 2.2.7, 2026-10-09) **[verified: Xenia, NB-layer reNut, reNut mods folder]**
+
+A `.nbpatch` is a zip: `patch.json` (manifest), `README.txt`, and one entry `d/NNNN.bin` per changed file. Code:
+NB.Core/Project/PatchPackage.cs. Manifest fields (JSON names as in the class): `Format` (1; 2 adds Id/Multiplayer/
+Requires/Conflicts/Category/Tags; 3 = has `Ops`), `Id`, `Name`, `Version`, `Author`, `Description`, `Game`, `Created`,
+`Files[]` {`Path` ('/' separated), `Kind`, `SourceSha256`/`SourceSize` (the retail file it applies to), `TargetSha256`/
+`TargetSize` (the result), `Entry`, `CopiedBytes`, `LiteralBytes`}, `ExeMods[]` {`Id`, `Name`, `Words` = [address,
+original, patched]}, `XeniaModuleHash`, `Extra` (string map), `Multiplayer` ("world" / "cosmetic" / "coop"),
+`Requires[]`, `Conflicts[]`, `Category`, `Tags[]`, `Ops[]` (world edits, NB.Core/Project/WorldOps.cs).
+File kinds: `delta` (COPY/ADD delta against the EXPANDED original, i.e. xcompress resident bundles decompressed), `new`
+(the whole file), `xexmods` (default.xex: no bytes stored; the `ExeMods` words are written into the player's own
+default.xex at apply time; Source/Target hashes still check it).
+
+What applies what:
+
+| | file deltas / new files | ExeMods (game code) | Ops (world edits) | two mods changing one file |
+|---|---|---|---|---|
+| NB Multiplayer editions, NB Studio Apply Patch, NB.Cli patch-apply / stack-apply | yes | yes (baked into default.xex) | yes (replayed after all files) | merged asset by asset (ModMerge) |
+| Xenia on a patched folder | yes | yes (baked words) | (already applied) | - |
+| reNut with NB's mod layer (NB MP "Launch with reNut", --game_data_root = a patched folder) | yes | yes (interpreter at the sites) | (already applied) | - |
+| reNut releases that load `mods\*.nbpatch` (renut_engine mod_loader; `renut_mods_folder`, file-name order, decoded files cached in `mods\.cache\<sha256>.bin`) | yes | **no** ("executable changes not applied ... reNut runs recompiled code") | **no** ("world edit(s) not applied (not supported yet)") | **no**: the later mod is skipped ("combining two mods' changes to one file is not supported") |
+
+**Exports (NB.Core/Project/ModExport.cs; NB MP "Export...", "To reNut mods"; NB.Cli `mod-export`).** One mod without
+Ops is copied byte for byte (same sha256 = the same mod in rooms). Anything else is FLATTENED: the mods are applied, in
+order, to a hard-linked copy of the player's clean game exactly like an edition (ModStack.Apply: merged shared files,
+Ops, ExeMods), the files that differ from the retail fingerprints are diffed against the clean game
+(PatchPackage.BuildFromFolders), and the result has only `delta`/`new` files + `ExeMods` (the sources' own ExeMod ids,
+same words), Format 2, no Ops. So the world edits of co-op / Character Select / No ceiling and several mods' changes to
+one bundle become plain file deltas that every reader applies, including a reNut mods folder. No new manifest field was
+needed; two `Extra` keys are added (older readers ignore Extra keys they do not know):
+`exportedFrom` = "id version; id version" of the source mods, `needsExecutable` = ids of the ExeMods (what a reNut mods
+folder will skip). Category/Multiplayer/Tags/Extra (e.g. co-op `mode`, `puppetBlueprint`, `parkSpot`) come from the
+sources; Requires/Conflicts lose the ids that are inside the export. README.txt lists how to install it and these notes.
+Game-code tweaks (e.g. Breakable town vehicles = 0x82569B1C) cannot be expressed as game files: in a reNut mods folder
+they are skipped by that reNut itself; on another game copy they work wherever the patch is applied to the folder.
