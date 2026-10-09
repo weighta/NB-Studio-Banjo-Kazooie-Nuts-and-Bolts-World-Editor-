@@ -29,6 +29,9 @@ public static class VehicleVault
         public Dictionary<string, int> SeenAt { get; set; } = new();
         public bool Deleted { get; set; }
         public DateTime FirstSeen { get; set; }
+        /// <summary><see cref="Deleted"/> as read from vault.json (not stored): <see cref="Store"/> keeps a restore that
+        /// another writer made after this copy was loaded.</summary>
+        [System.Text.Json.Serialization.JsonIgnore] public bool LoadedDeleted { get; set; }
     }
 
     /// <summary>NB Multiplayer's data folder (%LOCALAPPDATA%\NB-Multiplayer\data, or NB_MP_ROOT\data) when it exists.</summary>
@@ -56,15 +59,31 @@ public static class VehicleVault
         Dictionary<string, Entry> v;
         try { v = JsonSerializer.Deserialize<Dictionary<string, Entry>>(File.ReadAllText(IndexFile(dir))) ?? new(); }
         catch (Exception) { return new(); }
+        foreach (var e in v.Values) e.LoadedDeleted = e.Deleted;
         RefreshNames(dir, v);
         return v;
     }
 
-    static void Store(string dir, Dictionary<string, Entry> v)
+    /// <summary>
+    /// Writes the index <paramref name="v"/> (from <see cref="Load"/>). Other writers may have stored since it was loaded
+    /// (a harvest runs on a test's watch thread, NB Multiplayer around its launches), so: removed.json is what counts for
+    /// removed vehicles (an older NB Multiplayer / NB Studio clears Deleted when its storage still has the vehicle; they are
+    /// marked deleted again for readers that only know the flag); a vehicle that was deleted when <paramref name="v"/> was
+    /// loaded and is not deleted on disk now was restored meanwhile and stays restored; vehicles added on disk meanwhile
+    /// are kept.
+    /// </summary>
+    public static void Store(string dir, Dictionary<string, Entry> v)
     {
-        // removed.json is what counts: an older NB Multiplayer / NB Studio clears Deleted when its storage still has the
-        // vehicle; every store marks the removed ones deleted again (for readers that only know the flag)
-        foreach (var h in Removed(dir).Keys) if (v.TryGetValue(h, out var r)) r.Deleted = true;
+        var removed = Removed(dir);
+        Dictionary<string, Entry> disk;
+        try { disk = JsonSerializer.Deserialize<Dictionary<string, Entry>>(File.ReadAllText(IndexFile(dir))) ?? new(); }
+        catch (Exception) { disk = new(); }
+        foreach (var (h, e) in v)
+        {
+            if (removed.ContainsKey(h)) e.Deleted = true;
+            else if (e.Deleted && e.LoadedDeleted && disk.TryGetValue(h, out var d) && !d.Deleted) e.Deleted = false;
+        }
+        foreach (var (h, d) in disk) v.TryAdd(h, d);
         Directory.CreateDirectory(dir);
         var tmp = IndexFile(dir) + "." + Environment.ProcessId + ".tmp";
         File.WriteAllText(tmp, JsonSerializer.Serialize(v, new JsonSerializerOptions { WriteIndented = true }));
@@ -109,6 +128,9 @@ public static class VehicleVault
         }).ToList();
 
     static string Hash(byte[] b) => Convert.ToHexString(SHA256.HashData(b)).ToLowerInvariant();
+
+    /// <summary>The name a vehicle file (content bytes) has in the folder: its SHA-256 (hex).</summary>
+    public static string HashOf(byte[] content) => Hash(content);
 
     /// <summary>The vehicle's name (the name field at 8 + 0x20 of the blueprint file: UTF-16BE, or ASCII for the game's own
     /// vehicles; see <see cref="NB.Core.Vehicles.Blueprint.DecodeName"/>).</summary>
@@ -360,7 +382,9 @@ public static class VehicleVault
     /// <summary>
     /// What makes two vehicle files the same vehicle: their part records (cell, orientation, part, paint, settings,
     /// buttons — 0x24 bytes each), in any order. The header is left out: the name, the stat bars, the weight, the button
-    /// part types and the "named by the player" flag change when the game or NB Studio saves the same vehicle again.
+    /// part types and the "named by the player" flag change when the game or NB Studio saves the same vehicle again. The
+    /// category byte (+6) is left out too: it follows from the part (the game's own vehicles hold 0 there, NB Studio
+    /// writes the part's category when it saves).
     /// </summary>
     public static string PartsKey(byte[] file)
     {
@@ -368,7 +392,13 @@ public static class VehicleVault
         int first = start + 0x7C;
         if (file.Length < first) return Hash(file);
         int n = (file.Length - first) / 0x24;
-        var recs = Enumerable.Range(0, n).Select(i => Convert.ToHexString(file, first + i * 0x24, 0x24)).OrderBy(x => x, StringComparer.Ordinal);
+        string Rec(int i)
+        {
+            var r = file.AsSpan(first + i * 0x24, 0x24).ToArray();
+            r[6] = 0;
+            return Convert.ToHexString(r);
+        }
+        var recs = Enumerable.Range(0, n).Select(Rec).OrderBy(x => x, StringComparer.Ordinal);
         return Convert.ToHexString(SHA256.HashData(Encoding.ASCII.GetBytes(string.Concat(recs)))).ToLowerInvariant();
     }
 
@@ -419,7 +449,8 @@ public static class VehicleVault
     /// Vehicles replaced or removed in the Vehicle Editor (removed.json: hash → why). Unlike "deleted in the game" they are
     /// not brought back when a test storage or NB Multiplayer still holds a copy: Harvest skips them, <see cref="Vehicles"/>
     /// does not list them, RestoreInto does not put them into a storage and takes back the copies it put there itself
-    /// (studio_put.json). NB Multiplayer reads the same file. <see cref="Restore"/> brings them back.
+    /// (studio_put.json, kept since NB Studio 1.23.0; copies older versions put there are not known and stay). NB
+    /// Multiplayer reads the same file. <see cref="Restore"/> brings them back.
     /// </summary>
     public static Dictionary<string, string> Removed(string dir)
     {

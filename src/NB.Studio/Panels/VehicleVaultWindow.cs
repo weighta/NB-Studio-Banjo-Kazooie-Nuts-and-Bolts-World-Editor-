@@ -104,11 +104,16 @@ public sealed class VehicleVaultWindow : QuietForm
         UpdateButtons();
     }
 
-    bool Confirm(string text) => ScriptConfirm ?? MessageBox.Show(this, text, "My Vehicle Saves", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) == DialogResult.OK;
+    bool Confirm(string text)
+    {
+        if (ScriptConfirm is { } scripted) { Log?.Invoke("My Vehicle Saves question: " + text.Replace("\n", " | ") + $" -> {(scripted ? "OK" : "Cancel")}"); return scripted; }
+        return MessageBox.Show(this, text, "My Vehicle Saves", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) == DialogResult.OK;
+    }
 
     /// <summary>What a removal does, for the questions.</summary>
-    const string RemovalNote = "They stop coming into new tests and NB Multiplayer. At the next test NB Studio's test saves give back the copies NB Studio put there; " +
-                               "vehicles built in a test save, NB Multiplayer profiles and consoles keep theirs. The files stay in the folder: Show removed › Restore brings them back.";
+    const string RemovalNote = "They stop coming into new tests and NB Multiplayer. At the next test NB Studio's test saves give back the copies NB Studio 1.23.0 or later put there; " +
+                               "copies put there by earlier versions, vehicles built in a test save, NB Multiplayer profiles and consoles keep theirs (delete those in the game). " +
+                               "The files stay in the folder: Show removed › Restore brings them back.";
 
     void RemoveSelected()
     {

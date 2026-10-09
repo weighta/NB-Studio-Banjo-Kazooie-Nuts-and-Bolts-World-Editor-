@@ -810,7 +810,7 @@ public sealed class VehicleEditorPanel : UserControl
     void Attach(VehicleDocument d)
     {
         _doc = d;
-        _dropName = null; _dropLabel = null; _dropUndone = false; _saveName = null;
+        _drops.Clear(); _dropsUndone.Clear(); _saveName = null;
         _view.Document = d;
         d.Changed += () =>
         {
@@ -835,7 +835,7 @@ public sealed class VehicleEditorPanel : UserControl
         var label = _doc.UndoLabel;
         if (!_doc.Undo()) return;
         _status.Text = "Undone.";
-        if (_dropLabel != null && label == _dropLabel) _dropUndone = true;   // the dropped vehicle is gone: its name too
+        if (label != null && _drops.Any(d => d.Label == label)) _dropsUndone.Add(label);   // that dropped vehicle is gone: its name too
     }
 
     void DoRedo()
@@ -843,7 +843,7 @@ public sealed class VehicleEditorPanel : UserControl
         var label = _doc.RedoLabel;
         if (!_doc.Redo()) return;
         _status.Text = "Redone.";
-        if (_dropLabel != null && label == _dropLabel) _dropUndone = false;
+        if (label != null) _dropsUndone.Remove(label);
     }
 
     /// <summary>One undoable edit applied to every selected part.</summary>
@@ -1214,7 +1214,7 @@ public sealed class VehicleEditorPanel : UserControl
         {
             var v = VehicleFile.Open(f);
             EnsureCatalog();
-            _target = Target.File; _file = v; _game = null; _gamePlace = null; _toast.Visible = false; _dropName = null;
+            _target = Target.File; _file = v; _game = null; _gamePlace = null; _toast.Visible = false;
             Attach(VehicleDocument.From(v.Blueprint));
             RememberLast();
             Log?.Invoke($"Vehicle Editor: opened {v.Kind.ToString().ToLowerInvariant()} \"{v.Blueprint.Name}\" ({v.Blueprint.Blocks.Count} parts) from {f}" + (v.Problems.Count > 0 ? " — " + string.Join("; ", v.Problems) : ""));
@@ -1243,8 +1243,9 @@ public sealed class VehicleEditorPanel : UserControl
         {
             var v = VehicleFile.Open(f);
             EnsureCatalog();
-            _dropLabel = $"replace with {Path.GetFileName(f)}";
-            _doc.Begin(_dropLabel);
+            // a label of its own per drop: console packages are all called 0x0000000N (undo / redo follow the drop by it)
+            var dropLabel = $"replace with {Path.GetFileName(f)} (drop {++_dropSeq})";
+            _doc.Begin(dropLabel);
             var src = VehicleDocument.From(v.Blueprint);
             _doc.Parts = src.Parts; _doc.Selection.Clear();
             // stats and buttons of the dropped vehicle; the game asset's name field stays
@@ -1255,7 +1256,7 @@ public sealed class VehicleEditorPanel : UserControl
             string seatNote = AiSeats(original);
             _doc.Commit();
             // the game asset's name field stays for Save to Game; Save As (vehicle saves, packages) suggests the dropped one's
-            _dropName = NameOf(v); _dropUndone = false; _saveName = null;
+            _drops.Add((dropLabel, NameOf(v))); _saveName = null;
             if (seatNote.Length > 0) Log?.Invoke("Vehicle Editor: " + seatNote);
             _view.FrameAll();
             Log?.Invoke($"Vehicle Editor: {_game!.Short} now shows \"{v.Blueprint.Name}\" ({v.Blueprint.Blocks.Count} parts) from {Path.GetFileName(f)} — Save to Game writes it in place of {_game.Label}.");
@@ -1306,7 +1307,7 @@ public sealed class VehicleEditorPanel : UserControl
             // the blueprint the background build read, while its bundle file is unchanged; else from the bundle
             var listed = _gameCat?.FirstOrDefault(x => x.Id == v.Id) ?? v;
             var bp = (_useBpCache ? PregameVehicles.Cached(_ws, listed) : null) ?? PregameVehicles.Load(_ws, v);
-            _target = Target.Game; _game = v; _gamePlace = place; _file = null; _aiNoteHidden = false; _dropName = null;
+            _target = Target.Game; _game = v; _gamePlace = place; _file = null; _aiNoteHidden = false;
             _toast.Visible = false;
             Attach(VehicleDocument.From(bp));
             RememberLast();
@@ -1332,10 +1333,13 @@ public sealed class VehicleEditorPanel : UserControl
 
     // ------------------------------------------------------------------ save
 
-    /// <summary>The name of a vehicle dropped on a game vehicle (Save As suggests it; the game asset keeps its own), the
-    /// drop's undo label, and whether the drop was undone (then it is not suggested).</summary>
-    string? _dropName, _dropLabel;
-    bool _dropUndone;
+    /// <summary>Vehicles dropped on a game vehicle, oldest first, by the undo label of their drop step (unique per drop),
+    /// and the drop steps undone. Save As suggests the name of the newest drop that still stands (the game asset keeps its
+    /// own name field).</summary>
+    readonly List<(string Label, string Name)> _drops = new();
+    readonly HashSet<string> _dropsUndone = new();
+    int _dropSeq;
+    string? DropName => _drops.LastOrDefault(d => !_dropsUndone.Contains(d.Label)).Name;
 
     /// <summary>The name chosen in the last Save As that did not make the written file the editor's target (vehicle saves,
     /// Xenia profile, content file) and the vehicle's name then: the next Save As suggests it while the vehicle's own
@@ -1343,7 +1347,7 @@ public sealed class VehicleEditorPanel : UserControl
     /// target is not renamed by a copy).</summary>
     (string Name, string DocName)? _saveName;
 
-    void RememberSaveName(string name) { _saveName = (name, _doc.Name); _dropName = null; }
+    void RememberSaveName(string name) => _saveName = (name, _doc.Name);
 
     /// <summary>The name a vehicle file shows: the package's "VEHICLE: …" title as the console wrote it (its letter case),
     /// else the blueprint's name.</summary>
@@ -1355,14 +1359,15 @@ public sealed class VehicleEditorPanel : UserControl
         return bp.Length > 0 ? bp : v.Package?.DisplayName is { } t && t.StartsWith("VEHICLE: ", StringComparison.OrdinalIgnoreCase) ? t[9..].Trim() : "";
     }
 
-    /// <summary>The name Save As suggests: a name typed in the Name box (not saved yet), the name of the last copy-type Save
-    /// As, the dropped vehicle's (while the drop stands), a file's title, the game vehicle's game name (its name field is
-    /// only the maker's tag, e.g. "SaucyRedToo"), else the vehicle's name.</summary>
+    /// <summary>The name Save As suggests: the name the last copy-type Save As of this vehicle used ("Speedy 2" after Keep
+    /// both; while the vehicle's own name is what it was then), a name typed in the Name box, the dropped vehicle's (while
+    /// the drop stands), a file's title, the game vehicle's game name (its name field is only the maker's tag, e.g.
+    /// "SaucyRedToo"), else the vehicle's name.</summary>
     string SuggestedName()
     {
-        if (_doc.Name.Length > 0 && _doc.Name != _doc.Source.Name) return _doc.Name;   // renamed by the user
         if (_saveName is { } sv && sv.DocName == _doc.Name) return sv.Name;
-        if (!_dropUndone && _dropName is { Length: > 0 } dn) return dn;
+        if (_doc.Name.Length > 0 && _doc.Name != _doc.Source.Name) return _doc.Name;   // renamed by the user
+        if (DropName is { Length: > 0 } dn) return dn;
         if (_target == Target.File && _file != null && _doc.Name == _file.Blueprint.Name && NameOf(_file) is { Length: > 0 } fn) return fn;
         if (_target == Target.Game && _game != null && _doc.Name == _doc.Source.Name && _doc.Source.NameIsAscii)
         {
@@ -1513,7 +1518,7 @@ public sealed class VehicleEditorPanel : UserControl
             ApplyName(newName);
             Log?.Invoke($"Vehicle Editor: wrote package {path} (\"VEHICLE: {bp.Name}\", {bp.Blocks.Count} parts). Xenia loads it as is; a real Xbox 360 needs it resigned (Horizon / Velocity: Rehash and Resign).");
             _target = Target.File; _file = VehicleFile.Open(path); _game = null; _gamePlace = null; _doc.Source = _file.Blueprint.Clone();
-            _dropName = null; _saveName = null;
+            _drops.Clear(); _dropsUndone.Clear(); _saveName = null;
             RememberLast();
             Saved();
         }
@@ -1596,6 +1601,11 @@ public sealed class VehicleEditorPanel : UserControl
             if (c == 0) replace.AddRange(named);
             else { bp.Name = free; content = src.ContentBytes(bp); }
         }
+        // after the last rename the vehicle may be byte for byte one already there (Keep both can give it the name of a copy
+        // being replaced): that file is what is saved, so it is not removed with the others
+        var finalHash = VehicleVault.HashOf(content);
+        var already = VehicleVault.Vehicles(dir).FirstOrDefault(e => e.Hash == finalHash);
+        replace.RemoveAll(e => e.Hash == finalHash);
         var tmp = Path.Combine(Path.GetTempPath(), "nbvehicle_" + Environment.ProcessId, "0x00000001");
         Directory.CreateDirectory(Path.GetDirectoryName(tmp)!);
         File.WriteAllBytes(tmp, src.ToPackage(bp, "0x00000001", thumbnailPng: src.Package?.Thumbnail == null ? _view.Thumbnail() : null));
@@ -1604,7 +1614,10 @@ public sealed class VehicleEditorPanel : UserControl
         if (added.Count == 0 && known == 0) { Say("Not added: " + string.Join("; ", skipped)); return; }
         if (replace.Count > 0) VehicleVault.Remove(dir, replace.Select(e => e.Hash), $"replaced by '{bp.Name}' in the Vehicle Editor");
         RememberSaveName(bp.Name);   // a copy: the vehicle in the editor keeps its name (and stays saved / unsaved as it was)
-        Say($"'{bp.Name}' saved to your vehicle saves{(replace.Count > 0 ? $" in place of {string.Join(", ", replace.Select(e => $"'{e.Name}'"))}" : "")}: the next Test in Xenia (and NB Multiplayer) lists it in Your Blueprints. ({dir})");
+        string instead = replace.Count > 0 ? $" in place of {string.Join(", ", replace.Select(e => $"'{e.Name}'"))}" : "";
+        Say(already != null
+            ? $"'{bp.Name}' is in your vehicle saves exactly like this already (kept){(instead.Length > 0 ? ";" + instead.Replace(" in place of", " removed:") : "")}. ({dir})"
+            : $"'{bp.Name}' saved to your vehicle saves{instead}: the next Test in Xenia (and NB Multiplayer) lists it in Your Blueprints. ({dir})");
     }
 
     void Say(string text) { _status.Text = text; Log?.Invoke("Vehicle Editor: " + text); }
@@ -1636,7 +1649,7 @@ public sealed class VehicleEditorPanel : UserControl
         {
             var v = VehicleFile.Open(file);
             EnsureCatalog();
-            _target = Target.None; _file = null; _game = null; _gamePlace = null; _dropName = null; _toast.Visible = false;
+            _target = Target.None; _file = null; _game = null; _gamePlace = null; _toast.Visible = false;
             Attach(VehicleDocument.From(v.Blueprint));
             UpdateSourceLabel();
             Say($"'{name}' from your vehicle saves, open as a new vehicle: Save As to keep your changes.");
@@ -2103,6 +2116,38 @@ public sealed class VehicleEditorPanel : UserControl
                 log($"script: dropped {fs.Count} files (worker): choice {_lastDropChoice}; {_lastDropSummary.Replace("\n", " | ")}; target {_where.Text}; wait cursor {UseWaitCursor}");
                 break;
             }
+            case "--vehicle-open-vault-name":
+            {
+                // --vehicle-open-vault-name NAME[@PARTS]: the newest vehicle of the vehicle saves with that name (and part count)
+                var a = next(); var dir = VehicleSavesDir?.Invoke();
+                if (dir == null) break;
+                int at = a.LastIndexOf('@'); string n = at > 0 ? a[..at] : a; int parts = at > 0 ? int.Parse(a[(at + 1)..]) : -1;
+                var e = VehicleVault.Vehicles(dir).Where(x => x.Name == n && (parts < 0 || VehicleVault.PartsOf(dir, x) == parts)).OrderByDescending(x => x.FirstSeen).FirstOrDefault();
+                if (e == null) { log($"script: no vehicle '{a}' in the vehicle saves"); break; }
+                OpenVaultVehicle(Path.Combine(dir, e.Hash + ".bp"), e.Name);
+                log($"script: vault vehicle '{e.Name}' ({e.Hash[..8]}) opened: {_doc.Parts.Count} parts");
+                break;
+            }
+            case "--vehicle-vault-race":
+            {
+                // --vehicle-vault-race NAME: a writer loads the index, NAME (removed) is restored meanwhile, the writer stores its
+                // old copy (a harvest on the test's watch thread, NB Multiplayer around a launch): NAME must stay restored
+                var n = next(); var dir = VehicleSavesDir?.Invoke();
+                if (dir == null) break;
+                var stale = VehicleVault.Load(dir);
+                var hs = VehicleVault.RemovedVehicles(dir).Where(x => x.Entry.Name == n).Select(x => x.Entry.Hash).ToList();
+                VehicleVault.Restore(dir, hs);
+                VehicleVault.Store(dir, stale);
+                log($"script: race: restored {hs.Count} '{n}' while another writer held the index; listed now: {VehicleVault.Vehicles(dir).Count(x => x.Name == n)}, removed: {VehicleVault.RemovedVehicles(dir).Count(x => x.Entry.Name == n)}");
+                break;
+            }
+            case "--vehicle-vault-hash":
+            {
+                var n = next(); var dir = VehicleSavesDir?.Invoke();
+                if (dir == null) break;
+                log($"script: vault '{n}': listed {string.Join(", ", VehicleVault.Vehicles(dir).Where(x => x.Name == n).Select(x => $"{x.Hash[..8]} ({VehicleVault.PartsOf(dir, x)} parts)"))}; removed {string.Join(", ", VehicleVault.RemovedVehicles(dir).Where(x => x.Entry.Name == n).Select(x => $"{x.Entry.Hash[..8]} ({x.Why})"))}");
+                break;
+            }
             case "--vehicle-untick": ScriptUntick = next().Split(';', StringSplitOptions.RemoveEmptyEntries).ToHashSet(); break;
             case "--vehicle-name-bytes":
             {
@@ -2158,7 +2203,7 @@ public sealed class VehicleEditorPanel : UserControl
                 break;
             }
             case "--vehicle-save-vault2": { SaveToVault(); log($"script: save to vault -> {_status.Text}; name now '{_doc.Name}'"); break; }
-            case "--vehicle-suggested-name": log($"script: suggested name '{SuggestedName()}' (name field '{_doc.Name}', dropped '{_dropName}')"); break;
+            case "--vehicle-suggested-name": log($"script: suggested name '{SuggestedName()}' (name field '{_doc.Name}', dropped '{DropName}')"); break;
             case "--vehicle-drop-many":
             {
                 // --vehicle-drop-many FILE;FILE;…: the same code as files dropped together
@@ -2194,6 +2239,7 @@ public sealed class VehicleEditorPanel : UserControl
                 if (dir == null) break;
                 VehicleVaultWindow.ScriptConfirm = next() == "yes";
                 using var w = MakeVaultWindow(dir);
+                w.Log = m => log("script: " + m);   // the question and the result into the script log
                 int n = w.RemoveDuplicates();
                 VehicleVaultWindow.ScriptConfirm = null;
                 log($"script: duplicates removed: {n}");

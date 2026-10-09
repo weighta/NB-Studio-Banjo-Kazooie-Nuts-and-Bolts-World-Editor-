@@ -26,6 +26,7 @@ public static class BlueprintVault
         public Dictionary<string, int> SeenAt { get; set; } = new();   // profile xuid -> package index at the last harvest
         public bool Deleted { get; set; }
         public DateTime FirstSeen { get; set; }
+        [System.Text.Json.Serialization.JsonIgnore] public bool LoadedDeleted { get; set; }   // Deleted as loaded (see Store)
     }
 
     /// <summary>0x00000001..0x00FFFFFF are blueprints; the save slots are 0x0b0a5c5c / 0x0b0d6cca.</summary>
@@ -41,6 +42,7 @@ public static class BlueprintVault
         Dictionary<string, Entry> v;
         try { v = JsonSerializer.Deserialize<Dictionary<string, Entry>>(File.ReadAllText(IndexFile)) ?? new(); }
         catch (Exception) { return new(); }
+        foreach (var e in v.Values) e.LoadedDeleted = e.Deleted;
         // names written before 2.3 were read as UTF-16BE only ("SalvyBob" -> "卡汶祂潢"): read them again from the files
         foreach (var e in v.Values)
             try
@@ -56,6 +58,18 @@ public static class BlueprintVault
     }
     static void Store(Dictionary<string, Entry> v)
     {
+        // as NB Studio's VehicleVault.Store: removed.json counts; a vehicle restored in NB Studio since this copy was loaded
+        // stays restored; vehicles added meanwhile are kept
+        var removed = NB.Core.Project.VehicleVault.Removed(Dir);
+        Dictionary<string, Entry> disk;
+        try { disk = JsonSerializer.Deserialize<Dictionary<string, Entry>>(File.ReadAllText(IndexFile)) ?? new(); }
+        catch (Exception) { disk = new(); }
+        foreach (var (h, e) in v)
+        {
+            if (removed.ContainsKey(h)) e.Deleted = true;
+            else if (e.Deleted && e.LoadedDeleted && disk.TryGetValue(h, out var d) && !d.Deleted) e.Deleted = false;
+        }
+        foreach (var (h, d) in disk) v.TryAdd(h, d);
         Directory.CreateDirectory(Dir);
         var tmp = IndexFile + ".tmp";
         File.WriteAllText(tmp, JsonSerializer.Serialize(v, new JsonSerializerOptions { WriteIndented = true }));
