@@ -15,6 +15,11 @@ public partial class App : Application
             Shutdown();
             return;
         }
+        // the Steam overlay (loaded into this process for the Steam relay) hooks Direct3D: on Shift+Tab it drew into the
+        // window and froze it. NB Multiplayer draws its window in software instead (no Direct3D for the overlay to hook),
+        // and asks the overlay not to draw (it is meant for the game, not this launcher)
+        System.Windows.Media.RenderOptions.ProcessRenderMode = System.Windows.Interop.RenderMode.SoftwareOnly;
+        Environment.SetEnvironmentVariable("SteamNoOverlayUIDrawing", "1");
         base.OnStartup(e);
         // unexpected errors: log them (crash.log in the data folder) and keep running when possible
         DispatcherUnhandledException += (_, ex) =>

@@ -137,13 +137,13 @@ public partial class MainWindow : Window
         Renut.Restarted += p => Dispatcher.BeginInvoke(() => { if (_game == null || _game.HasExited) _game = p; });
         Loaded += async (_, _) =>
         {
-            if (!S.ShortcutOffered)
+            if (!S.ShortcutOffered && !NB.Core.IO.QuietLaunch.Enabled)   // never in background test runs
             {
                 S.ShortcutOffered = true; S.Save();
                 if (MessageBox.Show(this, "Create a desktop shortcut for NB Multiplayer?", "NB Multiplayer", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes)
                     CreateShortcut();
             }
-            if (S.CheckForUpdates) await CheckUpdatesAsync(manual: false);
+            if (S.CheckForUpdates && !NB.Core.IO.QuietLaunch.Enabled) await CheckUpdatesAsync(manual: false);
         };
         Closing += (_, e) =>
         {
